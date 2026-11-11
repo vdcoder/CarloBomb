@@ -320,6 +320,31 @@ static void test_many_nodes(void) {
     }
     printf("largest graph returned at budget 64: %d nodes\n", most);
     CHECK(most >= 10);
+
+    /*
+     * Longer targets fill the whole node array before the search is cut
+     * off.  The two solvers must still agree at the cut, and the kernel's
+     * node count at that moment shows that the last node was really in use.
+     */
+    static char big[400];
+    CbAsmState *s = fenced_state(1);
+    CHECK(s != NULL);
+    if (!s) return;
+    int fullest = 0;
+    for (int n = 0; n < 6; n++) {
+        int len = 150 + 40 * n;
+        for (int i = 0; i < len; i++) {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            big[i] = (char)('0' + (int)((x >> 32) & 1));
+        }
+        for (uint64_t limit = 20000; limit <= 320000; limit *= 2) {
+            compare_opt(big, (size_t)len, 64, limit);
+            run_direct(s, big, (size_t)len, 64, limit, REV_LEVEL_MAX_STACK);
+            if ((int)s->node_count > fullest) fullest = (int)s->node_count;
+        }
+    }
+    printf("most nodes in use when a budget-64 search was cut off: %d\n", fullest);
+    CHECK(fullest == CB_ASM_MAX_NODES);
 }
 
 int main(void) {

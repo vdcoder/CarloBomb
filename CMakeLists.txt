@@ -132,6 +132,8 @@ if(CARLOBOMB_HAVE_AMD64_ASM)
   target_compile_definitions(test_oracle_amd64 PRIVATE CARLOBOMB_ORACLE_AMD64=1)
   target_link_libraries(test_oracle_amd64 PRIVATE carlobomb_minimal carlobomb_level_amd64)
   add_test(NAME test_oracle_amd64 COMMAND test_oracle_amd64)
+  # A wrong search kernel can loop forever; do not let it stall the suite.
+  set_tests_properties(test_asm_equivalence test_oracle_amd64 PROPERTIES TIMEOUT 300)
 
   add_executable(asm_comparison benchmarks/asm_comparison.c)
   target_link_libraries(asm_comparison PRIVATE carlobomb_level_amd64 m)
@@ -147,4 +149,5 @@ set_tests_properties(legacy_original_runs PROPERTIES
 
 add_test(NAME cli_smoke
   COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
+          -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM}
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)

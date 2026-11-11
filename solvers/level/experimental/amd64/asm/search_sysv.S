@@ -48,7 +48,7 @@
  * pops, the search state is exactly what it was when it was pushed.
  *
  * Baseline x86-64 instructions only (no SSE/AVX/BMI).  Position independent.
- * The machine stack is used only for the six saved registers.
+ * The machine stack is used only for the five saved registers.
  */
 #include "asm_layout.h"
 
@@ -60,6 +60,14 @@
 /* One step of the C search loop: stop if the step limit is reached. */
 .macro STEP
     sub     r10, 1
+    jb      .Llimit_steps
+.endm
+
+/* \n consecutive C steps with no push and no success test between them.
+ * Equivalent to \n STEPs: if the limit falls inside the group the search
+ * stops with steps == limit either way, and nothing else is reported. */
+.macro STEPS n
+    sub     r10, \n
     jb      .Llimit_steps
 .endm
 
@@ -180,11 +188,10 @@
     mov     esi, eax                            /* fp = nxt */
     PUSHCHK                                     /* push(CTRL, nxt, cp) */
     PEEK_CTRL
-    STEP                                        /* SIMPLE_R */
+    STEPS   2                                   /* SIMPLE_R, then CTRL MATCH */
     RESTORE rsi
     sub     r12, 16                             /* FLOW frame popped */
 32:
-    STEP                                        /* CTRL MATCH */
     .if \undo
     mov     byte ptr [rbx + rdx*4], -1          /* edx is still nxt */
     .endif
@@ -194,6 +201,7 @@
     .subsection 1
 31: sub     r12, 16                             /* link undecided: a real FLOW frame */
     CALLF   .Lflow_link
+    STEP                                        /* CTRL MATCH */
     jmp     32b
     .previous
 .endm
@@ -206,7 +214,6 @@ cb_amd64_search:
     push    r12
     push    r13
     push    r14
-    push    r15
 
     mov     r13d, esi
     lea     rbx, [rdi + CB_ST_NODES]
@@ -269,15 +276,12 @@ cb_amd64_search:
     mov     byte ptr [rbx + rsi*4], 0
     PUSHCHK
     CALLF   .Lctrl_init
-    STEP                                        /* LOOP_C_R */
-    mov     byte ptr [rbx + rsi*4], -1
-    STEP                                        /* LOOP_C, it = 1 */
+    STEPS   2                                   /* LOOP_C_R, then LOOP_C, it = 1 */
     mov     byte ptr [rbx + rsi*4], 1
     PUSHCHK
     CALLF   .Lctrl_init
-    STEP                                        /* LOOP_C_R */
+    STEPS   2                                   /* LOOP_C_R, then LOOP_C, it = 2: pop */
     mov     byte ptr [rbx + rsi*4], -1
-    STEP                                        /* LOOP_C, it = 2: pop */
     RETF
 
 /* G[cp].links[d] undecided (rcx points at it): try nodes 0..Gn-1, then a
@@ -287,8 +291,8 @@ cb_amd64_search:
 .Lctrl_link:
     xor     eax, eax                            /* it = 0 */
     TARGET_BIT                                  /* same bit for every attempt */
-.Lctrl_link_next:
     STEP                                        /* LOOP_L */
+.Lctrl_link_next:                               /* (this LOOP_L step is already counted) */
     cmp     eax, r11d
     jae     .Lctrl_try_n
     mov     byte ptr [rcx], al
@@ -300,8 +304,8 @@ cb_amd64_search:
     test    edi, edi
     js      .Lctrl_link_set
     /* wrong color: the child pops at once */
-    STEP                                        /* LOOP_L_R (link is rewritten below) */
     inc     eax
+    STEPS   2                                   /* LOOP_L_R, then LOOP_L */
     jmp     .Lctrl_link_next
 
 .Lctrl_link_ok:
@@ -312,7 +316,7 @@ cb_amd64_search:
     SAVE    rcx
     CALLF   .Lmatch_set
 .Lctrl_link_back:
-    STEP                                        /* LOOP_L_R */
+    STEPS   2                                   /* LOOP_L_R, then LOOP_L */
     RESTORE rcx
     movsx   eax, byte ptr [rcx]                 /* it, read back from the link */
     inc     eax
@@ -367,8 +371,8 @@ cb_amd64_search:
     .balign 16
 .Lflow_link:
     xor     eax, eax
-.Lflow_link_next:
     STEP                                        /* LOOP_L */
+.Lflow_link_next:                               /* (this LOOP_L step is already counted) */
     cmp     eax, r11d
     jae     .Lflow_try_n
     mov     byte ptr [rcx], al
@@ -380,10 +384,9 @@ cb_amd64_search:
     mov     esi, eax
     PUSHCHK                                     /* push(CTRL, it, cp) */
     PEEK_CTRL
-    STEP                                        /* child: SIMPLE_R */
+    STEPS   3                                   /* child SIMPLE_R, LOOP_L_R, LOOP_L */
     RESTORE rsi
     sub     r12, 16                             /* child FLOW frame popped */
-    STEP                                        /* LOOP_L_R */
     RESTORE rcx
     movsx   eax, byte ptr [rcx]                 /* it, read back from the link */
     inc     eax
@@ -452,7 +455,6 @@ cb_amd64_search:
     sub     r14, rcx
     shr     r14, 4
     mov     dword ptr [rdi + CB_ST_PEAK_STACK], r14d
-    pop     r15
     pop     r14
     pop     r13
     pop     r12

@@ -9,4 +9,8 @@ A challenger is promoted to `../fastest/` only after it
 2. beats the current champion in a reproducible run of the benchmark
    (`benchmarks/`), with the measurements recorded.
 
-Nothing here yet.
+## Current challengers
+
+| Directory | What | Status |
+|---|---|---|
+| `amd64/asm/` | Hand-written AMD64 assembly search kernel, Linux / System V ABI | Passes all equivalence and oracle tests; about 3.4x faster than GCC-built C and 2.8x faster than Clang-built C on the search-heavy benchmark targets, on one machine. Not promoted: awaiting measurement on a second processor family. |

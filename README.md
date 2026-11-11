@@ -4,10 +4,12 @@ Research code for Runnable Existential Volumes (REVs): small two-pointer
 graph machines that emit binary strings, and exact search for the smallest
 REV that emits a given string.
 
-**Status: Milestone 0.** The REV execution model, the preserved historical C
-solver, a reusable C LevelSolver, a MinimalSolver, independent verification
-and baseline benchmarks. No neural guidance, assembly, parallelism or Bombs
-yet.
+**Status: Milestone 1 in progress.** Milestone 0 delivered the REV execution
+model, the preserved historical C solver, a reusable C LevelSolver, a
+MinimalSolver, independent verification and baseline benchmarks. Milestone 1
+adds an experimental hand-written AMD64 assembly search kernel that performs
+the same search about 3x faster on the machine measured. The C solver is
+still the default. No neural guidance, parallelism or Bombs yet.
 
 ## Build and test
 
@@ -58,6 +60,15 @@ Node   Color   Link0   Link1
 Verification: PASS
 ```
 
+`solve`, `level` and `bench` accept `--engine c` (default) or
+`--engine amd64-asm` (experimental, Linux x86-64 builds only):
+
+```bash
+./build/carlobomb level --target 010010001 --nodes 4 --engine amd64-asm
+```
+
+Both engines give the same answers, graphs and step counts.
+
 `--max-steps K` caps search effort per node budget. Exit status: 0 success;
 1 no solution within the budget, or verification failed; 2 bad usage or
 input; 3 a resource limit stopped the search, so the answer is unknown.
@@ -84,12 +95,14 @@ solution in its move order, which is not always the smallest. Use `solve`
 core/rev/                    REV model: SPEC.md, interpreter, validator, text format
 solvers/level/fastest/c/     legacy_original.c (historical, unmodified) and the
                              parameterized level_solver built from it
-solvers/level/experimental/  challengers (empty)
+solvers/level/experimental/  challengers
+  amd64/asm/                 AMD64 assembly search kernel (Linux, System V ABI)
 solvers/minimal/             MinimalSolver: LevelSolver at budgets 1, 2, 3, ...
 solvers/fixed/               FixedSolver (planned)
 bombs/                       FixedRunBomb, LevelSearchBomb (planned)
-tests/                       unit tests, exhaustive oracle, legacy equivalence, CLI check
-benchmarks/                  baseline.c and recorded results (BASELINE.md)
+tests/                       unit tests, exhaustive oracle, legacy and assembly
+                             equivalence, CLI check
+benchmarks/                  baseline.c (BASELINE.md), asm_comparison.c (ASM_RESULTS.md)
 tools/carlobomb.c            command-line tool
 ```
 
@@ -115,6 +128,12 @@ tests and wins a reproducible benchmark.
 4. **Legacy equivalence** (`tests/test_legacy_equivalence.c`). Runs the
    unmodified legacy kernel and LevelSolver side by side and requires the
    same verdict and the same graph.
+5. **Assembly equivalence** (`tests/test_asm_equivalence.c`, Linux x86-64).
+   Requires the assembly engine to match the C LevelSolver on status, graph,
+   step count, peak stack depth and limit behavior, and checks the kernel's
+   memory use with guard bytes, guard pages and a register-preservation
+   check. The oracle is also run against the assembly engine
+   (`test_oracle_amd64`).
 
 ## Limits
 
@@ -137,3 +156,11 @@ tests and wins a reproducible benchmark.
 Compares the unmodified legacy kernel with LevelSolver on the same targets.
 Method in `benchmarks/README.md`, recorded results in
 `benchmarks/BASELINE.md`.
+
+```bash
+./build/asm_comparison
+```
+
+Compares the C LevelSolver with the AMD64 assembly engine (Linux x86-64).
+Recorded results in `benchmarks/ASM_RESULTS.md`; design and optimization log
+in `solvers/level/experimental/amd64/asm/README.md`.

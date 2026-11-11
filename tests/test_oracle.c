@@ -20,6 +20,18 @@
 #include "minimal_solver.h"
 #include "test_util.h"
 
+/* The same oracle checks either engine; the build selects one. */
+#ifdef CARLOBOMB_ORACLE_AMD64
+#include "asm_solver.h"
+#define ENGINE_NAME "test_oracle_amd64"
+#define LEVEL_SOLVE rev_level_solve_amd64
+#define LEVEL_SOLVE_EX rev_level_solve_amd64_ex
+#else
+#define ENGINE_NAME "test_oracle"
+#define LEVEL_SOLVE rev_level_solve
+#define LEVEL_SOLVE_EX rev_level_solve_ex
+#endif
+
 #define MAX_LEN 10
 #define ORACLE_MAX_N 5
 
@@ -96,7 +108,7 @@ int main(int argc, char **argv) {
             for (unsigned v = 0; v < (1u << len); v++) {
                 RevGraph g;
                 to_string(v, len, t);
-                RevSolveResult r = rev_level_solve(t, (size_t)len, n, &g);
+                RevSolveResult r = LEVEL_SOLVE(t, (size_t)len, n, &g);
                 CHECK_MSG(r == REV_SOLVE_SOLVED || r == REV_SOLVE_PROVEN_UNSAT, "%s N=%d: %s", t, n,
                           rev_solve_result_str(r));
                 if (r == REV_SOLVE_SOLVED) t_check_witness(&g, t, (size_t)len, n);
@@ -123,7 +135,8 @@ int main(int argc, char **argv) {
             for (int n = 1; n <= max_n && !oracle_min; n++)
                 if (reach[n][len][v]) oracle_min = n;
             to_string(v, len, t);
-            RevMinimalStatus s = rev_minimal_solve(t, (size_t)len, max_n, NULL, &g, &info);
+            RevMinimalStatus s =
+                rev_minimal_solve_with(LEVEL_SOLVE_EX, t, (size_t)len, max_n, NULL, &g, &info);
             if (oracle_min) {
                 CHECK_MSG(s == REV_MIN_MINIMAL && info.node_count == oracle_min,
                           "minimal: %s oracle=%d solver=%s/%d", t, oracle_min,
@@ -136,5 +149,5 @@ int main(int argc, char **argv) {
         }
     }
 
-    return t_report("test_oracle");
+    return t_report(ENGINE_NAME);
 }

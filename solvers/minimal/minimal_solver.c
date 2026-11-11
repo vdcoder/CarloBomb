@@ -14,6 +14,14 @@ const char *rev_minimal_status_str(RevMinimalStatus s) {
 RevMinimalStatus rev_minimal_solve(const char *target, size_t target_len, int max_nodes,
                                    const RevLevelOptions *opt, RevGraph *result,
                                    RevMinimalInfo *info) {
+    return rev_minimal_solve_with(rev_level_solve_ex, target, target_len, max_nodes, opt, result,
+                                  info);
+}
+
+RevMinimalStatus rev_minimal_solve_with(RevLevelSolveFn level, const char *target,
+                                        size_t target_len, int max_nodes,
+                                        const RevLevelOptions *opt, RevGraph *result,
+                                        RevMinimalInfo *info) {
     RevMinimalInfo local;
     if (!info) info = &local;
     info->node_count = 0;
@@ -31,7 +39,7 @@ RevMinimalStatus rev_minimal_solve(const char *target, size_t target_len, int ma
 
     for (int n = 1; n <= max_nodes; n++) {
         RevLevelStats st;
-        RevSolveResult r = rev_level_solve_ex(target, target_len, n, opt, result, &st);
+        RevSolveResult r = level(target, target_len, n, opt, result, &st);
         info->last_budget = n;
         info->steps += st.steps;
         if (st.peak_stack > info->peak_stack) info->peak_stack = st.peak_stack;

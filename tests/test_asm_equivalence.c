@@ -14,6 +14,9 @@
  *     outside the block faults;
  *   - a register-preservation check through a small assembly caller
  *     (abi_check_sysv.S) on every kind of exit.
+ *
+ * Usage: test_asm_equivalence [random_cases]
+ *   With a number, that many extra randomized cases are run (see test_fuzz).
  */
 #define _DEFAULT_SOURCE /* MAP_ANONYMOUS */
 
@@ -347,7 +350,72 @@ static void test_many_nodes(void) {
     CHECK(fullest == CB_ASM_MAX_NODES);
 }
 
-int main(void) {
+/*
+ * Optional randomized run: `test_asm_equivalence N` adds N random cases to
+ * the fixed ones.  Targets of 1..40 bits in several styles, budgets 1..9 and
+ * occasionally 64, almost always with a step limit so that every case is
+ * bounded.  Each case is the full C-versus-assembly comparison; one in eight
+ * also re-runs the assembly with the stack capped at exactly the depth the
+ * search needs, and at one frame less.
+ */
+static void test_fuzz(long n) {
+    char t[64];
+    unsigned long long x = 0xD1B54A32D192ED03ull;
+    long capped = 0;
+#define NEXT() (x ^= x << 13, x ^= x >> 7, x ^= x << 17, x)
+    for (long i = 0; i < n; i++) {
+        unsigned long long r = NEXT();
+        int len = 1 + (int)(r % 40);
+        int style = (int)((r >> 8) % 4);
+        int period = 1 + (int)((r >> 12) % 7);
+        for (int k = 0; k < len; k++) {
+            unsigned long long b = NEXT();
+            int bit;
+            if (style == 0) bit = (int)((b >> 33) & 1);                 /* uniform */
+            else if (style == 1) bit = ((b >> 33) % 8) == 0;            /* mostly zeros */
+            else if (style == 2) bit = ((b >> 33) % 8) != 0;            /* mostly ones */
+            else bit = k < period ? (int)((b >> 33) & 1) : t[k - period] - '0'; /* periodic */
+            t[k] = (char)('0' + bit);
+        }
+        t[len] = '\0';
+        int max = 1 + (int)((r >> 16) % 9);
+        if ((r >> 24) % 16 == 0) max = 64;
+
+        uint64_t limit;
+        switch ((r >> 32) % 4) {
+        case 0: limit = 1 + (r >> 40) % 2000; break;
+        case 1: limit = 20000; break;
+        case 2: limit = 60000; break;
+        default: limit = (len <= 12 && max <= 5) ? 0 : 5000; break; /* 0 = unlimited */
+        }
+        compare_opt(t, (size_t)len, max, limit);
+
+        if ((r >> 36) % 8 == 0) {
+            RevGraph gc, ga;
+            RevLevelStats sc, sa;
+            RevLevelOptions opt = {limit};
+            RevSolveResult rc = rev_level_solve_ex(t, (size_t)len, max, &opt, &gc, &sc);
+            int peak = sc.peak_stack;
+            RevSolveResult ra = rev_level_solve_amd64_cap(t, (size_t)len, max, &opt, peak, &ga, &sa);
+            CHECK_MSG(ra == rc && sa.steps == sc.steps && sa.peak_stack == peak &&
+                          sa.limit == sc.limit && ga.node_count == gc.node_count,
+                      "cap == peak changed the result: %s max %d limit %llu", t, max,
+                      (unsigned long long)limit);
+            if (peak > 1) {
+                ra = rev_level_solve_amd64_cap(t, (size_t)len, max, &opt, peak - 1, &ga, &sa);
+                CHECK_MSG(ra == REV_SOLVE_RESOURCE_LIMIT && sa.limit == REV_LIMIT_STACK &&
+                              sa.peak_stack == peak - 1 && sa.steps <= sc.steps,
+                          "cap == peak - 1: %s max %d: %s limit %d peak %d", t, max,
+                          rev_solve_result_str(ra), (int)sa.limit, sa.peak_stack);
+            }
+            capped++;
+        }
+    }
+#undef NEXT
+    printf("fuzz: %ld random cases, %ld of them also with capped stacks\n", n, capped);
+}
+
+int main(int argc, char **argv) {
     test_corpus();
     test_benchmark_targets();
     test_step_limits();
@@ -356,6 +424,7 @@ int main(void) {
     test_invalid_input();
     test_direct_and_abi();
     test_many_nodes();
+    if (argc > 1) test_fuzz(atol(argv[1]));
     CHECK(cb_amd64_guards_intact());
     printf("%ld differential cases, %ld solved\n", cases, solved);
     return t_report("test_asm_equivalence");

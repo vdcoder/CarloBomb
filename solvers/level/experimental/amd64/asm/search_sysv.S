@@ -23,10 +23,18 @@
  *   - Loop counters and other values that can be read back from the graph
  *     are not stored.
  *
- * Every C step is still counted individually (STEP), every C push is still
- * checked against the stack capacity and the peak depth (PUSHCHK), and both
- * happen in the same order relative to each other as in C.  The comments
- * name the C state each STEP stands for.
+ * Every C step is still counted (STEP, or STEPS for a run of steps with
+ * nothing observable between them), every C push is still checked against
+ * the stack capacity and the peak depth (PUSHCHK), and both happen in the
+ * same order relative to each other as in C.  The comments name the C state
+ * each counted step stands for.
+ *
+ * One C path is not transcribed: FLOW's LOOP_C / LOOP_C_R, taken when a FLOW
+ * INIT finds G[cp].color undecided.  It cannot execute.  A FLOW frame is
+ * pushed either by a CTRL INIT that has just matched G[cp].color against the
+ * target, or by a FLOW frame with the same cp; and no frame changes a color
+ * that was already decided when it was pushed.  The kernel relies on this:
+ * the FLOW INIT that follows a match takes d from the target bit.
  *
  * Search stack: static storage, 16 bytes per frame, one slot per C frame.
  *   +0  address to resume at when the frame pushed above this one pops
@@ -225,7 +233,7 @@ cb_amd64_search:
     mov     eax, dword ptr [rdi + CB_ST_MAX_STACK]
 
     lea     r12, [rdi + CB_ST_FRAMES]
-    shl     eax, 4
+    shl     rax, 4
     add     rax, r12
     mov     qword ptr ST_FIELD(CB_ST_SCRATCH), rax          /* r12 at full depth */
     mov     r14, r12
@@ -345,19 +353,10 @@ cb_amd64_search:
 
 /* ---- FLOW(fp = esi, cp = edx) ------------------------------------------ */
 
+/* A pushed FLOW frame whose INIT step the pusher has already counted and
+ * whose link is decided: eax = nxt.  Only the child of a FLOW TRY_N comes
+ * here; every other FLOW INIT is done inline where the frame is pushed. */
     .balign 16
-.Lflow_init:
-    STEP                                        /* FLOW INIT */
-    movsx   eax, byte ptr [rbx + rdx*4]         /* d = G[cp].color */
-    test    eax, eax
-    js      .Lflow_color
-    lea     rcx, [rbx + rsi*4 + 1]
-    add     rcx, rax                            /* rcx = &G[fp].links[d] */
-    movsx   eax, byte ptr [rcx]                 /* nxt */
-    test    eax, eax
-    js      .Lflow_link
-
-/* Rest of a FLOW INIT whose link is decided.  eax = nxt. */
 .Lflow_simple:
     SAVE    rsi
     mov     esi, eax
@@ -367,7 +366,9 @@ cb_amd64_search:
     RESTORE rsi
     RETF
 
-/* G[fp].links[d] undecided (rcx points at it). */
+/* A pushed FLOW frame whose INIT step is already counted and whose link
+ * G[fp].links[d] is undecided (rcx points at it): try nodes 0..Gn-1, then a
+ * new node. */
     .balign 16
 .Lflow_link:
     xor     eax, eax
@@ -409,25 +410,6 @@ cb_amd64_search:
     RESTORE rcx
     dec     r11d
     mov     byte ptr [rcx], -1
-    RETF
-
-/* G[cp].color undecided in FLOW.  The C code handles this case, so it is
- * kept, but no input reaches it: a FLOW frame's cp was colored by the CTRL
- * step that pushed it. */
-.Lflow_color:
-    STEP                                        /* LOOP_C, it = 0 */
-    mov     byte ptr [rbx + rdx*4], 0
-    PUSHCHK
-    CALLF   .Lflow_init
-    STEP                                        /* LOOP_C_R */
-    mov     byte ptr [rbx + rdx*4], -1
-    STEP                                        /* LOOP_C, it = 1 */
-    mov     byte ptr [rbx + rdx*4], 1
-    PUSHCHK
-    CALLF   .Lflow_init
-    STEP                                        /* LOOP_C_R */
-    mov     byte ptr [rbx + rdx*4], -1
-    STEP                                        /* LOOP_C, it = 2: pop */
     RETF
 
 /* ---- exits ------------------------------------------------------------- */

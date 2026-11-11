@@ -150,10 +150,10 @@ static void cpu_info(char *name, size_t ncap, char *isa, size_t icap) {
             got_name = 1;
         } else if (!got_flags && strncmp(line, "flags", 5) == 0) {
             size_t used = 0;
+            strcat(p, " "); /* so the last flag is also followed by a space */
             for (size_t i = 0; i < sizeof want / sizeof *want; i++) {
                 char key[32];
                 snprintf(key, sizeof key, " %s ", want[i]);
-                strcat(p, " ");
                 if (strstr(p, key) && used + strlen(want[i]) + 2 < icap)
                     used += (size_t)snprintf(isa + used, icap - used, "%s ", want[i]);
             }

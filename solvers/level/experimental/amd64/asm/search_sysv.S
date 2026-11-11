@@ -443,6 +443,12 @@ cb_amd64_search:
     pop     rbp
     pop     rbx
     ret
-    .size   cb_amd64_search, . - cb_amd64_search
+
+/* The out-of-line pieces placed by the macros above (.subsection 1) follow
+ * here in the object; the symbol covers them too. */
+    .subsection 1
+.Lkernel_end:
+    .previous
+    .size   cb_amd64_search, .Lkernel_end - cb_amd64_search
 
     .section .note.GNU-stack, "", @progbits

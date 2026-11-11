@@ -1,7 +1,7 @@
 /*
  * CarloBomb LevelSolver search kernel, AMD64, System V ABI, GNU as.
  *
- *     int CB_KERNEL(CbAsmState *state, int max_nodes);
+ *     int cb_amd64_search(CbAsmState *state, int max_nodes);
  *
  * Performs the same search as search() in level_solver.c: same move order,
  * same undo actions, same first solution, same step count, same peak stack
@@ -15,27 +15,24 @@
  * this code:
  *
  *   - Where C pushes a frame and the next step is that frame's INIT, the
- *     code simply continues into the INIT logic.
- *   - Where C pops a frame, control returns to the code position at which
- *     the parent pushed it (the parent's *_R or MATCH state).
- *   - Loop counters and saved values that can be read back from the graph
- *     are not stored at all.
+ *     code continues straight into the INIT logic.
+ *   - Where C pops a frame, control goes to the position at which the
+ *     parent pushed it (the parent's *_R or MATCH state).  If the parent is
+ *     known at assembly time that is a fall-through; otherwise it is an
+ *     indirect jump through the address the parent left in its frame.
+ *   - Loop counters and other values that can be read back from the graph
+ *     are not stored.
  *
  * Every C step is still counted individually (STEP), every C push is still
  * checked against the stack capacity and the peak depth (PUSHCHK), and both
- * happen in the same order relative to graph updates as in C.  The comments
+ * happen in the same order relative to each other as in C.  The comments
  * name the C state each STEP stands for.
  *
- * Two ways of returning to the parent are provided, chosen when assembling:
- *
- *   CB_USE_RET = 0   Explicit stack only.  Each frame is 16 bytes of static
- *                    storage: the address to resume at and one saved value.
- *                    Pop is an indirect jump through the frame.
- *   CB_USE_RET = 1   Push is `call`, pop is `ret`, so the processor's
- *                    return predictor follows the search.  Each frame is one
- *                    8-byte return address on the machine stack (at most
- *                    8 * max_stack bytes) plus one saved value in static
- *                    storage.  Depth is derived from rsp.
+ * Search stack: static storage, 16 bytes per frame, one slot per C frame.
+ *   +0  address to resume at when the frame pushed above this one pops
+ *   +8  one saved value (meaning depends on the resume position)
+ * r12 points at the top frame; depth d <=> r12 = frames + 16*d.  Frame 0
+ * holds only the address to resume at when the stack becomes empty.
  *
  * Node (4 bytes):  +0 color  +1 link[0]  +2 link[1]      (-1 = undecided)
  *
@@ -44,24 +41,16 @@
  *   esi  fp                         r11d node count (Gn)
  *   edx  cp                         r10  steps remaining before the limit
  *   r8   end of target              r9   gen - target_len (counts up to 0)
- *   r14  deepest stack position so far
- *   r12  top frame            (CB_USE_RET = 0)
- *   r15  static frame array minus machine stack position (CB_USE_RET = 1)
+ *   r12  top frame                  r14  deepest r12 so far
  *   rax, rcx, rbp, rdi  scratch
  *
- * Every routine below preserves esi, edx, r9, r11 and the graph: on return
- * the search state is exactly what it was when the frame was pushed.
+ * Every routine preserves esi, edx, r9, r11 and the graph: when a frame
+ * pops, the search state is exactly what it was when it was pushed.
  *
  * Baseline x86-64 instructions only (no SSE/AVX/BMI).  Position independent.
+ * The machine stack is used only for the six saved registers.
  */
 #include "asm_layout.h"
-
-#ifndef CB_USE_RET
-#define CB_USE_RET 0
-#endif
-#ifndef CB_KERNEL
-#define CB_KERNEL cb_amd64_search
-#endif
 
 #define ST_FIELD(off) [rbx - CB_ST_NODES + (off)]
 
@@ -74,55 +63,22 @@
     jb      .Llimit_steps
 .endm
 
-#if CB_USE_RET
-
-/* A push is about to happen: check capacity, record a new peak depth. */
-.macro PUSHCHK
-    cmp     rsp, r14
-    jbe     7f
-8:
-    .subsection 1
-7:  call    .Lgrow
-    jmp     8b
-    .previous
-.endm
-
-.macro CALLF target
-    call    \target
-.endm
-
-.macro RETF
-    ret
-.endm
-
-/* Return if condition: all share one `ret`, the return predictor does not
- * care where it is. */
-.macro JRET cc
-    j\cc    .Lret
-.endm
-
-.macro SAVE reg
-    mov     qword ptr [rsp + r15], \reg
-.endm
-
-.macro RESTORE reg
-    mov     \reg, qword ptr [rsp + r15]
-.endm
-
-#else /* explicit stack */
-
+/* A C push is about to happen from the frame at r12: stop if the stack is
+ * full, record a new peak depth.  The common case is one compare. */
 .macro PUSHCHK
     cmp     r12, r14
     jae     7f
 8:
     .subsection 1
-7:  cmp     r12, qword ptr ST_FIELD(CB_ST_SCRATCH + 8)
+7:  cmp     r12, qword ptr ST_FIELD(CB_ST_SCRATCH)
     je      .Loverflow
     lea     r14, [r12 + 16]
     jmp     8b
     .previous
 .endm
 
+/* Push a frame and run \target as that frame; execution continues after
+ * the macro when the frame pops. */
 .macro CALLF target
     lea     rdi, [rip + 6f]
     mov     qword ptr [r12], rdi
@@ -131,13 +87,14 @@
 6:
 .endm
 
+/* Pop the top frame. */
 .macro RETF
     sub     r12, 16
     jmp     qword ptr [r12]
 .endm
 
-/* Each conditional return gets its own indirect jump, so the predictor can
- * learn them separately. */
+/* Pop if condition.  Each use gets its own indirect jump so the branch
+ * predictor can learn them separately. */
 .macro JRET cc
     j\cc    7f
     .subsection 1
@@ -154,17 +111,96 @@
     mov     \reg, qword ptr [r12 + 8]
 .endm
 
-#endif
-
 /* ebp = target(gen) */
 .macro TARGET_BIT
     movzx   ebp, byte ptr [r8 + r9]
     and     ebp, 1
 .endm
 
-    .globl  CB_KERNEL
-    .type   CB_KERNEL, @function
-CB_KERNEL:
+/*
+ * push(CTRL, fp = esi, cp = edx) has just been checked with PUSHCHK.
+ * Perform that frame's INIT step here instead of pushing it.  If the frame
+ * would pop at once (the node it reaches has the wrong color) nothing is
+ * pushed at all; otherwise the frame is pushed and continues at the right
+ * place.  Either way execution resumes after the macro when the CTRL frame
+ * is gone.
+ */
+.macro PEEK_CTRL
+    STEP                                        /* CTRL INIT */
+    movsx   eax, byte ptr [rbx + rsi*4]         /* d = G[fp].color */
+    test    eax, eax
+    js      21f
+    lea     rcx, [rbx + rdx*4 + 1]
+    add     rcx, rax                            /* rcx = &G[cp].links[d] */
+    movsx   eax, byte ptr [rcx]                 /* nxt */
+    test    eax, eax
+    js      22f
+    TARGET_BIT
+    movsx   ecx, byte ptr [rbx + rax*4]         /* cc = G[nxt].color */
+    cmp     ecx, ebp
+    je      23f
+    test    ecx, ecx
+    js      24f
+29:
+    .subsection 1
+21: CALLF   .Lctrl_color
+    jmp     29b
+22: CALLF   .Lctrl_link
+    jmp     29b
+23: CALLF   .Lmatch_ok
+    jmp     29b
+24: CALLF   .Lmatch_set
+    jmp     29b
+    .previous
+.endm
+
+/*
+ * Rest of a CTRL INIT whose output bit matched: eax = nxt, ebp = the bit,
+ * which is now also G[nxt].color.  \undo = 1 if this frame colored the node
+ * (C: set = 1) and must uncolor it again in its MATCH step.
+ *
+ * The FLOW frame that C pushes here always finds its color decided, so its
+ * INIT is done inline in the frame slot above this one; only the CTRL frame
+ * above that, if it survives its own INIT, is really pushed.
+ */
+.macro MATCH_TAIL undo
+    inc     r9                                  /* ++gen == target_len ? */
+    jz      .Lsolved
+    SAVE    rdx
+    mov     edx, eax                            /* cp = nxt */
+    PUSHCHK                                     /* push(FLOW, fp, nxt) */
+    add     r12, 16                             /* now in the FLOW frame's slot */
+    STEP                                        /* FLOW INIT, d = ebp */
+    lea     rcx, [rbx + rsi*4 + 1]
+    add     rcx, rbp                            /* rcx = &G[fp].links[d] */
+    movsx   eax, byte ptr [rcx]
+    test    eax, eax
+    js      31f
+    SAVE    rsi
+    mov     esi, eax                            /* fp = nxt */
+    PUSHCHK                                     /* push(CTRL, nxt, cp) */
+    PEEK_CTRL
+    STEP                                        /* SIMPLE_R */
+    RESTORE rsi
+    sub     r12, 16                             /* FLOW frame popped */
+32:
+    STEP                                        /* CTRL MATCH */
+    .if \undo
+    mov     byte ptr [rbx + rdx*4], -1          /* edx is still nxt */
+    .endif
+    dec     r9
+    RESTORE rdx
+    RETF
+    .subsection 1
+31: sub     r12, 16                             /* link undecided: a real FLOW frame */
+    CALLF   .Lflow_link
+    jmp     32b
+    .previous
+.endm
+
+    .globl  cb_amd64_search
+    .type   cb_amd64_search, @function
+cb_amd64_search:
     push    rbx
     push    rbp
     push    r12
@@ -181,25 +217,11 @@ CB_KERNEL:
     mov     r10, qword ptr [rdi + CB_ST_STEP_LIMIT]
     mov     eax, dword ptr [rdi + CB_ST_MAX_STACK]
 
-#if CB_USE_RET
-    /* depth d  <=>  rsp = base - 8*d;  its saved value lives in
-     * frames[max_stack + 1 - d], addressed as [rsp + r15]. */
-    mov     qword ptr ST_FIELD(CB_ST_SCRATCH), rsp          /* base */
-    lea     rcx, [rax*8]
-    mov     r14, rsp
-    sub     r14, rcx
-    mov     qword ptr ST_FIELD(CB_ST_SCRATCH + 8), r14      /* rsp at full depth */
-    lea     r15, [rdi + CB_ST_FRAMES + 8 + rax*8]
-    sub     r15, rsp
-    mov     r14, rsp
-#else
-    /* depth d  <=>  r12 = frames + 16*d; frame 0 only holds the exit. */
     lea     r12, [rdi + CB_ST_FRAMES]
     shl     eax, 4
     add     rax, r12
-    mov     qword ptr ST_FIELD(CB_ST_SCRATCH + 8), rax      /* r12 at full depth */
+    mov     qword ptr ST_FIELD(CB_ST_SCRATCH), rax          /* r12 at full depth */
     mov     r14, r12
-#endif
 
     mov     dword ptr [rbx], -1         /* G[0] = all undecided */
     mov     r11d, 1                     /* Gn = 1 */
@@ -233,35 +255,13 @@ CB_KERNEL:
     cmp     ecx, ebp
     JRET    ne                                  /* wrong color: pop */
 
-/* Rest of a CTRL INIT whose output bit matched.  eax = nxt.
- * .Lmatch_ok:  the node already had the right color   (C: set = 0)
- * .Lmatch_set: the node is uncolored, ebp = target bit (C: set = 1) */
-.Lmatch_ok:
-    inc     r9                                  /* ++gen == target_len ? */
-    jz      .Lsolved
-    SAVE    rdx
-    mov     edx, eax
-    PUSHCHK                                     /* push(FLOW, fp, nxt) */
-    CALLF   .Lflow_init
-    STEP                                        /* CTRL MATCH */
-    dec     r9
-    RESTORE rdx
-    RETF
+.Lmatch_ok:                                     /* C: set = 0 */
+    MATCH_TAIL 0
 
     .balign 16
-.Lmatch_set:
+.Lmatch_set:                                    /* C: set = 1 */
     mov     byte ptr [rbx + rax*4], bpl
-    inc     r9
-    jz      .Lsolved
-    SAVE    rdx
-    mov     edx, eax
-    PUSHCHK                                     /* push(FLOW, fp, nxt) */
-    CALLF   .Lflow_init
-    STEP                                        /* CTRL MATCH */
-    mov     byte ptr [rbx + rdx*4], -1          /* edx is still nxt */
-    dec     r9
-    RESTORE rdx
-    RETF
+    MATCH_TAIL 1
 
 /* G[fp].color undecided: try WHITE, then BLACK. */
 .Lctrl_color:
@@ -286,6 +286,7 @@ CB_KERNEL:
     .balign 16
 .Lctrl_link:
     xor     eax, eax                            /* it = 0 */
+    TARGET_BIT                                  /* same bit for every attempt */
 .Lctrl_link_next:
     STEP                                        /* LOOP_L */
     cmp     eax, r11d
@@ -293,15 +294,13 @@ CB_KERNEL:
     mov     byte ptr [rcx], al
     PUSHCHK                                     /* push(CTRL, fp, cp) */
     STEP                                        /* child: CTRL INIT, nxt = it */
-    TARGET_BIT
     movsx   edi, byte ptr [rbx + rax*4]         /* cc */
-    test    edi, edi
-    js      .Lctrl_link_set
     cmp     edi, ebp
     je      .Lctrl_link_ok
+    test    edi, edi
+    js      .Lctrl_link_set
     /* wrong color: the child pops at once */
-    STEP                                        /* LOOP_L_R */
-    mov     byte ptr [rcx], -1
+    STEP                                        /* LOOP_L_R (link is rewritten below) */
     inc     eax
     jmp     .Lctrl_link_next
 
@@ -316,11 +315,12 @@ CB_KERNEL:
     STEP                                        /* LOOP_L_R */
     RESTORE rcx
     movsx   eax, byte ptr [rcx]                 /* it, read back from the link */
-    mov     byte ptr [rcx], -1
     inc     eax
+    TARGET_BIT
     jmp     .Lctrl_link_next
 
-.Lctrl_try_n:                                   /* (LOOP_L with it == Gn was the step above) */
+.Lctrl_try_n:
+    mov     byte ptr [rcx], -1                  /* LOOP_L, it == Gn: link = UNDECIDED */
     STEP                                        /* TRY_N */
     cmp     r11d, r13d
     JRET    ae                                  /* budget exhausted: pop */
@@ -374,16 +374,23 @@ CB_KERNEL:
     mov     byte ptr [rcx], al
     PUSHCHK                                     /* push(FLOW, fp, cp) */
     SAVE    rcx
+    add     r12, 16                             /* the child FLOW frame's slot */
     STEP                                        /* child: FLOW INIT, nxt = it */
-    CALLF   .Lflow_simple
+    SAVE    rsi
+    mov     esi, eax
+    PUSHCHK                                     /* push(CTRL, it, cp) */
+    PEEK_CTRL
+    STEP                                        /* child: SIMPLE_R */
+    RESTORE rsi
+    sub     r12, 16                             /* child FLOW frame popped */
     STEP                                        /* LOOP_L_R */
     RESTORE rcx
-    movsx   eax, byte ptr [rcx]
-    mov     byte ptr [rcx], -1
+    movsx   eax, byte ptr [rcx]                 /* it, read back from the link */
     inc     eax
     jmp     .Lflow_link_next
 
 .Lflow_try_n:
+    mov     byte ptr [rcx], -1                  /* LOOP_L, it == Gn: link = UNDECIDED */
     STEP                                        /* TRY_N */
     cmp     r11d, r13d
     JRET    ae
@@ -420,18 +427,6 @@ CB_KERNEL:
     STEP                                        /* LOOP_C, it = 2: pop */
     RETF
 
-#if CB_USE_RET
-.Lret:
-    ret
-
-/* Called from PUSHCHK with rsp where the new frame would be. */
-.Lgrow:
-    cmp     rsp, qword ptr ST_FIELD(CB_ST_SCRATCH + 8)
-    jb      .Loverflow
-    mov     r14, rsp
-    ret
-#endif
-
 /* ---- exits ------------------------------------------------------------- */
 
 .Lsolved:
@@ -453,18 +448,10 @@ CB_KERNEL:
     sub     rcx, r10
     mov     qword ptr [rdi + CB_ST_STEPS], rcx
     mov     dword ptr [rdi + CB_ST_NODE_COUNT], r11d
-#if CB_USE_RET
-    mov     rsp, qword ptr [rdi + CB_ST_SCRATCH]            /* drop all frames */
-    mov     rcx, rsp
-    sub     rcx, r14
-    shr     rcx, 3
-#else
     lea     rcx, [rdi + CB_ST_FRAMES]
     sub     r14, rcx
-    mov     rcx, r14
-    shr     rcx, 4
-#endif
-    mov     dword ptr [rdi + CB_ST_PEAK_STACK], ecx
+    shr     r14, 4
+    mov     dword ptr [rdi + CB_ST_PEAK_STACK], r14d
     pop     r15
     pop     r14
     pop     r13
@@ -472,6 +459,6 @@ CB_KERNEL:
     pop     rbp
     pop     rbx
     ret
-    .size   CB_KERNEL, . - CB_KERNEL
+    .size   cb_amd64_search, . - cb_amd64_search
 
     .section .note.GNU-stack, "", @progbits

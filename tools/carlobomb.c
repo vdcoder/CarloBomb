@@ -7,6 +7,7 @@
  *   carlobomb run    --graph FILE --bits L
  *   carlobomb bench  --target S [--max-nodes N] [--reps R]
  *   carlobomb bomb   build|resume|status|finalize|verify|lookup ...   (fixed_run_cli.c)
+ *   carlobomb fixed  --bomb FILE --target S | --stats                 (fixed_bomb_cli.c)
  *
  * solve, level and bench accept --engine c (default) or, in builds for Linux
  * x86-64, --engine amd64-NAME for an assembly kernel.  amd64-asm is the
@@ -22,6 +23,7 @@
 #include <string.h>
 
 #include "cli_engine.h"
+#include "fixed_bomb_cli.h"
 #include "fixed_run_cli.h"
 #include "minimal_solver.h"
 
@@ -60,6 +62,8 @@ static int usage(void) {
 #endif
     );
     fixed_run_cli_usage();
+    fprintf(stderr, "The solver that reads it, for targets of 1 to 16 bits, without searching:\n");
+    fixed_bomb_cli_usage();
     return EXIT_USAGE;
 }
 
@@ -321,6 +325,7 @@ int main(int argc, char **argv) {
     if (argc < 2) return usage();
     if (!strcmp(argv[1], "engines")) return cmd_engines();
     if (!strcmp(argv[1], "bomb")) return fixed_run_cli(argc, argv);
+    if (!strcmp(argv[1], "fixed")) return fixed_bomb_cli(argc, argv);
     if (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")) {
         usage();
         return EXIT_OK;

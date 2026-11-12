@@ -374,7 +374,11 @@ static FrbError scan_segment(const char *dir, const FrbConfig *cfg, uint32_t num
         FrbRecord rec;
         if (!record_decode(format, buf, &rec)) {
             if (any_record_ahead(f, format)) {
-                set_err(err, errlen, "%s: damaged record at byte %llu, with valid records after it",
+                /* Without the file the construction goes on, makes the
+                 * searches it held again, and has concluded nothing wrong. */
+                set_err(err, errlen,
+                        "%s: damaged record at byte %llu, with valid records after it; move that "
+                        "file away to go on without its records",
                         path, (unsigned long long)valid_end);
                 fclose(f);
                 return FRB_ERR_JOURNAL;

@@ -178,6 +178,9 @@ every case:
 nohup build/carlobomb bomb ladder --dir ~/frb24 --to 24 --workers 10 >> ~/frb24.log 2>&1 &
 ```
 
+(If it answers that the directory is in use, workers of the stopped run are
+still finishing the search they were in: wait a second and run it again.)
+
 The same command, without `--from`. It finds the longest complete Bomb,
 replays the journal of the level above it (2.5 s at level 22; expect about
 ten seconds at level 24) and searches only what is still open. The worker count and the engine may

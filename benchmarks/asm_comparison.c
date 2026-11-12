@@ -16,7 +16,9 @@
  * "ASM kernel" is the assembly routine alone, without the wrapper's
  * validation, export and verification, to show the API overhead.
  *
- * Usage: asm_comparison [target ...]
+ * Usage: asm_comparison [-k kernel] [target ...]
+ *   -k selects the assembly kernel by registry name (default "asm", the
+ *   reference kernel; "auto" is the per-budget choice).
  */
 #include "timer.h" /* first: may need feature-test macros set by the build */
 
@@ -179,11 +181,21 @@ static const char *default_workloads[] = {
 int main(int argc, char **argv) {
     const char **w = default_workloads;
     int count = (int)(sizeof default_workloads / sizeof *default_workloads);
+    const char *kernel = "asm";
+    if (argc > 2 && !strcmp(argv[1], "-k")) {
+        kernel = argv[2];
+        argv += 2;
+        argc -= 2;
+    }
+    if (cb_amd64_kernel_select(cb_amd64_kernel_find(kernel)) != 0) {
+        fprintf(stderr, "kernel %s is unknown or not available on this CPU\n", kernel);
+        return 2;
+    }
     if (argc > 1) { w = (const char **)(argv + 1); count = argc - 1; }
 
     char cpu[200], isa[200];
     cpu_info(cpu, sizeof cpu, isa, sizeof isa);
-    printf("CarloBomb C vs AMD64 assembly LevelSolver\n");
+    printf("CarloBomb C vs AMD64 assembly LevelSolver (kernel \"%s\")\n", kernel);
     printf("revision:   %s\n", CARLOBOMB_REVISION);
     printf("C compiler: %s\n", __VERSION__);
     printf("C flags:    %s\n", CARLOBOMB_C_FLAGS);

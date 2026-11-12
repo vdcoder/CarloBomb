@@ -89,8 +89,7 @@ if(CARLOBOMB_AMD64_ASM AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
     ${CARLOBOMB_REPR_DIR}/k_n8s.S
     ${CARLOBOMB_REPR_DIR}/k_n8s_bmi2.S
     ${CARLOBOMB_REPR_DIR}/k_n8x.S
-    ${CARLOBOMB_REPR_DIR}/k_n8xa.S
-    ${CARLOBOMB_REPR_DIR}/k_n8xb.S)
+    ${CARLOBOMB_REPR_DIR}/k_hybx.S)
   target_include_directories(carlobomb_level_amd64 PUBLIC ${CARLOBOMB_ASM_DIR})
   target_link_libraries(carlobomb_level_amd64 PUBLIC carlobomb_level)
   target_compile_definitions(carlobomb_level_amd64 INTERFACE CARLOBOMB_HAVE_AMD64_ASM=1)

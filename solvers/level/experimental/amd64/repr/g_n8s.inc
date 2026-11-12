@@ -149,36 +149,3 @@
     and     eax, 15
 .endm
 
-#ifdef CB_BULK_ANY
-/*
- * rdi = existing nodes n for which CTRL(n, cp) is not certain to fail in its
- * INIT.  That INIT looks only at the color c of n and at link c of cp, so
- * all white n behave alike and all black n behave alike: it fails at once
- * exactly when link c of cp is decided and leads to a node whose color is
- * decided and is not the target bit.
- */
-.macro G_BULK_FLOW_WORK
-    mov     L_TMP, eax
-    lea     eax, [rdx*4]
-    shrx    rax, rbx, rax                       /* links of cp: nibble 0 and nibble 8 */
-    mov     rdi, rax
-    shr     rdi, 32
-    and     edi, 15                             /* link 1 of cp (15 = undecided) */
-    and     eax, 15                             /* link 0 of cp */
-    mov     rcx, r13
-    xor     rcx, r8                             /* decided nodes of the wrong color */
-    bt      rcx, rax
-    sbb     rax, rax                            /* all ones: a white n fails at once */
-    bt      rcx, rdi
-    sbb     rdi, rdi                            /* all ones: a black n fails at once */
-    mov     rcx, r13
-    xor     rcx, r15                            /* white nodes */
-    and     rax, rcx
-    and     rdi, r15                            /* black nodes */
-    or      rdi, rax                            /* certain failures */
-    mov     rcx, -1
-    bzhi    rcx, rcx, r11                       /* existing nodes */
-    andn    rdi, rdi, rcx
-    mov     eax, L_TMP
-.endm
-#endif

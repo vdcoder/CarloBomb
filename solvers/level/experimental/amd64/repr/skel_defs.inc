@@ -20,22 +20,11 @@
 #define L_TEND   qword ptr [rsp + 8]
 #define L_MAX    dword ptr [rsp + 16]
 #define L_STATE  qword ptr [rsp + 24]
-#define L_TMP    dword ptr [rsp + 32]           /* scratch for a representation */
-#define LOCALS   48
+#define LOCALS   32
 
-/* CB_BULK turns on bulk accounting in both link loops; CB_BULK_CTRL and
- * CB_BULK_FLOW turn it on in one of them. */
-#ifdef CB_BULK
-#define CB_BULK_CTRL 1
-#define CB_BULK_FLOW 1
-#endif
-#if defined(CB_BULK_CTRL) || defined(CB_BULK_FLOW)
-#define CB_BULK_ANY 1
-#endif
-
-/* Largest number of steps a bulk skip (CB_BULK) can count at once is 5 per
- * node; below this many remaining steps the per-node code is used, so that a
- * step limit is always met at exactly the same step. */
-#define CB_BULK_MARGIN 512
+/* A bulk skip (CB_BULK) counts 3 steps per node at once, at most 3 * 64.
+ * Below this many remaining steps the per-node code is used, so that a step
+ * limit is always met at exactly the same step. */
+#define CB_BULK_MARGIN 256
 
 #endif

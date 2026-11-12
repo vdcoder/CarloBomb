@@ -93,7 +93,9 @@ static void test_targets(void) {
     CHECK(frb_target_parse("1", &bits, &index) && bits == 1 && index == 1);
     CHECK(frb_target_parse("010010001", &bits, &index) && bits == 9 && index == 145);
     CHECK(!frb_target_parse("", &bits, &index));
-    CHECK(!frb_target_parse("01000100011010110", &bits, &index)); /* 17 bits */
+    CHECK(frb_target_parse("01000100011010110", &bits, &index) && bits == 17 && index == 0x88D6u);
+    CHECK(frb_target_parse("100000000000000000000001", &bits, &index) && bits == 24 && index == 0x800001u);
+    CHECK(!frb_target_parse("0100010001101011001000100", &bits, &index)); /* 25 bits */
     CHECK(!frb_target_parse("0102", &bits, &index));
     CHECK(!frb_target_parse(NULL, &bits, &index));
     for (int b = 1; b <= FRB_MAX_BITS; b++) {
@@ -362,8 +364,10 @@ static void test_table_and_image(void) {
         free(longer);
     }
     CHECK(parse_mutated(image, size, 0, 0x20, 0, NULL) == FRB_ERR_MAGIC);
-    CHECK(parse_mutated(image, size, 8, 0x03, 0, NULL) == FRB_ERR_VERSION);  /* version 2 */
-    CHECK(parse_mutated(image, size, 8, 0x03, 1, NULL) == FRB_ERR_VERSION);
+    CHECK(parse_mutated(image, size, 8, 0x02, 0, NULL) == FRB_ERR_VERSION);  /* version 3 */
+    CHECK(parse_mutated(image, size, 8, 0x02, 1, NULL) == FRB_ERR_VERSION);
+    CHECK(parse_mutated(image, size, 8, 0x03, 0, NULL) == FRB_ERR_HEADER);   /* version 2 it is not */
+    CHECK(parse_mutated(image, size, 8, 0x03, 1, NULL) == FRB_ERR_HEADER);
     CHECK(parse_mutated(image, size, 9, 0x01, 1, NULL) == FRB_ERR_VERSION);  /* version 257 */
     CHECK(parse_mutated(image, size, 24, 0x01, 0, NULL) == FRB_ERR_HEADER);  /* header checksum */
     CHECK(parse_mutated(image, size, 62, 0x40, 0, NULL) == FRB_ERR_HEADER);

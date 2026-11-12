@@ -7,6 +7,8 @@
  *   carlobomb bomb finalize --work-dir DIR --output FILE [--partial]
  *   carlobomb bomb verify   --file FILE [--work-dir DIR] [--recertify [--engine E] [--sample K]]
  *   carlobomb bomb lookup   --file FILE --target S [--out GRAPH]
+ *   carlobomb bomb ladder   --dir DIR --to L [--from FILE] [settings] [run options]
+ *   carlobomb bomb ladder   --dir DIR --status
  *
  * Exit status: 0 success and, where the question arises, a complete
  * certified table; 1 a check failed or the construction broke; 2 usage,
@@ -31,11 +33,12 @@ enum { X_OK = 0, X_FAIL = 1, X_USAGE = 2, X_PARTIAL = 3 };
 
 typedef struct {
     const char *work_dir, *file, *output, *target, *out, *engine, *max_steps, *symmetry, *fallback;
-    long bits, max_nodes, workers, enumerate_max; /* -1: not given */
-    long long sample, limit_jobs;                 /* -1: not given */
+    const char *dir, *from, *base, *against;
+    long bits, max_nodes, workers, enumerate_max, to, format; /* -1: not given */
+    long long sample, limit_jobs, min_free;                   /* -1: not given */
     unsigned long long seed;
     double time_limit, progress; /* < 0: not given */
-    int partial, recertify, quiet;
+    int partial, recertify, quiet, status;
 } BombArgs;
 
 void fixed_run_cli_usage(void) {
@@ -43,7 +46,9 @@ void fixed_run_cli_usage(void) {
             "  carlobomb bomb build    --bits L --work-dir DIR [--max-nodes N] [--engine E]\n"
             "                          [--workers W] [--enumerate-max K] [--symmetry on|off]\n"
             "                          [--fallback ring|none] [--max-steps K[,K...]]\n"
+            "                          [--base FILE]\n"
             "      start building the table of minimum-node REVs for every L-bit string\n"
+            "      (L up to %d); with --base, on a complete Bomb for fewer bits\n"
             "  carlobomb bomb resume   --work-dir DIR [--max-nodes N] [--engine E] [--workers W]\n"
             "                          [--fallback ring|none] [--max-steps K[,K...]]\n"
             "      continue an interrupted or limited construction\n"
@@ -52,12 +57,22 @@ void fixed_run_cli_usage(void) {
             "  carlobomb bomb finalize --work-dir DIR --output FILE [--partial]\n"
             "      write the table; refuses an incomplete one unless --partial\n"
             "  carlobomb bomb verify   --file FILE [--work-dir DIR] [--recertify] [--sample K]\n"
-            "      check a table: structure, every witness, symmetry, evidence, recomputation\n"
+            "                          [--against SHORTER.frb]\n"
+            "      check a table: structure, every witness, symmetry, evidence, recomputation,\n"
+            "      and agreement with a complete Bomb for fewer bits\n"
             "  carlobomb bomb lookup   --file FILE --target S [--out GRAPH]\n"
             "      print the REV stored for S\n"
-            "build and resume also take --sample K [--seed S] (search only K random open\n"
-            "targets), --limit-jobs K, --time-limit SECONDS, --progress SECONDS, --quiet.\n"
-            "The engine defaults to amd64-auto where it exists, else c.\n");
+            "  carlobomb bomb ladder   --dir DIR --to L [--from FILE] [--workers W] [--engine E]\n"
+            "                          [--max-steps K[,K...]] [--max-nodes N]\n"
+            "      build complete Bombs for every length up to L, each from the one before,\n"
+            "      starting from the longest in DIR or from FILE; run again to continue\n"
+            "  carlobomb bomb ladder   --dir DIR --status\n"
+            "      the Bombs a ladder directory holds and the level in progress\n"
+            "build, resume and ladder also take --sample K [--seed S] (search only K random\n"
+            "open targets), --limit-jobs K, --time-limit SECONDS, --progress SECONDS,\n"
+            "--min-free MIB (stop cleanly when the disk has less free space), --quiet.\n"
+            "The engine defaults to amd64-auto where it exists, else c.\n",
+            FRB_MAX_BITS);
 }
 
 static int usage_error(const char *message) {
@@ -87,8 +102,8 @@ static int parse_double(const char *s, double *out) {
 
 static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
     memset(a, 0, sizeof *a);
-    a->bits = a->max_nodes = a->workers = a->enumerate_max = -1;
-    a->sample = a->limit_jobs = -1;
+    a->bits = a->max_nodes = a->workers = a->enumerate_max = a->to = a->format = -1;
+    a->sample = a->limit_jobs = a->min_free = -1;
     a->time_limit = a->progress = -1;
     for (int i = 3; i < argc; i++) {
         const char *k = argv[i], *v;
@@ -96,6 +111,7 @@ static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
         if (!strcmp(k, "--partial")) { a->partial = 1; continue; }
         if (!strcmp(k, "--recertify")) { a->recertify = 1; continue; }
         if (!strcmp(k, "--quiet")) { a->quiet = 1; continue; }
+        if (!strcmp(k, "--status")) { a->status = 1; continue; }
         v = i + 1 < argc ? argv[++i] : NULL;
         if (!v) { fprintf(stderr, "missing value for %s\n", k); return 0; }
         if (!strcmp(k, "--work-dir")) a->work_dir = v;
@@ -107,6 +123,10 @@ static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
         else if (!strcmp(k, "--max-steps")) a->max_steps = v;
         else if (!strcmp(k, "--symmetry")) a->symmetry = v;
         else if (!strcmp(k, "--fallback")) a->fallback = v;
+        else if (!strcmp(k, "--dir")) a->dir = v;
+        else if (!strcmp(k, "--from")) a->from = v;
+        else if (!strcmp(k, "--base")) a->base = v;
+        else if (!strcmp(k, "--against")) a->against = v;
         else if (!strcmp(k, "--time-limit")) {
             if (!parse_double(v, &a->time_limit)) goto bad;
         } else if (!strcmp(k, "--progress")) {
@@ -117,6 +137,9 @@ static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
         else if (!strcmp(k, "--max-nodes")) a->max_nodes = n > 1000 ? 1000 : (long)n;
         else if (!strcmp(k, "--workers")) a->workers = n > 1000000 ? 1000000 : (long)n;
         else if (!strcmp(k, "--enumerate-max")) a->enumerate_max = n > 1000 ? 1000 : (long)n;
+        else if (!strcmp(k, "--to")) a->to = n > 1000 ? 1000 : (long)n;
+        else if (!strcmp(k, "--format")) a->format = n > 1000 ? 1000 : (long)n;
+        else if (!strcmp(k, "--min-free")) a->min_free = n > ((long long)1 << 40) ? (long long)1 << 40 : n;
         else if (!strcmp(k, "--sample")) a->sample = n;
         else if (!strcmp(k, "--limit-jobs")) a->limit_jobs = n;
         else if (!strcmp(k, "--seed")) a->seed = (unsigned long long)n;
@@ -142,7 +165,7 @@ static const char *status_text(FrbStatus s) {
     case FRB_WITNESS: return "WITNESS (valid; minimum node count not certified)";
     case FRB_MINIMAL: return "MINIMAL (certified minimum node count)";
     case FRB_UNRESOLVED: return "UNRESOLVED (searched without a final answer; no witness)";
-    case FRB_UNSUPPORTED: return "UNSUPPORTED (recorded as needing more than 16 nodes)";
+    case FRB_UNSUPPORTED: return "UNSUPPORTED (recorded as needing more nodes than an entry holds)";
     }
     return "?";
 }
@@ -290,6 +313,18 @@ static int apply_changeable(const BombArgs *a, FrbConfig *cfg) {
     return 1;
 }
 
+static void run_options(const BombArgs *a, RevLevelSolveFn solve, FrbRunOptions *opt) {
+    frb_run_options_default(opt);
+    opt->solve = solve;
+    opt->log = a->quiet ? NULL : stdout;
+    if (a->sample >= 0) opt->sample = (uint64_t)a->sample;
+    if (a->limit_jobs >= 0) opt->limit_jobs = (uint64_t)a->limit_jobs;
+    if (a->time_limit >= 0) opt->time_limit = a->time_limit;
+    if (a->progress >= 0) opt->progress_seconds = a->progress;
+    if (a->min_free >= 0) opt->min_free_bytes = (uint64_t)a->min_free << 20;
+    opt->seed = a->seed;
+}
+
 static int run_session(const BombArgs *a, const FrbConfig *cfg, RevLevelSolveFn solve) {
     char err[FRB_ERR_TEXT] = "";
     FrbRunOptions opt;
@@ -297,14 +332,7 @@ static int run_session(const BombArgs *a, const FrbConfig *cfg, RevLevelSolveFn 
     FrbState *state = NULL;
     FrbError e;
 
-    frb_run_options_default(&opt);
-    opt.solve = solve;
-    opt.log = a->quiet ? NULL : stdout;
-    if (a->sample >= 0) opt.sample = (uint64_t)a->sample;
-    if (a->limit_jobs >= 0) opt.limit_jobs = (uint64_t)a->limit_jobs;
-    if (a->time_limit >= 0) opt.time_limit = a->time_limit;
-    if (a->progress >= 0) opt.progress_seconds = a->progress;
-    opt.seed = a->seed;
+    run_options(a, solve, &opt);
 
     if (!a->quiet) {
         printf("FixedRunBomb(%d): building in %s with engine %s, %d worker process%s\n", cfg->bits,
@@ -330,6 +358,10 @@ static int run_session(const BombArgs *a, const FrbConfig *cfg, RevLevelSolveFn 
             printf("Interrupted.  Everything recorded so far is kept.\n"
                    "Continue with: carlobomb bomb resume --work-dir %s\n",
                    a->work_dir);
+        } else if (res.disk_low) {
+            printf("Stopped because the disk is nearly full.  Everything recorded so far is kept.\n"
+                   "Free some space, then: carlobomb bomb resume --work-dir %s\n",
+                   a->work_dir);
         } else if (res.stopped_early) {
             printf("Stopped at the requested job cap, sample size or time limit.\n"
                    "Continue with: carlobomb bomb resume --work-dir %s\n",
@@ -351,6 +383,16 @@ static int cmd_build(const BombArgs *a) {
     FrbError e;
     if (!a->work_dir || a->bits < 0) return usage_error("build needs --bits and --work-dir");
     frb_config_default(&cfg, (int)a->bits);
+    if (a->format >= 0) { /* a newer format than the length needs, for a test of it */
+        const FrbFormat *format = frb_format((int)a->format);
+        if (!format) return usage_error("--format must be 1 or 2");
+        cfg.format = format->version;
+        cfg.max_nodes = format->node_capacity;
+    }
+    if (a->base) {
+        e = frb_config_set_base(&cfg, a->base, err, sizeof err);
+        if (e != FRB_OK) return fail(e == FRB_ERR_IO ? FRB_ERR_ARG : e, err);
+    }
     if (a->enumerate_max >= 0) cfg.enumerate_max = (int)a->enumerate_max;
     if (a->symmetry) {
         if (!strcmp(a->symmetry, "on")) cfg.symmetry = 1;
@@ -432,6 +474,7 @@ static int cmd_status(const BombArgs *a) {
 
 static int cmd_finalize(const BombArgs *a) {
     char err[FRB_ERR_TEXT] = "";
+    FrbFileInfo info;
     FrbSummary sum;
     FrbError e;
     if (!a->work_dir || !a->output) return usage_error("finalize needs --work-dir and --output");
@@ -445,11 +488,126 @@ static int cmd_finalize(const BombArgs *a) {
         return X_PARTIAL;
     }
     if (e != FRB_OK) return fail(e == FRB_ERR_IO && !err[0] ? FRB_ERR_ARG : e, err);
+    e = frb_file_info(a->output, &info);
+    if (e != FRB_OK) return fail(e, "the file just written cannot be read");
     printf("Wrote %s: %llu bytes\n\n", a->output,
-           (unsigned long long)(FRB_HEADER_BYTES + (uint64_t)sum.count * FRB_ENTRY_BYTES));
-    for (int bits = 1; bits <= FRB_MAX_BITS; bits++)
-        if (sum.count == (uint32_t)1 << bits) frb_report_summary(stdout, &sum, bits);
+           (unsigned long long)(FRB_HEADER_BYTES + (uint64_t)sum.count * (uint64_t)info.entry_bytes));
+    frb_report_summary(stdout, &sum, info.bits);
     return sum.complete ? X_OK : X_PARTIAL;
+}
+
+/* ---- ladder ------------------------------------------------------------- */
+
+static int ladder_status(const char *dir) {
+    char path[4096];
+    int levels = 0, top = 0;
+    printf("Ladder in %s\n\n", dir);
+    printf("  Bits      Strings   Largest minimum   Table CRC-32   Format   File\n");
+    for (int bits = 1; bits <= FRB_MAX_BITS; bits++) {
+        FrbFileInfo info;
+        FILE *probe;
+        FrbError e;
+        snprintf(path, sizeof path, "%s/fixed-run-%02d.frb", dir, bits);
+        probe = fopen(path, "rb");
+        if (!probe) continue;
+        fclose(probe);
+        e = frb_file_info(path, &info);
+        if (e != FRB_OK || info.bits != bits) {
+            printf("  %4d   INVALID (%s): %s\n", bits, frb_error_str(e), path);
+            continue;
+        }
+        printf("  %4d   %10u   %15d       %08x   %6d   %s%s\n", bits, (unsigned)info.count,
+               info.max_minimal_nodes, (unsigned)info.table_crc, info.version, path,
+               info.complete ? "" : "   (NOT COMPLETE)");
+        levels++;
+        if (info.complete) top = bits;
+    }
+    if (!levels) printf("  none\n");
+    for (int bits = top + 1; bits <= FRB_MAX_BITS; bits++) {
+        FILE *probe;
+        snprintf(path, sizeof path, "%s/work-%02d/config.txt", dir, bits);
+        probe = fopen(path, "r");
+        if (!probe) continue;
+        fclose(probe);
+        printf("\nLevel %d is under construction.  Its progress:\n"
+               "  carlobomb bomb status --work-dir %s/work-%02d\n",
+               bits, dir, bits);
+    }
+    if (top)
+        printf("\nEvery file listed as complete holds a certified minimum-node REV for each string of\n"
+               "its length.  The reports of the levels built here are in %s/level-NN.txt.\n",
+               dir);
+    return top ? X_OK : X_PARTIAL;
+}
+
+static int cmd_ladder(const BombArgs *a) {
+    char err[FRB_ERR_TEXT] = "";
+    RevLevelSolveFn solve = NULL;
+    FrbConfig settings;
+    FrbRunOptions opt;
+    FrbLadderResult res;
+    FrbError e;
+    double t0;
+    if (!a->dir) return usage_error("ladder needs --dir");
+    if (a->status) return ladder_status(a->dir);
+    if (a->to < 0) return usage_error("ladder needs --to (the length to climb to) or --status");
+
+    frb_config_default(&settings, 1);
+    settings.format = a->format >= 0 ? (int)a->format : 0; /* 0: what each length needs */
+    settings.max_nodes = 0;                               /* 0: all an entry can hold */
+    if (a->format >= 0 && !frb_format((int)a->format)) return usage_error("--format must be 1 or 2");
+    if (a->symmetry) {
+        if (!strcmp(a->symmetry, "on")) settings.symmetry = 1;
+        else if (!strcmp(a->symmetry, "off")) settings.symmetry = 0;
+        else return usage_error("--symmetry must be on or off");
+    }
+    if (!apply_changeable(a, &settings)) return X_USAGE;
+    if (settings.workers < 1 || settings.workers > FRB_MAX_WORKERS) {
+        fprintf(stderr, "error: workers must be 1..%d\n", FRB_MAX_WORKERS);
+        return X_USAGE;
+    }
+    if (!select_engine(a->engine, settings.engine, sizeof settings.engine, &solve)) return X_USAGE;
+    run_options(a, solve, &opt);
+    if (a->progress < 0) opt.progress_seconds = 30; /* hours of it: no need for a line every 5 s */
+    if (a->min_free < 0) opt.min_free_bytes = (uint64_t)2048 << 20;
+
+    if (!a->quiet) {
+        printf("Ladder to FixedRunBomb(%ld) in %s: engine %s, %d worker process%s\n", a->to, a->dir,
+               settings.engine, settings.workers, settings.workers == 1 ? "" : "es");
+        fflush(stdout);
+    }
+    t0 = cb_now();
+    e = frb_ladder_run(a->dir, a->from, (int)a->to, &settings, &opt, &res, err, sizeof err);
+    if (e != FRB_OK) {
+        if (res.top_bits && !a->quiet)
+            printf("\nThe longest complete Bomb in %s is for %d bits.\n", a->dir, res.top_bits);
+        return fail(e == FRB_ERR_IO && !err[0] ? FRB_ERR_ARG : e, err);
+    }
+    if (a->quiet) return res.complete ? X_OK : X_PARTIAL;
+
+    printf("\n%d level%s completed in %.1f s.  The longest complete Bomb in %s is for %d bits:\n"
+           "  %s/fixed-run-%02d.frb\n",
+           res.levels_done, res.levels_done == 1 ? "" : "s", cb_now() - t0, a->dir, res.top_bits, a->dir,
+           res.top_bits);
+    if (res.complete) {
+        printf("\nThe ladder is complete.  To check the result independently of this run:\n"
+               "  carlobomb bomb verify --file %s/fixed-run-%02d.frb --work-dir %s/work-%02d\n",
+               a->dir, res.top_bits, a->dir, res.top_bits);
+        return X_OK;
+    }
+    if (res.last.interrupted)
+        printf("\nInterrupted.  Everything recorded so far is kept.\n");
+    else if (res.last.disk_low)
+        printf("\nStopped because the disk is nearly full.  Everything recorded so far is kept.\n");
+    else if (res.last.stopped_early)
+        printf("\nStopped at the requested job cap, sample size or time limit.\n");
+    else
+        printf("\nLevel %d cannot be completed with these settings: a search was stopped by its\n"
+               "step limit, or --max-nodes is too small.  See\n"
+               "  carlobomb bomb status --work-dir %s/work-%02d\n",
+               res.top_bits + 1, a->dir, res.top_bits + 1);
+    printf("Run the same command again to continue from where it stopped.\n");
+    return X_PARTIAL;
 }
 
 #endif /* CARLOBOMB_HAVE_BOMB_BUILD */
@@ -499,6 +657,40 @@ static int cmd_verify(const BombArgs *a) {
         return X_FAIL;
     }
     printf("Complement symmetry of witnesses and minima .......... PASS\n");
+
+    if (a->against) {
+        FrbFileInfo short_info;
+        FrbTable shorter;
+        e = frb_file_read(a->against, &shorter, &short_info, &bad);
+        if (e != FRB_OK) {
+            printf("Against %s: cannot use it (%s)\n", a->against, frb_error_str(e));
+            printf("Verification: FAIL (%s)\n", frb_error_str(e));
+            frb_table_destroy(&t);
+            return e == FRB_ERR_IO ? X_USAGE : X_FAIL;
+        }
+        if (short_info.bits >= t.bits) {
+            fprintf(stderr, "--against takes a Bomb for fewer bits than the %d of the file checked; %s is for %d\n",
+                    t.bits, a->against, short_info.bits);
+            frb_table_destroy(&shorter);
+            frb_table_destroy(&t);
+            return X_USAGE;
+        }
+        e = frb_table_check_chain(&t, &shorter, &bad);
+        frb_table_destroy(&shorter);
+        if (e != FRB_OK) {
+            frb_target_format(bad, t.bits, target);
+            printf("Against the %d-bit Bomb %s: FAIL (%s%s%s)\n", short_info.bits, a->against,
+                   frb_error_str(e), e == FRB_ERR_EVIDENCE ? ", first at target " : "",
+                   e == FRB_ERR_EVIDENCE ? target : "");
+            printf("Verification: FAIL (%s)\n", frb_error_str(e));
+            frb_table_destroy(&t);
+            return X_FAIL;
+        }
+        printf("Against the complete %d-bit Bomb %s:\n"
+               "  the minimum of every %d-bit string is the smallest among its extensions here,\n"
+               "  and no %d consecutive bits of a string need over one node more than it ... PASS\n",
+               short_info.bits, a->against, short_info.bits, short_info.bits);
+    }
 
 #ifdef CARLOBOMB_HAVE_BOMB_BUILD
     if (a->work_dir) {
@@ -563,13 +755,15 @@ static int cmd_verify(const BombArgs *a) {
 #endif
 
     e = frb_table_validate(&t, &sum, NULL);
-    frb_table_destroy(&t);
     if (e != FRB_OK) {
+        frb_table_destroy(&t);
         printf("Verification: FAIL (%s)\n", frb_error_str(e));
         return X_FAIL;
     }
     printf("\n");
     frb_report_summary(stdout, &sum, info.bits);
+    if (sum.complete) frb_report_hardest(stdout, &t, 16);
+    frb_table_destroy(&t);
     printf("\nVerification: PASS (%s)\n", sum.complete ? "complete certified table" : "partial table");
     return sum.complete ? X_OK : X_PARTIAL;
 }
@@ -591,9 +785,10 @@ int fixed_run_cli(int argc, char **argv) {
     if (!strcmp(sub, "resume")) return cmd_resume(&a);
     if (!strcmp(sub, "status")) return cmd_status(&a);
     if (!strcmp(sub, "finalize")) return cmd_finalize(&a);
+    if (!strcmp(sub, "ladder")) return cmd_ladder(&a);
 #else
     if (!strcmp(sub, "build") || !strcmp(sub, "resume") || !strcmp(sub, "status") ||
-        !strcmp(sub, "finalize")) {
+        !strcmp(sub, "finalize") || !strcmp(sub, "ladder")) {
         fprintf(stderr, "bomb %s needs a POSIX system; verify and lookup work everywhere\n", sub);
         return X_USAGE;
     }

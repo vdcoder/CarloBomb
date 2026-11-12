@@ -100,23 +100,24 @@ static int open_bomb(const char *path, RevFixedBomb **bomb) {
 
 static int cmd_stats(const char *path, const RevFixedBomb *bomb) {
     char target[FRB_MAX_BITS + 1];
-    uint64_t total[FRB_NODE_CAPACITY + 1] = {0}, strings = 0;
+    uint64_t total[FRB_MAX_NODES + 1] = {0}, strings = 0;
     int bits = rev_fixed_bomb_bits(bomb), top = rev_fixed_bomb_max_nodes(bomb);
+    int w = bits > 16 ? 11 : 8; /* column width: counts reach 2^bits */
     double weighted = 0;
 
     printf("Minimum node count of every binary string of 1 to %d bits (%s)\n\n", bits, path);
-    printf("  Bits   Strings");
-    for (int n = 1; n <= top; n++) printf(" %8d", n);
+    printf("  Bits  %*s", w, "Strings");
+    for (int n = 1; n <= top; n++) printf(" %*d", w, n);
     printf("   Largest    Mean\n");
     for (int len = 1; len <= bits; len++) {
-        uint32_t counts[FRB_NODE_CAPACITY + 1];
+        uint32_t counts[FRB_MAX_NODES + 1];
         double sum = 0;
         int largest = 0;
         rev_fixed_bomb_histogram(bomb, len, counts);
-        printf("  %4d  %8s", len, commas((uint64_t)1 << len));
+        printf("  %4d  %*s", len, w, commas((uint64_t)1 << len));
         for (int n = 1; n <= top; n++) {
-            if (counts[n]) printf(" %8s", commas(counts[n]));
-            else printf(" %8s", "");
+            if (counts[n]) printf(" %*s", w, commas(counts[n]));
+            else printf(" %*s", w, "");
             total[n] += counts[n];
             sum += (double)n * (double)counts[n];
             if (counts[n]) largest = n;
@@ -125,21 +126,21 @@ static int cmd_stats(const char *path, const RevFixedBomb *bomb) {
         weighted += sum;
         strings += (uint64_t)1 << len;
     }
-    printf("   all  %8s", commas(strings));
-    for (int n = 1; n <= top; n++) printf(" %8s", commas(total[n]));
+    printf("   all  %*s", w, commas(strings));
+    for (int n = 1; n <= top; n++) printf(" %*s", w, commas(total[n]));
     printf("   %7d   %5.3f\n", top, weighted / (double)strings);
 
     printf("\n  The strings that need the most nodes, by length\n");
-    printf("  Bits   Nodes     Count   First in order\n");
+    printf("  Bits   Nodes  %*s   First in order\n", w, "Count");
     for (int len = 1; len <= bits; len++) {
-        uint32_t counts[FRB_NODE_CAPACITY + 1], first = 0;
+        uint32_t counts[FRB_MAX_NODES + 1], first = 0;
         int largest = 0;
         rev_fixed_bomb_histogram(bomb, len, counts);
-        for (int n = 1; n <= FRB_NODE_CAPACITY; n++)
+        for (int n = 1; n <= FRB_MAX_NODES; n++)
             if (counts[n]) largest = n;
         while (rev_fixed_bomb_min_nodes(bomb, len, first) != largest) first++;
         frb_target_format(first, len, target);
-        printf("  %4d   %5d  %8s   %s\n", len, largest, commas(counts[largest]), target);
+        printf("  %4d   %5d  %*s   %s\n", len, largest, w, commas(counts[largest]), target);
     }
     printf("\nEvery count is a certified minimum read out of the Bomb; nothing was searched.\n");
     return X_OK;

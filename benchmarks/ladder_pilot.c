@@ -32,6 +32,9 @@
  * printed after each, so a run can be stopped as soon as the answer is
  * clear.
  */
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE /* MAP_ANONYMOUS */
+#endif
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
 #endif
@@ -40,10 +43,12 @@
 
 #include <math.h>
 #include <poll.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -149,9 +154,19 @@ static double draw(int bits, size_t count, int workers, uint64_t seed, Sample *o
     int (*fds)[2] = malloc((size_t)workers * sizeof *fds);
     pid_t *pids = malloc((size_t)workers * sizeof *pids);
     size_t done = 0;
+    /* As in the construction itself: every worker takes the next sample
+     * nobody has taken, so a slow processor core draws fewer samples instead
+     * of holding the others up, and the throughput measured is the one the
+     * construction will have. */
+    atomic_uint_fast64_t *next = mmap(NULL, sizeof *next, PROT_READ | PROT_WRITE,
+                                      MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (next == MAP_FAILED) {
+        perror("ladder_pilot");
+        exit(1);
+    }
+    atomic_init(next, 0);
     fflush(NULL);
     for (int k = 0; k < workers; k++) {
-        size_t mine = count / (size_t)workers + ((size_t)k < count % (size_t)workers);
         if (pipe(fds[k]) != 0 || (pids[k] = fork()) < 0) {
             perror("ladder_pilot");
             exit(1);
@@ -159,7 +174,7 @@ static double draw(int bits, size_t count, int workers, uint64_t seed, Sample *o
         if (pids[k] == 0) {
             uint64_t s = seed + (uint64_t)0x1000003 * ((uint64_t)k + 1u);
             close(fds[k][0]);
-            for (size_t i = 0; i < mine; i++) {
+            while (atomic_fetch_add(next, 1) < count) {
                 Sample one;
                 run_sample(bits, &s, &one);
                 if (write(fds[k][1], &one, sizeof one) != (ssize_t)sizeof one) _exit(1);
@@ -197,6 +212,7 @@ static double draw(int bits, size_t count, int workers, uint64_t seed, Sample *o
             }
         }
         for (int k = 0; k < workers; k++) waitpid(pids[k], NULL, 0);
+        munmap(next, sizeof *next);
         free(pf);
         free(have);
         free(part);

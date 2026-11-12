@@ -107,7 +107,8 @@ if(MODE STREQUAL "small")
   run(2 "fixed for the life of a work directory" bomb resume --work-dir ${W}/a --enumerate-max 4)
   run(2 "no FixedRunBomb construction here" bomb resume --work-dir ${W}/nothing)
   run(2 "no FixedRunBomb construction here" bomb status --work-dir ${W}/nothing)
-  run(2 "bits must be 1..16" bomb build --bits 17 --work-dir ${W}/x)
+  run(2 "bits must be 1..24" bomb build --bits 25 --work-dir ${W}/x)
+  run(2 "table format 1 cannot hold 17-bit targets" bomb build --bits 17 --format 1 --work-dir ${W}/x)
   run(2 "max-nodes must be 1..16" bomb build --bits 10 --max-nodes 17 --work-dir ${W}/x)
   run(2 "enumerate-max must be 0..6" bomb build --bits 10 --enumerate-max 7 --work-dir ${W}/x)
   run(2 "workers must be" bomb build --bits 10 --workers 0 --work-dir ${W}/x)
@@ -138,6 +139,37 @@ if(MODE STREQUAL "small")
     run(0 "with engine c,.*note: engine amd64-auto is not available here" bomb resume --work-dir ${W}/f --engine amd64-auto --progress 0)
   endif()
 
+  # The ladder: from the 10-bit table to 13 bits, stopped once on the way.
+  run(3 "Level 11.*Stopped at the requested job cap, sample size or time limit.*Run the same command again"
+      bomb ladder --dir ${W}/lad --from ${W}/a.frb --to 13 --workers 2 --limit-jobs 40 --progress 0)
+  run(0 "  10 +1024 +6 +[0-9a-f]+ +1 .*Level 11 is under construction" bomb ladder --dir ${W}/lad --status)
+  run(3 "built on +the complete 10-bit Bomb.*REV of the 10-bit Bomb +1,024.*NOT COMPLETE"
+      bomb status --work-dir ${W}/lad/work-11)
+  run(0 "continuing from it.*Level 11:[^\n]*continued.*FixedRunBomb\\(13\\) is complete.*The ladder is complete"
+      bomb ladder --dir ${W}/lad --to 13 --workers 2 --progress 0)
+  run(0 "nothing to do.*The ladder is complete" bomb ladder --dir ${W}/lad --to 13 --progress 0)
+  run(0 "  13 +8192 +7 +[0-9a-f]+ +1 " bomb ladder --dir ${W}/lad --status)
+  run(0 "Against the complete 10-bit Bomb.*PASS.*against the journal[^\n]*PASS.*8192 certified minima reproduced.*The hardest 13-bit strings.*0000000000001 needs +7: it is among the hardest.*Verification: PASS \\(complete certified table\\)"
+      bomb verify --file ${W}/lad/fixed-run-13.frb --work-dir ${W}/lad/work-13 --against ${W}/a.frb --recertify --engine c)
+  run(0 "the first 7 bits alone need|by the 10-bit Bomb|status +MINIMAL" bomb status --work-dir ${W}/lad/work-11 --target 01101001101)
+  # One level by hand, on a base Bomb, in the 24-bit format.
+  run(0 "FixedRunBomb\\(11\\) on the complete 10-bit Bomb.*COMPLETE"
+      bomb build --bits 11 --work-dir ${W}/onbase --base ${W}/a.frb --format 2 --progress 0)
+  run(0 "Wrote .*: 69696 bytes.*COMPLETE" bomb finalize --work-dir ${W}/onbase --output ${W}/v2-11.frb)
+  run(0 "Format version 2, 11-bit targets.*Against the complete 10-bit Bomb.*PASS.*Verification: PASS"
+      bomb verify --file ${W}/v2-11.frb --work-dir ${W}/onbase --against ${W}/a.frb)
+  run(0 "Result: MINIMAL.*Verification: PASS" fixed --bomb ${W}/v2-11.frb --target 0110100110)
+  run(2 "--against takes a Bomb for fewer bits" bomb verify --file ${W}/a.frb --against ${W}/v2-11.frb)
+  run(1 "Against [^\n]*a-partial.frb: FAIL \\(table is not complete" bomb verify --file ${W}/v2-11.frb --against ${W}/a-partial.frb)
+  # Ladder refusals.
+  run(2 "ladder needs --dir" bomb ladder --to 12)
+  run(2 "ladder needs --to" bomb ladder --dir ${W}/lad)
+  run(2 "the ladder climbs to 2..24 bits" bomb ladder --dir ${W}/lad --to 25)
+  run(2 "name a complete one with --from" bomb ladder --dir ${W}/empty --to 12)
+  run(3 "is not a complete Bomb" bomb ladder --dir ${W}/empty --from ${W}/a-partial.frb --to 12)
+  run(2 "is a Bomb for 10-bit targets; a construction for 9 bits needs a shorter one"
+      bomb build --bits 9 --work-dir ${W}/x --base ${W}/a.frb)
+
   # A table checked against the journal of some other construction.
   run(1 "the table is for 10-bit targets, the work directory for 9-bit ones.*Verification: FAIL"
       bomb verify --file ${W}/a.frb --work-dir ${W}/f)
@@ -162,6 +194,13 @@ elseif(MODE STREQUAL "16full")
   expect_sha256(${W}/fixed-run-16.frb 0394d4d358312ae740ec1c05fbd0c18ca1416dfec3a2fcc400148a9b5e5e6a14)
   run(0 "65536 certified minima reproduced.*Verification: PASS \\(complete certified table\\)"
       bomb verify --file ${W}/fixed-run-16.frb --work-dir ${W}/w --recertify)
+  # One rung up.  The 17-bit table is the same bytes on every machine too.
+  run(0 "FixedRunBomb\\(17\\) is complete.*      8 +2 +131,072 +100.00%.*The ladder is complete"
+      bomb ladder --dir ${W}/lad --from ${W}/fixed-run-16.frb --to 17 --workers 4 --progress 0)
+  expect_sha256(${W}/lad/fixed-run-17.frb e6d4cc43d3edc56f88e96037cef81f7f4c0b6e88ecbaef5052339596726eecdb)
+  run(0 "Against the complete 16-bit Bomb.*PASS.*2000 certified minima reproduced.*Verification: PASS"
+      bomb verify --file ${W}/lad/fixed-run-17.frb --work-dir ${W}/lad/work-17 --against ${W}/fixed-run-16.frb
+      --recertify --sample 2000 --engine c)
 
 else()
   message(FATAL_ERROR "MODE must be small, 16 or 16full")

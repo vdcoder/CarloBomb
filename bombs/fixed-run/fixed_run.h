@@ -1,6 +1,8 @@
 /*
  * FixedRunBomb: a table that maps every binary string of one fixed length
- * L (1..16 bits) to a REV that emits it.
+ * L to a REV that emits it.  Format version 1 holds strings of up to 16 bits
+ * and REVs of up to 16 nodes; version 2, strings of up to 24 bits and REVs
+ * of up to 24 nodes.
  *
  * FORMAT.md in this directory is the specification of the file.  This header
  * is the C interface to it: packing and unpacking of entries, the table in
@@ -25,13 +27,36 @@
 extern "C" {
 #endif
 
+/* Format version 1: what a table of up to 16 bits is written in. */
 #define FRB_FORMAT_VERSION 1
-#define FRB_MAX_BITS 16      /* longest target the format indexes */
 #define FRB_NODE_CAPACITY 16 /* nodes an entry can hold */
 #define FRB_NODE_BITS 9      /* 1 color bit, 4 bits link 0, 4 bits link 1 */
 #define FRB_GRAPH_BYTES 18   /* 16 nodes x 9 bits */
 #define FRB_ENTRY_BYTES 19   /* packed graph + 1 metadata byte */
+
+/* Format version 2: 17 to 24 bits.  24 nodes of 11 bits (1 color bit and two
+ * links of 5 bits), 33 bytes, plus the metadata byte: 34 bytes per entry. */
+#define FRB_FORMAT_VERSION_2 2
+
+/* The largest of any version: sizes of buffers and of per-node-count arrays. */
+#define FRB_MAX_BITS 24
+#define FRB_MAX_NODES 24
+#define FRB_MAX_GRAPH_BYTES 33
+#define FRB_MAX_ENTRY_BYTES 34
 #define FRB_HEADER_BYTES 64
+
+typedef struct {
+    int version;       /* 1 or 2 */
+    int max_bits;      /* longest target: 16, 24 */
+    int node_capacity; /* nodes an entry can hold: 16, 24 */
+    int link_bits;     /* bits per link: 4, 5 */
+    int node_bits;     /* 1 + 2 * link_bits: 9, 11 */
+    int graph_bytes;   /* packed graph: 18, 33 */
+    int entry_bytes;   /* packed graph + metadata byte: 19, 34 */
+} FrbFormat;
+
+const FrbFormat *frb_format(int version);       /* NULL for a version this code does not know */
+const FrbFormat *frb_format_for_bits(int bits); /* version 1 up to 16 bits, 2 up to 24; else NULL */
 
 #define FRB_FLAG_COMPLETE 1u /* every entry is a certified minimum */
 
@@ -115,16 +140,33 @@ FrbError frb_entry_encode(FrbStatus status, const RevGraph *g, uint8_t out[FRB_E
  * g->node_count is 0 when the entry holds no witness. */
 FrbError frb_entry_decode(const uint8_t in[FRB_ENTRY_BYTES], FrbStatus *status, RevGraph *g);
 
+/* The same four in a given format: buffers of format->graph_bytes and
+ * format->entry_bytes.  The functions above are these for version 1. */
+FrbError frb_graph_pack_as(const FrbFormat *format, const RevGraph *g, uint8_t *out);
+FrbError frb_graph_unpack_as(const FrbFormat *format, const uint8_t *in, int node_count, RevGraph *g);
+FrbError frb_entry_encode_as(const FrbFormat *format, FrbStatus status, const RevGraph *g,
+                             uint8_t *out);
+FrbError frb_entry_decode_as(const FrbFormat *format, const uint8_t *in, FrbStatus *status,
+                             RevGraph *g);
+
 /* ---- table in memory ---------------------------------------------------- */
 
 typedef struct {
     int bits;         /* L */
     uint32_t count;   /* 2^L */
-    uint8_t *entries; /* count * FRB_ENTRY_BYTES bytes, exactly as in the file */
+    uint8_t *entries; /* count * format->entry_bytes bytes, exactly as in the file */
+    const FrbFormat *format;
 } FrbTable;
 
-FrbError frb_table_create(FrbTable *t, int bits); /* every entry FRB_EMPTY */
+/* Every entry FRB_EMPTY.  The format is version 1 for up to 16 bits and
+ * version 2 above; frb_table_create_as takes it explicitly. */
+FrbError frb_table_create(FrbTable *t, int bits);
+FrbError frb_table_create_as(FrbTable *t, int bits, const FrbFormat *format);
 void frb_table_destroy(FrbTable *t);
+
+/* Entry `index` as stored, and its node count (0 if it holds no REV). */
+const uint8_t *frb_table_entry(const FrbTable *t, uint32_t index);
+int frb_table_nodes(const FrbTable *t, uint32_t index);
 
 /* Store an entry.  A witness is run on the interpreter and must emit `index`. */
 FrbError frb_table_put(FrbTable *t, uint32_t index, FrbStatus status, const RevGraph *g);
@@ -135,8 +177,8 @@ FrbError frb_table_get(const FrbTable *t, uint32_t index, FrbStatus *status, Rev
 typedef struct {
     uint32_t count;
     uint32_t by_status[5];                             /* indexed by FrbStatus */
-    uint32_t minimal_by_nodes[FRB_NODE_CAPACITY + 1];  /* FRB_MINIMAL entries */
-    uint32_t witness_by_nodes[FRB_NODE_CAPACITY + 1];  /* FRB_WITNESS entries */
+    uint32_t minimal_by_nodes[FRB_MAX_NODES + 1];      /* FRB_MINIMAL entries */
+    uint32_t witness_by_nodes[FRB_MAX_NODES + 1];      /* FRB_WITNESS entries */
     int max_minimal_nodes; /* largest node count among FRB_MINIMAL entries, 0 if none */
     int max_witness_nodes; /* largest among FRB_WITNESS and FRB_MINIMAL, 0 if none */
     int complete;          /* 1 iff every entry is FRB_MINIMAL */
@@ -155,13 +197,32 @@ FrbError frb_table_validate(const FrbTable *t, FrbSummary *summary, uint32_t *ba
  */
 FrbError frb_table_check_symmetry(const FrbTable *t, uint32_t *bad_index);
 
+/*
+ * Two complete tables for different lengths against each other.  Three
+ * things must hold, each a consequence of what a REV is:
+ *
+ *   - the minimum of a short string is the smallest minimum among its
+ *     extensions in the longer table (a REV for the short string goes on to
+ *     emit one of them; a REV for any of them emits the short string);
+ *   - so no string of the longer table needs fewer nodes than its first bits;
+ *   - no stretch of consecutive bits of a string needs more than one node
+ *     over the string's own minimum (n nodes for a string give n + 1 for the
+ *     string without its first j bits).
+ *
+ * Both tables must be complete (FRB_ERR_INCOMPLETE otherwise).  On
+ * FRB_ERR_EVIDENCE *bad_index is the first string of the longer table at
+ * which a rule breaks.  Neither table is validated here.
+ */
+FrbError frb_table_check_chain(const FrbTable *longer, const FrbTable *shorter, uint32_t *bad_index);
+
 /* ---- file --------------------------------------------------------------- */
 
 typedef struct {
     int version, bits, node_capacity;
     uint32_t count, flags, witnesses, minimal, table_crc;
     int max_minimal_nodes, max_witness_nodes;
-    int complete; /* the FRB_FLAG_COMPLETE bit */
+    int complete;    /* the FRB_FLAG_COMPLETE bit */
+    int entry_bytes; /* of the file's format version */
 } FrbFileInfo;
 
 /*
@@ -181,6 +242,13 @@ FrbError frb_file_write(const char *path, const FrbTable *t);
 FrbError frb_file_read(const char *path, FrbTable *t, FrbFileInfo *info, uint32_t *bad_index);
 
 /*
+ * Read a file without decoding its entries: header, length and both
+ * checksums are checked, the entries are not.  For a caller that is about to
+ * decode and run every entry itself; nothing else should trust the result.
+ */
+FrbError frb_file_read_raw(const char *path, FrbTable *t, FrbFileInfo *info);
+
+/*
  * Random access: read the header and one entry.  Validates the header, the
  * file length and that entry (including running its graph); does not read
  * the rest of the table, so it does not check the table checksum.
@@ -193,6 +261,11 @@ FrbError frb_file_info(const char *path, FrbFileInfo *info);
 
 /* The minimum-node histogram of a table and what may be concluded from it. */
 void frb_report_summary(FILE *out, const FrbSummary *summary, int bits);
+
+/* For a complete table: the largest minimum, how many strings need it, how
+ * it compares with ceil(2*sqrt(L)) - 1, where 0...01 stands, and the first
+ * list_max of the hardest strings whose first bit is 0. */
+void frb_report_hardest(FILE *out, const FrbTable *t, int list_max);
 
 /* CRC-32 (IEEE 802.3, reflected, as in zlib and PNG).  Start with crc = 0. */
 uint32_t frb_crc32(uint32_t crc, const void *data, size_t size);

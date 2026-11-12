@@ -129,7 +129,7 @@ static void test_small(int bits) {
     CHECK(rev_fixed_bomb_bits(b) == bits);
 
     for (int len = 1; len <= bits; len++) {
-        uint32_t hist[FRB_NODE_CAPACITY + 1], direct[FRB_NODE_CAPACITY + 1] = {0}, total = 0;
+        uint32_t hist[FRB_MAX_NODES + 1], direct[FRB_MAX_NODES + 1] = {0}, total = 0;
         for (uint32_t v = 0; v < (1u << len); v++) {
             RevFixedBombInfo info;
             RevMinimalInfo mi;
@@ -165,7 +165,7 @@ static void test_small(int bits) {
             strings++;
         }
         rev_fixed_bomb_histogram(b, len, hist);
-        for (int n = 0; n <= FRB_NODE_CAPACITY; n++) {
+        for (int n = 0; n <= FRB_MAX_NODES; n++) {
             CHECK(hist[n] == direct[n]);
             total += hist[n];
         }
@@ -392,9 +392,13 @@ static void test_rejections(void) {
     copy[30] ^= 0x01;
     CHECK(open_image(copy, size, NULL) == FRB_ERR_HEADER);        /* in the header */
     memcpy(copy, image, size);
-    copy[8] = 2;
+    copy[8] = 3;
     fix_crcs(copy, size);
     CHECK(open_image(copy, size, NULL) == FRB_ERR_VERSION);       /* a format this code does not read */
+    memcpy(copy, image, size);
+    copy[8] = 2;
+    fix_crcs(copy, size);
+    CHECK(open_image(copy, size, NULL) == FRB_ERR_HEADER);        /* version 2 has other entries */
     memcpy(copy, image, size);
     copy[0] = 'X';
     CHECK(open_image(copy, size, NULL) == FRB_ERR_MAGIC);
@@ -513,7 +517,7 @@ static void test_every_string(const RevFixedBomb *b, const FrbTable *t) {
     char target[FRB_MAX_BITS + 1];
     unsigned long long strings = 0, wrong = 0, ties = 0;
     for (int len = 1; len <= 16; len++) {
-        uint32_t hist[FRB_NODE_CAPACITY + 1];
+        uint32_t hist[FRB_MAX_NODES + 1];
         for (uint32_t v = 0; v < (1u << len); v++) {
             RevFixedBombInfo info;
             RevGraph g, stored;
@@ -552,7 +556,7 @@ static void test_every_string(const RevFixedBomb *b, const FrbTable *t) {
             if (!ok && wrong++ < 5) CHECK_MSG(ok, "wrong answer for %s", target);
         }
         rev_fixed_bomb_histogram(b, len, hist);
-        for (int n = 0; n <= FRB_NODE_CAPACITY; n++)
+        for (int n = 0; n <= FRB_MAX_NODES; n++)
             CHECK_MSG(hist[n] == (n < 8 ? atlas[len][n] : 0), "%d-bit strings needing %d nodes: %u", len, n,
                       (unsigned)hist[n]);
     }

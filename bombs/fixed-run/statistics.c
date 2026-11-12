@@ -59,8 +59,12 @@ static void print_settings(FILE *out, const FrbConfig *cfg) {
         if (cfg->max_steps[i]) fprintf(out, "%s%s", i ? ", then " : "", commas(cfg->max_steps[i]));
         else fprintf(out, "%snone", i ? ", then " : "");
     }
+    if (cfg->base_bits)
+        fprintf(out, "\n  built on                the complete %d-bit Bomb %s\n"
+                     "                          (table checksum %08x)",
+                cfg->base_bits, cfg->base_file, (unsigned)cfg->base_crc);
     fprintf(out, "\n  search revision %d, journal format %d, table format %d\n", FRB_SEARCH_REVISION,
-            FRB_JOURNAL_VERSION, FRB_FORMAT_VERSION);
+            cfg->format, cfg->format);
 }
 
 static void print_stage_a(FILE *out, const FrbConfig *cfg, const FrbState *s) {
@@ -97,12 +101,13 @@ static void print_stage_a(FILE *out, const FrbConfig *cfg, const FrbState *s) {
 }
 
 static void print_stage_b(FILE *out, const FrbConfig *cfg, const FrbState *s) {
-    uint32_t by_enum = 0, by_search = 0, by_ring = 0, limited = 0, beyond = 0, pending = 0;
+    uint32_t by_enum = 0, by_search = 0, by_ring = 0, by_base = 0, limited = 0, beyond = 0, pending = 0;
     for (uint32_t i = 0; i < s->count; i++) {
         const FrbTargetState *ts = &s->targets[i];
         if (ts->status == FRB_MINIMAL) {
             if (ts->source == FRB_SRC_ENUM) by_enum++;
             else if (ts->source == FRB_SRC_SEARCH) by_search++;
+            else if (ts->source == FRB_SRC_BASE) by_base++;
             else by_ring++;
         } else if (ts->conflict) {
             /* counted separately below */
@@ -114,7 +119,13 @@ static void print_stage_b(FILE *out, const FrbConfig *cfg, const FrbState *s) {
             pending++;
         }
     }
-    fprintf(out, "\nStage B: search for the targets enumeration left open\n");
+    if (cfg->base_bits) {
+        fprintf(out, "\nStage B: search for the targets the %d-bit Bomb left open\n", cfg->base_bits);
+        fprintf(out, "  minimum certified, REV of the %2d-bit Bomb    %10s\n", cfg->base_bits,
+                commas(by_base));
+    } else {
+        fprintf(out, "\nStage B: search for the targets enumeration left open\n");
+    }
     fprintf(out, "  minimum certified by enumeration             %10s\n", commas(by_enum));
     fprintf(out, "  minimum certified by search                  %10s\n", commas(by_search));
     if (by_ring)
@@ -130,9 +141,10 @@ static void print_stage_b(FILE *out, const FrbConfig *cfg, const FrbState *s) {
 }
 
 static void print_histogram(FILE *out, const FrbState *s) {
-    uint32_t minimal[FRB_NODE_CAPACITY + 2] = {0}, lower[FRB_NODE_CAPACITY + 3] = {0};
+    uint32_t minimal[FRB_MAX_NODES + 2] = {0}, lower[FRB_MAX_NODES + 3] = {0};
     uint32_t cumulative = 0, more = s->count, uncertified = 0, none = 0;
     int max_minimal = 0, max_witness = 0, max_lower = 0, all_have_witness = 1, last;
+    int capacity = s->format->node_capacity;
     int complete = s->by_status[FRB_MINIMAL] == s->count && !s->conflicts;
 
     for (uint32_t i = 0; i < s->count; i++) {
@@ -154,8 +166,8 @@ static void print_histogram(FILE *out, const FrbState *s) {
 
     /* Rows after `last` have nothing certified, nothing proven and nothing open. */
     last = max_minimal > max_lower ? max_minimal : max_lower;
-    if (!complete) last = FRB_NODE_CAPACITY;
-    if (last > FRB_NODE_CAPACITY) last = FRB_NODE_CAPACITY;
+    if (!complete) last = capacity;
+    if (last > capacity) last = capacity;
 
     fprintf(out, "\nMinimum node count\n");
     fprintf(out, "  Nodes   Certified minimum   Cumulative     Share   Proven to need more   Unresolved\n");
@@ -166,9 +178,9 @@ static void print_histogram(FILE *out, const FrbState *s) {
                 commas(cumulative), 100.0 * (double)cumulative / (double)s->count, commas(more),
                 commas(s->count - cumulative - more));
     }
-    if (last < FRB_NODE_CAPACITY)
+    if (last < capacity)
         fprintf(out, "  %2d-%-2d   %17s   %10s   %6.2f%%   %19s   %10s\n", last + 1,
-                FRB_NODE_CAPACITY, "0", commas(cumulative),
+                capacity, "0", commas(cumulative),
                 100.0 * (double)cumulative / (double)s->count, "0", "0");
     fprintf(out, "  (Unresolved at n: neither certified at n or fewer nodes nor proven to need more.)\n");
 
@@ -192,7 +204,7 @@ static void print_histogram(FILE *out, const FrbState *s) {
         fprintf(out, "NOT COMPLETE: %s of %s targets have no certified minimum.\n",
                 commas(s->count - s->by_status[FRB_MINIMAL]), commas(s->count));
         fprintf(out, "Proven so far about the maximum over all %d-bit strings: at least %d", s->bits,
-                max_lower > FRB_NODE_CAPACITY ? FRB_NODE_CAPACITY : max_lower);
+                max_lower > capacity ? capacity : max_lower);
         if (all_have_witness) fprintf(out, ", at most %d.\n", max_witness);
         else fprintf(out, "; no upper bound, since some targets have no witness.\n");
         if (max_minimal)
@@ -204,7 +216,7 @@ static void print_histogram(FILE *out, const FrbState *s) {
                 "\nWARNING: %s target(s) have every node budget up to %d recorded as excluded.  A ring\n"
                 "of L nodes emits any L-bit string, so that cannot be true: suspect the engine or the\n"
                 "journal.  The table reports them as UNSUPPORTED rather than store anything for them.\n",
-                commas(s->by_status[FRB_UNSUPPORTED]), FRB_NODE_CAPACITY);
+                commas(s->by_status[FRB_UNSUPPORTED]), capacity);
 }
 
 static void print_effort(FILE *out, const FrbState *s) {
@@ -216,7 +228,7 @@ static void print_effort(FILE *out, const FrbState *s) {
 
     fprintf(out, "\nSearch effort by node budget\n");
     fprintf(out, "  Budget     Searches       Solved        Unsat    Limit      Logical steps   Time (s)\n");
-    for (int b = 1; b <= FRB_NODE_CAPACITY; b++) {
+    for (int b = 1; b <= FRB_MAX_NODES; b++) {
         const FrbBudgetEffort *e = &s->budget[b];
         if (!e->searches) continue;
         fprintf(out, "  %6d   %10s   %10s   %10s   %6s   %16s   %8.2f\n", b, commas(e->searches),
@@ -285,11 +297,12 @@ static void print_effort(FILE *out, const FrbState *s) {
                 "                unfinished tail and were ignored\n",
                 commas(s->journal.torn_bytes), (unsigned)s->journal.torn_segments);
     fprintf(out, "  final table   %s bytes (64-byte header + %s entries of %d bytes)\n",
-            commas(FRB_HEADER_BYTES + (uint64_t)s->count * FRB_ENTRY_BYTES), commas(s->count),
-            FRB_ENTRY_BYTES);
+            commas(FRB_HEADER_BYTES + (uint64_t)s->count * (uint64_t)s->format->entry_bytes),
+            commas(s->count), s->format->entry_bytes);
     fprintf(out, "  peak disk     journal + one table: %s bytes (one table more while an existing\n"
                  "                output file is being replaced)\n",
-            commas(s->journal.bytes + FRB_HEADER_BYTES + (uint64_t)s->count * FRB_ENTRY_BYTES));
+            commas(s->journal.bytes + FRB_HEADER_BYTES +
+                   (uint64_t)s->count * (uint64_t)s->format->entry_bytes));
 }
 
 void frb_report_state(FILE *out, const char *dir, const FrbConfig *cfg, const FrbState *s) {
@@ -349,7 +362,8 @@ static int dump_record(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *re
 FrbError frb_report_target(FILE *out, const char *dir, const FrbConfig *cfg, const FrbState *s,
                            uint32_t index, char *err, size_t errlen) {
     static const char *const source[] = {"none", "exhaustive enumeration", "search",
-                                         "the ring construction"};
+                                         "the ring construction",
+                                         "the REV the base Bomb stores for its first bits"};
     char target[FRB_MAX_BITS + 1];
     const FrbTargetState *ts;
     TargetDump d;
@@ -363,9 +377,17 @@ FrbError frb_report_target(FILE *out, const char *dir, const FrbConfig *cfg, con
             ts->conflict ? "  ** contradictory results **" : "");
     if (ts->nodes) {
         RevGraph g;
-        fprintf(out, "  witness        %d nodes, from %s%s\n", ts->nodes, source[ts->source & 3u],
+        int have;
+        fprintf(out, "  witness        %d nodes, from %s%s\n", ts->nodes,
+                source[ts->source <= FRB_SRC_BASE ? ts->source : 0],
                 ts->mirrored ? " (complement of the witness of the complement string)" : "");
-        if (frb_graph_unpack(ts->graph, ts->nodes, &g) == FRB_OK) {
+        if (ts->source == FRB_SRC_RING) { /* not stored: it is what it always is */
+            frb_ring_witness(index, s->bits, &g);
+            have = 1;
+        } else {
+            have = frb_graph_unpack_as(s->format, frb_state_graph(s, index), ts->nodes, &g) == FRB_OK;
+        }
+        if (have) {
             fprintf(out, "                 Node   Color   Link0   Link1\n");
             for (int i = 0; i < g.node_count; i++)
                 fprintf(out, "                 %-6d %-7s %-7d %d\n", i,
@@ -383,6 +405,9 @@ FrbError frb_report_target(FILE *out, const char *dir, const FrbConfig *cfg, con
         int by_search = ts->unsat_max, by_enum = s->enum_complete;
         if (ts->nodes && ts->nodes - 1 < by_enum) by_enum = ts->nodes - 1;
         fprintf(out, "node budgets 1..%d are excluded\n", ts->lower_bound - 1);
+        if (s->base_bits && ts->lower_bound - 1 > by_search && ts->lower_bound - 1 > by_enum)
+            fprintf(out, "                 1..%d by the %d-bit Bomb: the first %d bits alone need %d nodes\n",
+                    ts->lower_bound - 1, s->base_bits, s->base_bits, ts->lower_bound);
         if (by_enum >= 1)
             fprintf(out, "                 1..%d by exhaustive enumeration: no graph of that size emits it\n",
                     by_enum);

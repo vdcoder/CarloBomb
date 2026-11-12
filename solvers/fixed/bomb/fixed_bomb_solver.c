@@ -7,7 +7,8 @@
  * 2k + 1 (append 1), and the B-bit strings would be nodes 2^B .. 2^(B+1)-1.
  * Those leaves are the Bomb's own entries and are not stored again: best[]
  * covers nodes 1 .. 2^B - 1 and holds, for each, the table index of the
- * chosen B-bit extension.  2^B numbers of 16 bits: 128 KiB for B = 16.
+ * chosen B-bit extension.  2^B numbers of 16 bits: 128 KiB for B = 16.  A
+ * Bomb of more than 16 bits has indices that need 32: 64 MiB for B = 24.
  */
 #include "fixed_bomb_solver.h"
 
@@ -15,30 +16,38 @@
 #include <string.h>
 
 struct RevFixedBomb {
-    FrbTable table; /* the Bomb's entries, byte for byte as in the file */
-    uint16_t *best; /* table.count numbers; best[0] is unused */
-    int max_nodes;  /* the largest minimum in the table */
+    FrbTable table;   /* the Bomb's entries, byte for byte as in the file */
+    uint16_t *best16; /* table.count numbers, [0] unused: the index of a Bomb of up to 16 bits */
+    uint32_t *best32; /* the same for a longer Bomb; exactly one of the two is used */
+    size_t entry_bytes, graph_bytes; /* of the table's format */
+    int max_nodes;    /* the largest minimum in the table */
 };
 
 static const uint8_t *entry_at(const RevFixedBomb *b, uint32_t index) {
-    return b->table.entries + (size_t)index * FRB_ENTRY_BYTES;
+    return b->table.entries + (size_t)index * b->entry_bytes;
 }
 
 /* Node count of a table entry: the low five bits of its metadata byte. */
 static int entry_nodes(const RevFixedBomb *b, uint32_t index) {
-    return entry_at(b, index)[FRB_GRAPH_BYTES] & 31;
+    return entry_at(b, index)[b->graph_bytes] & 31;
+}
+
+static uint32_t best_of(const RevFixedBomb *b, uint32_t node) {
+    return b->best16 ? b->best16[node] : b->best32[node];
 }
 
 static void build_index(RevFixedBomb *b) {
     uint32_t count = b->table.count;
     for (uint32_t node = count - 1; node >= 1; node--) {
         uint32_t zero = 2 * node, one = zero + 1;
-        uint32_t a = zero >= count ? zero - count : b->best[zero];
-        uint32_t c = one >= count ? one - count : b->best[one];
+        uint32_t a = zero >= count ? zero - count : best_of(b, zero);
+        uint32_t c = one >= count ? one - count : best_of(b, one);
         /* Every extension through the 0-child has a lower index than every
          * extension through the 1-child, so keeping `a` on a tie keeps the
          * lowest index. */
-        b->best[node] = (uint16_t)(entry_nodes(b, c) < entry_nodes(b, a) ? c : a);
+        uint32_t chosen = entry_nodes(b, c) < entry_nodes(b, a) ? c : a;
+        if (b->best16) b->best16[node] = (uint16_t)chosen;
+        else b->best32[node] = chosen;
     }
 }
 
@@ -48,16 +57,19 @@ static int in_range(const RevFixedBomb *b, int bits, uint32_t value) {
 }
 
 static uint32_t select_extension(const RevFixedBomb *b, int bits, uint32_t value) {
-    return bits == b->table.bits ? value : b->best[((uint32_t)1 << bits) + value];
+    return bits == b->table.bits ? value : best_of(b, ((uint32_t)1 << bits) + value);
 }
 
 static FrbError adopt(FrbTable *table, int validated, RevFixedBomb **out, uint32_t *bad_index) {
     RevFixedBomb *b;
     uint32_t count, mask;
+    size_t entry_bytes, graph_bytes;
     FrbError e;
     if (!out) return FRB_ERR_ARG;
     *out = NULL;
-    if (!table || !table->entries) return FRB_ERR_ARG;
+    if (!table || !table->entries || !table->format) return FRB_ERR_ARG;
+    entry_bytes = (size_t)table->format->entry_bytes;
+    graph_bytes = (size_t)table->format->graph_bytes;
     if (!validated) {
         e = frb_table_validate(table, NULL, bad_index);
         if (e != FRB_OK) return e;
@@ -66,7 +78,7 @@ static FrbError adopt(FrbTable *table, int validated, RevFixedBomb **out, uint32
     mask = count - 1u;
     /* Certified minima only: a witness that is merely valid answers nothing here. */
     for (uint32_t i = 0; i < count; i++) {
-        unsigned meta = table->entries[(size_t)i * FRB_ENTRY_BYTES + FRB_GRAPH_BYTES];
+        unsigned meta = table->entries[(size_t)i * entry_bytes + graph_bytes];
         if ((meta >> 5) != (unsigned)FRB_MINIMAL) {
             if (bad_index) *bad_index = i;
             return FRB_ERR_INCOMPLETE;
@@ -74,8 +86,8 @@ static FrbError adopt(FrbTable *table, int validated, RevFixedBomb **out, uint32
     }
     /* A string and its complement need the same number of nodes. */
     for (uint32_t i = 0; i < count; i++) {
-        unsigned n = table->entries[(size_t)i * FRB_ENTRY_BYTES + FRB_GRAPH_BYTES] & 31u;
-        unsigned c = table->entries[(size_t)(i ^ mask) * FRB_ENTRY_BYTES + FRB_GRAPH_BYTES] & 31u;
+        unsigned n = table->entries[(size_t)i * entry_bytes + graph_bytes] & 31u;
+        unsigned c = table->entries[(size_t)(i ^ mask) * entry_bytes + graph_bytes] & 31u;
         if (n != c) {
             if (bad_index) *bad_index = i;
             return FRB_ERR_EVIDENCE;
@@ -84,11 +96,15 @@ static FrbError adopt(FrbTable *table, int validated, RevFixedBomb **out, uint32
 
     b = calloc(1, sizeof *b);
     if (!b) return FRB_ERR_MEMORY;
-    b->best = calloc(count, sizeof *b->best); /* node 0 does not exist and stays 0 */
-    if (!b->best) {
+    /* Node 0 does not exist and stays 0. */
+    if (table->bits <= 16) b->best16 = calloc(count, sizeof *b->best16);
+    else b->best32 = calloc(count, sizeof *b->best32);
+    if (!b->best16 && !b->best32) {
         free(b);
         return FRB_ERR_MEMORY;
     }
+    b->entry_bytes = entry_bytes;
+    b->graph_bytes = graph_bytes;
     b->table = *table; /* the storage changes hands */
     table->entries = NULL;
     table->count = 0;
@@ -124,7 +140,8 @@ void rev_fixed_bomb_reindex(RevFixedBomb *bomb) {
 void rev_fixed_bomb_close(RevFixedBomb *bomb) {
     if (!bomb) return;
     frb_table_destroy(&bomb->table);
-    free(bomb->best);
+    free(bomb->best16);
+    free(bomb->best32);
     free(bomb);
 }
 
@@ -143,9 +160,9 @@ uint32_t rev_fixed_bomb_extension(const RevFixedBomb *bomb, int bits, uint32_t v
 }
 
 void rev_fixed_bomb_histogram(const RevFixedBomb *bomb, int bits,
-                              uint32_t counts[FRB_NODE_CAPACITY + 1]) {
+                              uint32_t counts[FRB_MAX_NODES + 1]) {
     if (!counts) return;
-    memset(counts, 0, (FRB_NODE_CAPACITY + 1) * sizeof counts[0]);
+    memset(counts, 0, (FRB_MAX_NODES + 1) * sizeof counts[0]);
     if (!bomb || bits < 1 || bits > bomb->table.bits) return;
     for (uint32_t v = 0; v < ((uint32_t)1 << bits); v++)
         counts[entry_nodes(bomb, select_extension(bomb, bits, v))]++;
@@ -234,7 +251,8 @@ RevFixedBombResult rev_fixed_bomb_solve(const RevFixedBomb *bomb, const char *ta
     /* The table was run in full when it was opened.  Run this one graph
      * again, against the target as the caller wrote it. */
     if (!result) result = &local_graph;
-    if (frb_graph_unpack(entry_at(bomb, extension), nodes, result) != FRB_OK ||
+    memset(result, 0, sizeof *result);
+    if (frb_graph_unpack_as(bomb->table.format, entry_at(bomb, extension), nodes, result) != FRB_OK ||
         rev_verify_prefix(result, target, target_len, NULL) != REV_OK) {
         result->node_count = 0;
         return REV_FIXED_BOMB_INTERNAL_ERROR;

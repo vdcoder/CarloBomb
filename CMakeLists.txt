@@ -89,7 +89,9 @@ if(CARLOBOMB_AMD64_ASM AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
     ${CARLOBOMB_REPR_DIR}/k_n8s.S
     ${CARLOBOMB_REPR_DIR}/k_n8s_bmi2.S
     ${CARLOBOMB_REPR_DIR}/k_n8x.S
-    ${CARLOBOMB_REPR_DIR}/k_hybx.S)
+    ${CARLOBOMB_REPR_DIR}/k_hybx.S
+    ${CARLOBOMB_REPR_DIR}/k_n8x_count.S
+    ${CARLOBOMB_REPR_DIR}/k_hybx_count.S)
   target_include_directories(carlobomb_level_amd64 PUBLIC ${CARLOBOMB_ASM_DIR})
   target_link_libraries(carlobomb_level_amd64 PUBLIC carlobomb_level)
   target_compile_definitions(carlobomb_level_amd64 INTERFACE CARLOBOMB_HAVE_AMD64_ASM=1)
@@ -159,6 +161,11 @@ if(CARLOBOMB_HAVE_AMD64_ASM)
   add_executable(repr_comparison benchmarks/repr_comparison.c)
   target_link_libraries(repr_comparison PRIVATE carlobomb_level_amd64 m)
   target_compile_definitions(repr_comparison PRIVATE CARLOBOMB_REVISION="${CARLOBOMB_REVISION}")
+
+  add_executable(characterize benchmarks/characterize.c)
+  target_link_libraries(characterize PRIVATE carlobomb_level_amd64 m)
+  target_compile_definitions(characterize PRIVATE CARLOBOMB_REVISION="${CARLOBOMB_REVISION}")
+  add_test(NAME perf_counter_plumbing COMMAND characterize --perf-selftest)
 endif()
 
 add_test(NAME legacy_original_runs COMMAND legacy_original)

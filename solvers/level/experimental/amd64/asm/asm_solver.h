@@ -55,8 +55,29 @@ int cb_amd64_kernel_available(int index);             /* 1 if this CPU can run i
 int cb_amd64_kernel_find(const char *name);           /* index, or -1 */
 int cb_amd64_kernel_select(int index);                /* 0 on success, -1 if unavailable */
 int cb_amd64_kernel_selected(void);
-/* The kernel function the current selection uses for this node budget. */
+/* The registry index, and the function, that the current selection actually
+ * runs for this node budget (after the "auto" choice and any fallback). */
+int cb_amd64_kernel_used(int max_nodes);
 CbAmd64KernelFn cb_amd64_kernel_resolve(int max_nodes);
+
+/*
+ * Instruction sets.  cb_amd64_isa() is what kernels may use: what CPUID
+ * reports, less anything masked off with cb_amd64_isa_limit().  The limit
+ * exists so that the selection made on a CPU without BMI2 or AVX-512 can be
+ * exercised on one that has them; it can only remove, never add.  If the
+ * selected kernel becomes unavailable the selection returns to kernel 0.
+ */
+unsigned cb_amd64_isa(void);
+void cb_amd64_isa_limit(unsigned allowed);
+
+/*
+ * Counters of the benchmark-only kernels whose names end in "-count"
+ * ("n8x-count", "hybx-count"): the same kernels as n8x and hybx with
+ * bookkeeping added at the bulk-accounting sites.  Not for production use;
+ * the plain kernels carry no counting code at all.
+ */
+const CbAsmCounters *cb_amd64_counters(void);
+void cb_amd64_counters_reset(void);
 
 /*
  * Test and benchmark interface.

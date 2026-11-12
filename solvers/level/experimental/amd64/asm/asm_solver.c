@@ -27,10 +27,19 @@ _Static_assert((int)REV_SOLVE_RESOURCE_LIMIT == CB_RES_LIMIT, "result codes");
 _Static_assert((int)REV_LIMIT_NONE == CB_LIM_NONE, "limit codes");
 _Static_assert((int)REV_LIMIT_STACK == CB_LIM_STACK, "limit codes");
 _Static_assert((int)REV_LIMIT_STEPS == CB_LIM_STEPS, "limit codes");
+_Static_assert(offsetof(CbAsmState, scratch) + 8 == CB_ST_COUNTERS, "layout");
+_Static_assert(offsetof(CbAsmCounters, bulk_steps) == CB_CNT_BULK_STEPS, "counters");
+_Static_assert(offsetof(CbAsmCounters, bulk_scans) == CB_CNT_BULK_SCANS, "counters");
+_Static_assert(offsetof(CbAsmCounters, bulk_loops) == CB_CNT_BULK_LOOPS, "counters");
+_Static_assert(offsetof(CbAsmCounters, fallback_steps) == CB_CNT_FALLBACK_STEPS, "counters");
+_Static_assert(offsetof(CbAsmCounters, fallback_stack) == CB_CNT_FALLBACK_STACK, "counters");
+_Static_assert(offsetof(CbAsmCounters, fallback_uncolored) == CB_CNT_FALLBACK_UNCOLORED,
+               "counters");
 
 #define GUARD_BYTE 0xA5
 
 static CbAsmState state;
+static CbAsmCounters counters;
 static int guards_ready;
 
 /* ---- kernel registry ---------------------------------------------------- */
@@ -48,10 +57,12 @@ int cb_amd64_k_n8s(CbAsmState *, int);
 int cb_amd64_k_n8s_bmi2(CbAsmState *, int);
 int cb_amd64_k_n8x(CbAsmState *, int);
 int cb_amd64_k_hybx(CbAsmState *, int);
+int cb_amd64_k_n8x_count(CbAsmState *, int);
+int cb_amd64_k_hybx_count(CbAsmState *, int);
 
 enum {
     K_ASM, K_B4, K_HYB, K_N8G, K_N8G_BMI2, K_P16M, K_P16G, K_P16X, K_HYB_F8, K_N8G_F8,
-    K_N8S, K_N8S_BMI2, K_N8X, K_HYBX, K_AUTO
+    K_N8S, K_N8S_BMI2, K_N8X, K_HYBX, K_AUTO, K_N8X_COUNT, K_HYBX_COUNT
 };
 
 static const CbAmd64Kernel kernels[] = {
@@ -82,10 +93,16 @@ static const CbAmd64Kernel kernels[] = {
     /* Not a kernel of its own: picks one per search from the node budget and
      * the CPU (see pick_auto). */
     [K_AUTO] = {"auto", NULL, 64, -1, 0, "best measured kernel for the node budget and CPU"},
+    /* Benchmark only: n8x and hybx with counters at the bulk-accounting sites. */
+    [K_N8X_COUNT] = {"n8x-count", cb_amd64_k_n8x_count, 8, K_HYBX_COUNT, CB_ISA_BMI2,
+                     "benchmark only: n8x with search-accounting counters"},
+    [K_HYBX_COUNT] = {"hybx-count", cb_amd64_k_hybx_count, 64, -1, CB_ISA_BMI2,
+                      "benchmark only: hybx with search-accounting counters"},
 };
 #define N_KERNELS ((int)(sizeof kernels / sizeof kernels[0]))
 
 static int selected;
+static unsigned isa_allowed = ~0u;
 
 static unsigned cpu_isa(void) {
     static int known;
@@ -98,8 +115,19 @@ static unsigned cpu_isa(void) {
             isa |= CB_ISA_AVX512;
         known = 1;
     }
-    return isa;
+    return isa & isa_allowed;
 }
+
+unsigned cb_amd64_isa(void) { return cpu_isa(); }
+
+void cb_amd64_isa_limit(unsigned allowed) {
+    isa_allowed = allowed;
+    if (!cb_amd64_kernel_available(selected)) selected = K_ASM;
+}
+
+const CbAsmCounters *cb_amd64_counters(void) { return &counters; }
+
+void cb_amd64_counters_reset(void) { memset(&counters, 0, sizeof counters); }
 
 int cb_amd64_kernel_count(void) { return N_KERNELS; }
 
@@ -138,10 +166,14 @@ static int pick_auto(int max_nodes) {
     return max_nodes >= 4 && max_nodes <= 8 ? K_N8S : K_HYB;
 }
 
-CbAmd64KernelFn cb_amd64_kernel_resolve(int max_nodes) {
+int cb_amd64_kernel_used(int max_nodes) {
     int i = selected == K_AUTO ? pick_auto(max_nodes) : selected;
     while (max_nodes > kernels[i].max_nodes) i = kernels[i].fallback;
-    return kernels[i].fn;
+    return i;
+}
+
+CbAmd64KernelFn cb_amd64_kernel_resolve(int max_nodes) {
+    return kernels[cb_amd64_kernel_used(max_nodes)].fn;
 }
 
 static void guards_init(void) {
@@ -189,6 +221,7 @@ RevSolveResult rev_level_solve_amd64_cap(const char *tgt, size_t tgt_len, int ma
     state.target_len = tgt_len;
     state.step_limit = (opt && opt->max_steps) ? opt->max_steps : UINT64_MAX;
     state.max_stack = (uint32_t)stack_frames;
+    state.scratch[1] = (uint64_t)(uintptr_t)&counters;
 
     int r = cb_amd64_kernel_resolve(max_nodes)(&state, max_nodes);
 
@@ -228,6 +261,7 @@ int cb_amd64_kernel_only(const char *tgt, size_t tgt_len, int max_nodes, uint64_
     state.target_len = tgt_len;
     state.step_limit = max_steps ? max_steps : UINT64_MAX;
     state.max_stack = REV_LEVEL_MAX_STACK;
+    state.scratch[1] = (uint64_t)(uintptr_t)&counters;
     int r = cb_amd64_kernel_resolve(max_nodes)(&state, max_nodes);
     if (steps) *steps = state.steps;
     return r;

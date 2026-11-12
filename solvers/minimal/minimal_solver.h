@@ -47,6 +47,20 @@ RevMinimalStatus rev_minimal_solve(const char *target, size_t target_len, int ma
                                    const RevLevelOptions *opt, RevGraph *result,
                                    RevMinimalInfo *info);
 
+/*
+ * Same, with the LevelSolver implementation supplied by the caller.  `level`
+ * must honor the contract of rev_level_solve_ex.  rev_minimal_solve uses the
+ * C baseline, rev_level_solve_ex itself.
+ */
+typedef RevSolveResult (*RevLevelSolveFn)(const char *target, size_t target_len, int max_nodes,
+                                          const RevLevelOptions *opt, RevGraph *result,
+                                          RevLevelStats *stats);
+
+RevMinimalStatus rev_minimal_solve_with(RevLevelSolveFn level, const char *target,
+                                        size_t target_len, int max_nodes,
+                                        const RevLevelOptions *opt, RevGraph *result,
+                                        RevMinimalInfo *info);
+
 #ifdef __cplusplus
 }
 #endif

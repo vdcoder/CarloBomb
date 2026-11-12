@@ -7,6 +7,10 @@
  *   carlobomb run    --graph FILE --bits L
  *   carlobomb bench  --target S [--max-nodes N] [--reps R]
  *
+ * solve, level and bench accept --engine c (default) or, in builds for Linux
+ * x86-64, --engine amd64-NAME for an assembly kernel.  amd64-asm is the
+ * reference assembly kernel; `carlobomb engines` lists the others.
+ *
  * Exit status: 0 success, 1 no solution / verification failed,
  *              2 usage or invalid input, 3 resource limit (result unknown).
  */
@@ -17,11 +21,15 @@
 #include <string.h>
 
 #include "minimal_solver.h"
+#ifdef CARLOBOMB_HAVE_AMD64_ASM
+#include "asm_solver.h"
+#endif
 
 enum { EXIT_OK = 0, EXIT_NO = 1, EXIT_USAGE = 2, EXIT_LIMIT = 3 };
 
 typedef struct {
-    const char *target, *graph, *out;
+    const char *target, *graph, *out, *engine_name;
+    RevLevelSolveFn engine;
     long nodes, max_nodes, bits, reps;
     unsigned long long max_steps;
 } Args;
@@ -39,8 +47,17 @@ static int usage(void) {
             "      print the first L output bits of the REV in FILE\n"
             "  carlobomb bench  --target S [--max-nodes N] [--reps R]\n"
             "      time the minimal solve of S\n"
-            "S is a string of 0 and 1.  --max-steps limits search effort per budget.\n",
-            REV_LEVEL_MAX_NODES);
+            "  carlobomb engines\n"
+            "      list the search engines in this build\n"
+            "S is a string of 0 and 1.  --max-steps limits search effort per budget.\n"
+            "solve, level and bench take --engine c (default)%s.\n",
+            REV_LEVEL_MAX_NODES,
+#ifdef CARLOBOMB_HAVE_AMD64_ASM
+            " or amd64-NAME (experimental; `carlobomb engines` lists them)"
+#else
+            "; the amd64 engines are not part of this build"
+#endif
+    );
     return EXIT_USAGE;
 }
 
@@ -56,6 +73,8 @@ static int parse_args(int argc, char **argv, Args *a) {
     memset(a, 0, sizeof *a);
     a->nodes = a->bits = -1;
     a->reps = 0;
+    a->engine = rev_level_solve_ex;
+    a->engine_name = "c";
     for (int i = 2; i < argc; i += 2) {
         const char *k = argv[i], *v = i + 1 < argc ? argv[i + 1] : NULL;
         long n;
@@ -63,6 +82,26 @@ static int parse_args(int argc, char **argv, Args *a) {
         if (!strcmp(k, "--target")) a->target = v;
         else if (!strcmp(k, "--graph")) a->graph = v;
         else if (!strcmp(k, "--out")) a->out = v;
+        else if (!strcmp(k, "--engine")) {
+            if (!strcmp(v, "c")) { a->engine = rev_level_solve_ex; a->engine_name = "c"; }
+#ifdef CARLOBOMB_HAVE_AMD64_ASM
+            else if (!strncmp(v, "amd64-", 6) && cb_amd64_kernel_find(v + 6) >= 0) {
+                if (cb_amd64_kernel_select(cb_amd64_kernel_find(v + 6)) != 0) {
+                    fprintf(stderr, "engine %s needs an instruction set this CPU lacks\n", v);
+                    return 0;
+                }
+                a->engine = rev_level_solve_amd64_ex;
+                a->engine_name = v;
+            }
+#else
+            else if (!strncmp(v, "amd64-", 6)) {
+                fprintf(stderr, "engine %s is not available in this build "
+                                "(Linux x86-64 only)\n", v);
+                return 0;
+            }
+#endif
+            else { fprintf(stderr, "unknown engine %s\n", v); return 0; }
+        }
         else if (!parse_long(v, &n) || n < 0) { fprintf(stderr, "bad value for %s: %s\n", k, v); return 0; }
         else if (!strcmp(k, "--nodes")) a->nodes = n;
         else if (!strcmp(k, "--max-nodes")) a->max_nodes = n;
@@ -128,10 +167,11 @@ static int cmd_solve(const Args *a) {
     }
     int cap = a->max_nodes ? (int)a->max_nodes : REV_LEVEL_MAX_NODES;
     RevMinimalStatus s =
-        rev_minimal_solve(a->target, strlen(a->target), cap, &opt, &g, &info);
+        rev_minimal_solve_with(a->engine, a->target, strlen(a->target), cap, &opt, &g, &info);
     switch (s) {
     case REV_MIN_MINIMAL:
         printf("REV solution (minimum: budgets 1..%d proven to have none)\n", info.node_count - 1);
+        printf("Engine: %s\n", a->engine_name);
         printf("Search steps: %llu\n", (unsigned long long)info.steps);
         return report_solution(&g, a->target, a->out);
     case REV_MIN_BUDGET_EXHAUSTED:
@@ -159,11 +199,11 @@ static int cmd_level(const Args *a) {
         fprintf(stderr, "--nodes is required and must be 1..%d\n", REV_LEVEL_MAX_NODES);
         return EXIT_USAGE;
     }
-    RevSolveResult r =
-        rev_level_solve_ex(a->target, strlen(a->target), (int)a->nodes, &opt, &g, &st);
+    RevSolveResult r = a->engine(a->target, strlen(a->target), (int)a->nodes, &opt, &g, &st);
     switch (r) {
     case REV_SOLVE_SOLVED:
         printf("REV solution (node budget %ld; not necessarily minimum)\n", a->nodes);
+        printf("Engine: %s\n", a->engine_name);
         printf("Search steps: %llu\n", (unsigned long long)st.steps);
         return report_solution(&g, a->target, a->out);
     case REV_SOLVE_PROVEN_UNSAT:
@@ -228,21 +268,23 @@ static int cmd_bench(const Args *a) {
         reps = 1;
         for (;;) {
             double t0 = cb_now();
-            for (long i = 0; i < reps; i++) rev_minimal_solve(a->target, len, cap, NULL, &g, &info);
+            for (long i = 0; i < reps; i++)
+                rev_minimal_solve_with(a->engine, a->target, len, cap, NULL, &g, &info);
             if (cb_now() - t0 >= 0.05 || reps >= (1L << 28)) break;
             reps *= 2;
         }
     }
     for (int k = 0; k < SAMPLES; k++) {
         double t0 = cb_now();
-        for (long i = 0; i < reps; i++) rev_minimal_solve(a->target, len, cap, NULL, &g, &info);
+        for (long i = 0; i < reps; i++)
+            rev_minimal_solve_with(a->engine, a->target, len, cap, NULL, &g, &info);
         s[k] = (cb_now() - t0) / (double)reps;
     }
     qsort(s, SAMPLES, sizeof s[0], cmp_double);
-    RevMinimalStatus st = rev_minimal_solve(a->target, len, cap, NULL, &g, &info);
+    RevMinimalStatus st = rev_minimal_solve_with(a->engine, a->target, len, cap, NULL, &g, &info);
 
     printf("Target: %s (length %zu)\n", a->target, len);
-    printf("Solver: minimal (C LevelSolver, budgets 1..%d)\n", cap);
+    printf("Solver: minimal (LevelSolver engine %s, budgets 1..%d)\n", a->engine_name, cap);
     printf("Status: %s\n", rev_minimal_status_str(st));
     if (st == REV_MIN_MINIMAL) printf("Nodes: %d\n", info.node_count);
     printf("Search steps: %llu\n", (unsigned long long)info.steps);
@@ -252,9 +294,22 @@ static int cmd_bench(const Args *a) {
     return st == REV_MIN_MINIMAL ? EXIT_OK : st == REV_MIN_UNKNOWN ? EXIT_LIMIT : EXIT_NO;
 }
 
+static int cmd_engines(void) {
+    printf("c                portable C LevelSolver (default)\n");
+#ifdef CARLOBOMB_HAVE_AMD64_ASM
+    for (int k = 0; k < cb_amd64_kernel_count(); k++) {
+        const CbAmd64Kernel *info = cb_amd64_kernel_info(k);
+        printf("amd64-%-10s %s%s\n", info->name, info->what,
+               cb_amd64_kernel_available(k) ? "" : "  [not available on this CPU]");
+    }
+#endif
+    return EXIT_OK;
+}
+
 int main(int argc, char **argv) {
     Args a;
     if (argc < 2) return usage();
+    if (!strcmp(argv[1], "engines")) return cmd_engines();
     if (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")) {
         usage();
         return EXIT_OK;

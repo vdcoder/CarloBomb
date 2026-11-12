@@ -20,6 +20,18 @@
 #include "minimal_solver.h"
 #include "test_util.h"
 
+/* The same oracle checks either engine; the build selects one. */
+#ifdef CARLOBOMB_ORACLE_AMD64
+#include "asm_solver.h"
+#define ENGINE_NAME "test_oracle_amd64"
+#define LEVEL_SOLVE rev_level_solve_amd64
+#define LEVEL_SOLVE_EX rev_level_solve_amd64_ex
+#else
+#define ENGINE_NAME "test_oracle"
+#define LEVEL_SOLVE rev_level_solve
+#define LEVEL_SOLVE_EX rev_level_solve_ex
+#endif
+
 #define MAX_LEN 10
 #define ORACLE_MAX_N 5
 
@@ -63,31 +75,8 @@ static void to_string(unsigned v, int len, char *out) {
     out[len] = '\0';
 }
 
-int main(int argc, char **argv) {
-    int max_n = argc > 1 ? atoi(argv[1]) : 4;
-    if (max_n < 1 || max_n > ORACLE_MAX_N) {
-        fprintf(stderr, "max_nodes must be 1..%d\n", ORACLE_MAX_N);
-        return 2;
-    }
-
-    for (int n = 1; n <= max_n; n++) {
-        unsigned long long count = enumerate(n);
-        unsigned long long expect = 1ull << n;
-        for (int i = 0; i < 2 * n; i++) expect *= (unsigned long long)n;
-        CHECK(count == expect);
-        printf("N=%d: %llu graphs enumerated\n", n, count);
-    }
-
-    /* Sanity of the oracle itself. */
-    for (int len = 1; len <= MAX_LEN; len++) {
-        int ones = 0;
-        for (unsigned v = 0; v < (1u << len); v++) ones += reach[1][len][v];
-        CHECK(ones == 2); /* one node emits only 00..0 or 11..1 */
-        for (int n = 2; n <= max_n; n++)
-            for (unsigned v = 0; v < (1u << len); v++)
-                if (reach[n - 1][len][v]) CHECK(reach[n][len][v]);
-    }
-
+/* The engine under test must agree with the oracle's tables. */
+static void check_engine(int max_n) {
     /* LevelSolver: SOLVED exactly on the oracle's set. */
     char t[MAX_LEN + 1];
     for (int n = 1; n <= max_n; n++) {
@@ -96,7 +85,7 @@ int main(int argc, char **argv) {
             for (unsigned v = 0; v < (1u << len); v++) {
                 RevGraph g;
                 to_string(v, len, t);
-                RevSolveResult r = rev_level_solve(t, (size_t)len, n, &g);
+                RevSolveResult r = LEVEL_SOLVE(t, (size_t)len, n, &g);
                 CHECK_MSG(r == REV_SOLVE_SOLVED || r == REV_SOLVE_PROVEN_UNSAT, "%s N=%d: %s", t, n,
                           rev_solve_result_str(r));
                 if (r == REV_SOLVE_SOLVED) t_check_witness(&g, t, (size_t)len, n);
@@ -123,7 +112,8 @@ int main(int argc, char **argv) {
             for (int n = 1; n <= max_n && !oracle_min; n++)
                 if (reach[n][len][v]) oracle_min = n;
             to_string(v, len, t);
-            RevMinimalStatus s = rev_minimal_solve(t, (size_t)len, max_n, NULL, &g, &info);
+            RevMinimalStatus s =
+                rev_minimal_solve_with(LEVEL_SOLVE_EX, t, (size_t)len, max_n, NULL, &g, &info);
             if (oracle_min) {
                 CHECK_MSG(s == REV_MIN_MINIMAL && info.node_count == oracle_min,
                           "minimal: %s oracle=%d solver=%s/%d", t, oracle_min,
@@ -135,6 +125,42 @@ int main(int argc, char **argv) {
             }
         }
     }
+}
 
-    return t_report("test_oracle");
+int main(int argc, char **argv) {
+    int max_n = argc > 1 ? atoi(argv[1]) : 4;
+    if (max_n < 1 || max_n > ORACLE_MAX_N) {
+        fprintf(stderr, "max_nodes must be 1..%d\n", ORACLE_MAX_N);
+        return 2;
+    }
+
+    for (int n = 1; n <= max_n; n++) {
+        unsigned long long count = enumerate(n);
+        unsigned long long expect = 1ull << n;
+        for (int i = 0; i < 2 * n; i++) expect *= (unsigned long long)n;
+        CHECK(count == expect);
+        printf("N=%d: %llu graphs enumerated\n", n, count);
+    }
+
+    /* Sanity of the oracle itself. */
+    for (int len = 1; len <= MAX_LEN; len++) {
+        int ones = 0;
+        for (unsigned v = 0; v < (1u << len); v++) ones += reach[1][len][v];
+        CHECK(ones == 2); /* one node emits only 00..0 or 11..1 */
+        for (int n = 2; n <= max_n; n++)
+            for (unsigned v = 0; v < (1u << len); v++)
+                if (reach[n - 1][len][v]) CHECK(reach[n][len][v]);
+    }
+
+#ifdef CARLOBOMB_ORACLE_AMD64
+    for (int k = 0; k < cb_amd64_kernel_count(); k++) {
+        if (cb_amd64_kernel_select(k) != 0) continue;
+        printf("kernel %s\n", cb_amd64_kernel_info(k)->name);
+        check_engine(max_n);
+    }
+    cb_amd64_kernel_select(0);
+#else
+    check_engine(max_n);
+#endif
+    return t_report(ENGINE_NAME);
 }

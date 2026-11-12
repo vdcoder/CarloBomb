@@ -77,6 +77,13 @@ if(UNIX)
   target_compile_definitions(carlobomb_fixed_run_build INTERFACE CARLOBOMB_HAVE_BOMB_BUILD=1)
 endif()
 
+# Bomb-backed FixedSolver: minimum-node REVs for strings of up to 16 bits by
+# lookup in a FixedRunBomb.  It links the format code and the REV core and
+# nothing else: no search solver is part of it.
+add_library(carlobomb_fixed_bomb STATIC solvers/fixed/bomb/fixed_bomb_solver.c)
+target_include_directories(carlobomb_fixed_bomb PUBLIC solvers/fixed/bomb)
+target_link_libraries(carlobomb_fixed_bomb PUBLIC carlobomb_fixed_run)
+
 # AMD64 assembly challenger: Linux/ELF x86-64 with the System V ABI only.
 # Everywhere else it is not built and the portable C solver is all there is.
 option(CARLOBOMB_AMD64_ASM "Build the experimental AMD64 assembly LevelSolver" ON)
@@ -122,12 +129,20 @@ if(NOT MSVC)
                          -Wno-sign-conversion -Wno-unused-value)
 endif()
 
-add_executable(carlobomb tools/carlobomb.c tools/fixed_run_cli.c)
+add_executable(carlobomb tools/carlobomb.c tools/fixed_run_cli.c tools/fixed_bomb_cli.c)
 target_include_directories(carlobomb PRIVATE benchmarks)
-target_link_libraries(carlobomb PRIVATE carlobomb_minimal carlobomb_fixed_run)
+target_link_libraries(carlobomb PRIVATE carlobomb_minimal carlobomb_fixed_run carlobomb_fixed_bomb)
 if(CARLOBOMB_HAVE_BOMB_BUILD)
   target_link_libraries(carlobomb PRIVATE carlobomb_fixed_run_build)
 endif()
+
+# Lookup solver alone: its link line is the proof that it runs no search.
+add_executable(fixed_bomb_lookup benchmarks/fixed_bomb_lookup.c)
+target_link_libraries(fixed_bomb_lookup PRIVATE carlobomb_fixed_bomb)
+
+# What the Bomb knows about targets longer than it covers, against the search.
+add_executable(fixed_bomb_longer benchmarks/fixed_bomb_longer.c)
+target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_fixed_bomb carlobomb_minimal m)
 
 add_executable(baseline benchmarks/baseline.c)
 target_include_directories(baseline PRIVATE tests)
@@ -196,6 +211,29 @@ add_test(NAME test_fixed_run
   COMMAND test_fixed_run ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_test_work)
 set_tests_properties(test_fixed_run PROPERTIES TIMEOUT 600)
 
+# Bomb-backed FixedSolver: every string of 1 to 16 bits against a direct scan
+# of the table and against the MinimalSolver.  The comparison with the search
+# is exhaustive; without the assembly engine and under sanitizers that would
+# take many minutes, and is then limited to strings of up to 12 bits.
+add_executable(test_fixed_bomb_solver solvers/fixed/bomb/tests/test_fixed_bomb_solver.c)
+target_include_directories(test_fixed_bomb_solver PRIVATE tests)
+target_link_libraries(test_fixed_bomb_solver PRIVATE carlobomb_fixed_bomb carlobomb_minimal)
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  target_link_libraries(test_fixed_bomb_solver PRIVATE carlobomb_fixed_run_build)
+endif()
+if(CARLOBOMB_HAVE_AMD64_ASM)
+  target_link_libraries(test_fixed_bomb_solver PRIVATE carlobomb_level_amd64)
+  target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_level_amd64)
+endif()
+set(CARLOBOMB_FIXED_CROSS_BITS 16)
+if(CARLOBOMB_SANITIZE AND NOT CARLOBOMB_HAVE_AMD64_ASM)
+  set(CARLOBOMB_FIXED_CROSS_BITS 12)
+endif()
+add_test(NAME test_fixed_bomb_solver
+  COMMAND test_fixed_bomb_solver ${CMAKE_CURRENT_BINARY_DIR}/fixed_bomb_test_work
+          --cross-bits ${CARLOBOMB_FIXED_CROSS_BITS})
+set_tests_properties(test_fixed_bomb_solver PROPERTIES TIMEOUT 900)
+
 if(CARLOBOMB_HAVE_BOMB_BUILD)
   # The bomb commands end to end.  bomb_16 builds the whole 16-bit table with
   # enumeration up to 4 nodes; bomb_16full builds it with the default
@@ -212,6 +250,15 @@ if(CARLOBOMB_HAVE_BOMB_BUILD)
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/bomb_smoke.cmake)
     set_tests_properties(bomb_${mode} PROPERTIES TIMEOUT 900)
   endforeach()
+endif()
+
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  # `carlobomb fixed` end to end, on a 16-bit Bomb built for the occasion.
+  add_test(NAME fixed_smoke
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DLOOKUP=$<TARGET_FILE:fixed_bomb_lookup>
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixed_smoke.cmake)
+  set_tests_properties(fixed_smoke PROPERTIES TIMEOUT 900)
 endif()
 
 add_test(NAME legacy_original_runs COMMAND legacy_original)

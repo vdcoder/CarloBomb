@@ -226,6 +226,13 @@ Work directories are not for version control: `bomb-work/` holds 8 MB for
 the default 16-bit build. The table file is reproducible from the source in
 seconds, bit for bit.
 
+## Using a table
+
+`carlobomb bomb lookup` reads one entry: the REV for one string of exactly L
+bits. The Bomb-backed FixedSolver (`solvers/fixed/bomb/`, `carlobomb fixed`)
+answers every string of 1 to L bits from the same table, through an index of
+prefixes built when the table is opened.
+
 ## Limits
 
 - L is at most 16, the capacity of the entry format and of a directly

@@ -3,12 +3,13 @@
 The table of minimum-node REVs for all 65,536 binary strings of 16 bits,
 built with `carlobomb bomb` (`bombs/fixed-run/README.md`).
 
-Everything here was measured in the development container: Intel Xeon
-(family 6, model 173) at 2.3 GHz, 4 virtual CPUs, Linux x86-64, GCC 13.3,
-Release build. It is a shared cloud machine, and wall-clock times varied by
-some tenths of a second between runs. The construction is small enough that
-it was run in full here, several times and several ways; the project owner's
-run on other hardware should reproduce the table bit for bit (section 7).
+Unless stated otherwise, everything here was measured in the development
+container: Intel Xeon (family 6, model 173) at 2.3 GHz, 4 virtual CPUs,
+Linux x86-64, GCC 13.3, Release build. It is a shared cloud machine, and
+wall-clock times varied by some tenths of a second between runs. The
+construction is small enough that it was run in full here, several times and
+several ways. The project owner then ran it on other hardware with another
+compiler and obtained the same table, bit for bit (section 7).
 
 ## 1. Result
 
@@ -260,6 +261,44 @@ and statuses are the same in all of them.
 The table is not committed to the repository: it is 1.2 MB of binary that
 the source reproduces in seconds, and the checksums above identify it.
 
+### Reproduced on a second machine
+
+The project owner ran the commands above, with the default settings, on
+other hardware: GCC 15.2.0, a processor with BMI2 and without AVX-512 (as
+`carlobomb engines` reports it; the model was not recorded), 6 worker
+processes.
+
+| | Development container | Owner's machine |
+|---|---:|---:|
+| Compiler | GCC 13.3 | GCC 15.2.0 |
+| Worker processes | 4 | 6 |
+| `ctest` | 14 of 14 | 14 of 14 |
+| `bomb build`, wall-clock | 4.6 s | 3.4 s |
+| Five-node enumeration, processor time | 14.3 s | 15.0 s |
+| Five-node enumeration, wall-clock | 4.1 s | 2.9 s |
+| Search, solver time | 1.13 s | 1.33 s |
+| Recomputation of all minima, one process | 4.5 s | 4.0 s |
+| SHA-256 of `fixed-run-16.frb` | `0394d4d3…6a14` | `0394d4d3…6a14` |
+
+Everything that does not depend on the machine came out identical: the
+histogram of section 1, the 156,777,237 graphs enumerated, the 25,676
+searches and their 1,117,938,995 logical steps, the per-pair step statistics
+down to the most expensive pair, the 128,409 journal records, the 4.86·10^9
+steps of the recomputation, and the table file byte for byte.
+
+Two things the second run shows about workers. The five-node round took
+2.9 s where an even split of its 15.0 s over six workers would take 2.5 s:
+the 25 parts are dealt to the workers in turn, so one worker runs five parts
+of 0.6 s each while the others run four, and the round lasts as long as that
+one. Here that is half a second; a long enumeration would want a number of
+workers that divides the parts evenly, or a finer division, which was not
+built. And on that machine a process searched at 8.4·10^8 logical steps per
+second during the build, with six running at once, and at 1.22·10^9 in the
+one-process recomputation. The two are different workloads (the
+recomputation also covers node budgets 1 to 5), so this is not a measurement
+of what running six at once costs there; in the container the corresponding
+figures were 9.9·10^8 and 1.08·10^9. It was not looked into further.
+
 ## 8. Two points where the plan and the measurements differ
 
 The milestone plan was written before these numbers existed, and two of its
@@ -287,7 +326,10 @@ shift again.
 
 - Lengths above 16 bits need another table format (more than 16 nodes may
   be needed, and a table indexed by the string grows as 2^L).
-- Timings are from one shared virtual machine.
+- Timings are from one shared virtual machine, plus one run of the default
+  construction on a second machine (section 7).
 - The hardware-counter and second-processor measurements requested after
   Milestone 1 are still open (`benchmarks/measure_machine.sh`); nothing in
-  this milestone depended on them.
+  this milestone depended on them. The whole test suite, the assembly
+  equivalence tests included, passed on the second machine; the
+  characterization of the kernels there has not been run.

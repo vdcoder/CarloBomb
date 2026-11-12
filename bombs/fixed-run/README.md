@@ -91,6 +91,7 @@ build/carlobomb bomb status --work-dir bomb-work
 | `bomb verify --file FILE` | Checks structure, checksums and header, runs every stored graph, checks complement symmetry |
 | `bomb verify ... --work-dir DIR` | Also checks every certified minimum against the journal |
 | `bomb verify ... --recertify` | Also recomputes every minimum from node budget 1 with the MinimalSolver (`--engine`, `--sample K`, `--max-steps K`) |
+| `bomb verify ... --hardest` | Recomputes exactly the strings certified at the largest minimum: the ones the table's headline number rests on (`--engine`, `--sample K` for the first K) |
 | `bomb verify ... --against SHORTER.frb` | Also checks the table against a complete table for fewer bits, and reports the hardest strings |
 | `bomb lookup --file FILE --target S` | Prints the stored REV after validating and running it; `--out GRAPH` writes it in the REV text format |
 | `bomb ladder --dir DIR --to L [--from FILE]` | Builds complete tables for every length up to L, each on the one before; run again to continue |

@@ -151,6 +151,8 @@ if(MODE STREQUAL "small")
   run(0 "  13 +8192 +7 +[0-9a-f]+ +1 " bomb ladder --dir ${W}/lad --status)
   run(0 "Against the complete 10-bit Bomb.*PASS.*against the journal[^\n]*PASS.*8192 certified minima reproduced.*The hardest 13-bit strings.*0000000000001 needs +7: it is among the hardest.*Verification: PASS \\(complete certified table\\)"
       bomb verify --file ${W}/lad/fixed-run-13.frb --work-dir ${W}/lad/work-13 --against ${W}/a.frb --recertify --engine c)
+  run(0 "The 2 strings certified at the largest minimum, 7 nodes, recomputed.*engine c: PASS.*2 targets solved again.*2 certified minima reproduced"
+      bomb verify --file ${W}/lad/fixed-run-13.frb --hardest --engine c)
   run(0 "the first 7 bits alone need|by the 10-bit Bomb|status +MINIMAL" bomb status --work-dir ${W}/lad/work-11 --target 01101001101)
   # One level by hand, on a base Bomb, in the 24-bit format.
   run(0 "FixedRunBomb\\(11\\) on the complete 10-bit Bomb.*COMPLETE"

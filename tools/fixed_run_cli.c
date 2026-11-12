@@ -38,7 +38,7 @@ typedef struct {
     long long sample, limit_jobs, min_free;                   /* -1: not given */
     unsigned long long seed;
     double time_limit, progress; /* < 0: not given */
-    int partial, recertify, quiet, status;
+    int partial, recertify, quiet, status, hardest;
 } BombArgs;
 
 void fixed_run_cli_usage(void) {
@@ -57,8 +57,9 @@ void fixed_run_cli_usage(void) {
             "  carlobomb bomb finalize --work-dir DIR --output FILE [--partial]\n"
             "      write the table; refuses an incomplete one unless --partial\n"
             "  carlobomb bomb verify   --file FILE [--work-dir DIR] [--recertify] [--sample K]\n"
-            "                          [--against SHORTER.frb]\n"
-            "      check a table: structure, every witness, symmetry, evidence, recomputation,\n"
+            "                          [--hardest] [--against SHORTER.frb]\n"
+            "      check a table: structure, every witness, symmetry, evidence, recomputation\n"
+            "      (of all strings, of K random ones, or of those that need the most nodes),\n"
             "      and agreement with a complete Bomb for fewer bits\n"
             "  carlobomb bomb lookup   --file FILE --target S [--out GRAPH]\n"
             "      print the REV stored for S\n"
@@ -112,6 +113,7 @@ static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
         if (!strcmp(k, "--recertify")) { a->recertify = 1; continue; }
         if (!strcmp(k, "--quiet")) { a->quiet = 1; continue; }
         if (!strcmp(k, "--status")) { a->status = 1; continue; }
+        if (!strcmp(k, "--hardest")) { a->hardest = 1; a->recertify = 1; continue; }
         v = i + 1 < argc ? argv[++i] : NULL;
         if (!v) { fprintf(stderr, "missing value for %s\n", k); return 0; }
         if (!strcmp(k, "--work-dir")) a->work_dir = v;
@@ -729,10 +731,18 @@ static int cmd_verify(const BombArgs *a) {
         }
         fflush(stdout);
         t0 = cb_now();
-        e = frb_recertify(&t, solve, limits.max_steps[0], a->sample > 0 ? (uint64_t)a->sample : 0,
-                          a->seed, &r);
-        printf("Minima recomputed from node budget 1, engine %s: %s\n", engine,
-               e == FRB_OK ? "PASS" : "FAIL");
+        if (a->hardest) {
+            e = frb_recertify_hardest(&t, solve, limits.max_steps[0],
+                                      a->sample > 0 ? (uint64_t)a->sample : 0, &r);
+            printf("The %llu strings certified at the largest minimum, %d nodes, recomputed from node\n"
+                   "budget 1, engine %s: %s\n",
+                   (unsigned long long)r.hardest, r.nodes, engine, e == FRB_OK ? "PASS" : "FAIL");
+        } else {
+            e = frb_recertify(&t, solve, limits.max_steps[0], a->sample > 0 ? (uint64_t)a->sample : 0,
+                              a->seed, &r);
+            printf("Minima recomputed from node budget 1, engine %s: %s\n", engine,
+                   e == FRB_OK ? "PASS" : "FAIL");
+        }
         printf("  %llu targets solved again in %.2f s (%.4g steps): %llu certified minima reproduced,\n"
                "  %llu differ, %llu uncertified witnesses are larger than the minimum, %llu undecided\n",
                (unsigned long long)r.checked, cb_now() - t0, (double)r.steps,

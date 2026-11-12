@@ -244,7 +244,12 @@ Checks beyond the file itself, done by `carlobomb bomb verify`:
 - **Recomputation** (`--recertify`): the minimum of every target, or of a
   random sample (`--sample`), is computed again by the MinimalSolver from
   node budget 1, using neither the journal, nor enumeration, nor symmetry,
-  nor any other table, and compared.
+  nor any other table, and compared. `--hardest` recomputes exactly the
+  targets certified at the largest minimum in the table. With every witness
+  of a complete table run (check 8), that settles the table's largest
+  minimum from two sides that owe nothing to the construction: no string
+  needs more, because each has a REV that was just run; and these strings
+  need as much, because a second search says so.
 - **A shorter table** (`--against FILE`): two complete tables for different
   lengths must agree in three ways, each a consequence of what a REV is.
   The minimum of a short string is the smallest minimum among its

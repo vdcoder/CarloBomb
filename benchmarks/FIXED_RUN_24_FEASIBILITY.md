@@ -211,10 +211,22 @@ What else was measured on the way:
   outright, then finished; its file is byte for byte the one an
   uninterrupted run with the C engine and 3 processes produced. So are
   those of levels 17, 18 and 20.
-- **A second method.** The 17-bit table was also built directly (complete
-  enumeration to 5 nodes, then search from 6): the same minimum for every
-  string. The minima of all strings of 1 to 16 bits read out of the 22-bit
-  table are those of the verified 16-bit table.
+- **A second method.** The tables for 17, 20 and 21 bits were also built
+  directly, without any table below them: complete enumeration of the
+  graphs of up to 5 nodes, then search from 6 nodes up (88 s for 20 bits,
+  342 s and 1.0·10^12 steps for 21). The journal of each direct
+  construction certifies, string by string, the minimum the ladder's table
+  holds: all 1,048,576 at 20 bits and all 2,097,152 at 21
+  (`bomb verify --file LADDER.frb --work-dir DIRECT`).
+- **A second engine.** The strings certified at the largest minimum were
+  each solved again from one node up by the C engine, with no table, no
+  enumeration and no symmetry (`bomb verify --hardest --engine c`): 2 of 2
+  at 17 bits, 6 of 6 at 18, 118 of 118 at 19, 3,048 of 3,048 at 20, 2 of 2
+  at 21 and 6 of 6 at 22 came out as certified. So did 2,000 strings of 22
+  bits chosen at random (8.7 ms each).
+- **The shorter tables inside the longer.** The minima of all strings of 1
+  to 16 bits read out of the 22-bit table are those of the verified 16-bit
+  table.
 
 The exact results so far: the largest minimum is 8 nodes for 17 to 20 bits
 and 9 for 21 and 22, which is ⌈2√L⌉ − 1 each time, and `0…01` is among the

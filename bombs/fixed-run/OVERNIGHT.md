@@ -220,9 +220,23 @@ the string. Then it prints the exact distribution, the largest minimum, the
 number of strings that need it, the comparison with ⌈2√L⌉ − 1, and where
 `0…01` stands.
 
-A sample recomputed from nothing, by the other method (every node budget
-from 1 up, no base table, no symmetry) and the other engine. Expect roughly
-30 ms a string at 24 bits, a few minutes for this sample:
+The strings the headline number rests on: those certified at the largest
+minimum, each solved again from one node up by the other engine, with no
+table, no enumeration and no symmetry. At 20 bits these were 3,048 strings
+and 53 seconds; expect a few thousand at 24 bits and a fraction of a second
+each (`--sample K` checks the first K only):
+
+```bash
+build/carlobomb bomb verify --file ~/frb24/fixed-run-24.frb --hardest --engine c
+```
+
+With every REV of the table run by the first command, this settles the
+largest minimum from both sides independently of how the table was built:
+no string needs more, because each has a REV that was run; these strings
+need as much, because a second search says so.
+
+A random sample recomputed the same way. 9 ms a string at 22 bits; expect
+roughly 30 ms at 24, a few minutes for this sample:
 
 ```bash
 build/carlobomb bomb verify --file ~/frb24/fixed-run-24.frb --recertify --sample 5000 --engine c
@@ -260,6 +274,9 @@ and recomputed in full with two engines.
 
 So the chain is: 16 bits verified independently; each level certified by
 its own journal on top of the one before; the top level cross-checked
-against the 16-bit table and by sample against a direct search. A complete
+against the 16-bit table, and against a direct search for a random sample
+and for every string that needs the most nodes. Levels 20 and 21 have also
+been built a second time without the ladder, with the same minimum for
+every string (`benchmarks/FIXED_RUN_24_FEASIBILITY.md`, section 7). A complete
 24-bit table is an exact result for all 16,777,216 strings. Nothing short
 of complete is called that by any command here.

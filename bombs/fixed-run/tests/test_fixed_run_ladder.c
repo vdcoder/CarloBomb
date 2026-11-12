@@ -1016,6 +1016,41 @@ static void test_disk_watch(void) {
     printf("disk: a construction that finds too little free space stops cleanly and continues later\n");
 }
 
+/* The strings that decide a table's largest minimum, solved again. */
+static void test_recertify_hardest(void) {
+    FrbTable t;
+    FrbRecertify r;
+    RevGraph ring;
+    uint32_t want = 0, pick = 0;
+    reference_table(&t, 9, frb_format(2));
+    for (uint32_t i = 0; i < 512; i++) want += ref_min[9][i] == 5;
+    CHECK(want == 94);
+    CHECK(frb_recertify_hardest(&t, rev_level_solve_ex, 0, 0, &r) == FRB_OK);
+    CHECK(r.nodes == 5 && r.hardest == want && r.checked == want && r.agree == want && r.disagree == 0);
+    CHECK(frb_recertify_hardest(&t, rev_level_solve_ex, 0, 10, &r) == FRB_OK);
+    CHECK(r.nodes == 5 && r.hardest == want && r.checked == 10 && r.agree == 10);
+    /* A step limit that decides nothing is not agreement and not a failure. */
+    CHECK(frb_recertify_hardest(&t, rev_level_solve_ex, 5, 0, &r) == FRB_OK);
+    CHECK(r.checked == want && r.undecided == want && r.agree == 0);
+    /* One string certified with too many nodes is then the hardest of all,
+     * alone, and is the one that does not survive. */
+    while (ref_min[9][pick] >= 5) pick++;
+    frb_ring_witness(pick, 9, &ring);
+    CHECK(frb_table_put(&t, pick, FRB_MINIMAL, &ring) == FRB_OK);
+    CHECK(frb_recertify_hardest(&t, rev_level_solve_ex, 0, 0, &r) == FRB_ERR_EVIDENCE);
+    CHECK(r.nodes == 9 && r.hardest == 1 && r.checked == 1 && r.disagree == 1 && r.first_bad == pick);
+    /* Called a witness and no more, it is not among them. */
+    CHECK(frb_table_put(&t, pick, FRB_WITNESS, &ring) == FRB_OK);
+    CHECK(frb_recertify_hardest(&t, rev_level_solve_ex, 0, 0, &r) == FRB_OK);
+    CHECK(r.nodes == 5 && r.hardest == want - (ref_min[9][pick] == 5) && r.agree == r.hardest);
+    frb_table_destroy(&t);
+    CHECK(frb_table_create(&t, 6) == FRB_OK);
+    CHECK(frb_recertify_hardest(&t, rev_level_solve_ex, 0, 0, &r) == FRB_OK);
+    CHECK(r.nodes == 0 && r.hardest == 0 && r.checked == 0);
+    CHECK(frb_recertify_hardest(NULL, rev_level_solve_ex, 0, 0, &r) == FRB_ERR_ARG);
+    frb_table_destroy(&t);
+}
+
 /* config.txt: what a construction without a base writes has not changed. */
 static void test_config_layouts(void) {
     const char *dir = in_base("layout");
@@ -1099,6 +1134,7 @@ int main(int argc, char **argv) {
     check_bomb(base6, 6, 1);
     /* Each of these builds on files the one before left: stop at the first
      * that fails rather than report its consequences. */
+    test_recertify_hardest();
     if (!t_failures) test_config_layouts();
     if (!t_failures) test_ladder_basic();
     if (!t_failures) test_ladder_resume();

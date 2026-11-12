@@ -305,10 +305,22 @@ typedef struct {
     uint64_t undecided;  /* the step limit stopped the recomputation */
     uint64_t steps;
     uint32_t first_bad;  /* index of the first disagreement */
+    uint64_t hardest;    /* frb_recertify_hardest: entries certified at the largest minimum */
+    int nodes;           /* frb_recertify_hardest: that largest minimum */
 } FrbRecertify;
 
 FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
                        uint64_t sample, uint64_t seed, FrbRecertify *out);
+
+/*
+ * The same for exactly the entries that decide the table's headline number:
+ * those certified at the largest minimum in it.  All of them in table order,
+ * or the first `limit` (0 = all).  That no string needs more is shown by the
+ * table's own witnesses, each of which a reader runs; that these strings
+ * need as much is what is recomputed here.
+ */
+FrbError frb_recertify_hardest(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
+                               uint64_t limit, FrbRecertify *out);
 
 /* ---- the ladder ---------------------------------------------------------
  *

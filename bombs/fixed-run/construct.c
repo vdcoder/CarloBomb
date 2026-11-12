@@ -1352,10 +1352,42 @@ FrbError frb_verify_evidence(const FrbTable *table, const FrbState *state, uint3
     return FRB_OK;
 }
 
+/* Solve one entry's target again from node budget 1 and compare. */
+static FrbError recertify_entry(const FrbTable *table, uint32_t i, RevLevelSolveFn solve,
+                                const RevLevelOptions *options, FrbRecertify *out) {
+    char target[FRB_MAX_BITS + 1];
+    RevMinimalInfo info;
+    RevGraph g, mine;
+    FrbStatus st;
+    RevMinimalStatus ms;
+    FrbError e = frb_table_get(table, i, &st, &g);
+    if (e != FRB_OK) {
+        out->first_bad = i;
+        return e;
+    }
+    frb_target_format(i, table->bits, target);
+    ms = rev_minimal_solve_with(solve, target, (size_t)table->bits, table->format->node_capacity,
+                                options, &mine, &info);
+    out->checked++;
+    out->steps += info.steps;
+    if (ms == REV_MIN_UNKNOWN) {
+        out->undecided++;
+    } else if (st == FRB_MINIMAL) {
+        if (ms == REV_MIN_MINIMAL && info.node_count == g.node_count) out->agree++;
+        else if (out->disagree++ == 0) out->first_bad = i;
+    } else if (st == FRB_WITNESS) {
+        if (ms != REV_MIN_MINIMAL || info.node_count > g.node_count) {
+            if (out->disagree++ == 0) out->first_bad = i; /* a witness below the minimum */
+        } else if (info.node_count < g.node_count) {
+            out->tightened++;
+        }
+    }
+    return FRB_OK;
+}
+
 FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
                        uint64_t sample, uint64_t seed, FrbRecertify *out) {
     RevLevelOptions options = {max_steps};
-    char target[FRB_MAX_BITS + 1];
     uint32_t *order;
     uint64_t state = seed, todo;
     if (!table || !table->entries || !solve || !out) return FRB_ERR_ARG;
@@ -1374,36 +1406,37 @@ FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t ma
         }
     }
     for (uint64_t k = 0; k < todo; k++) {
-        uint32_t i = order[k];
-        RevMinimalInfo info;
-        RevGraph g, mine;
-        FrbStatus st;
-        RevMinimalStatus ms;
-        FrbError e = frb_table_get(table, i, &st, &g);
+        FrbError e = recertify_entry(table, order[k], solve, &options, out);
         if (e != FRB_OK) {
             free(order);
-            out->first_bad = i;
             return e;
-        }
-        frb_target_format(i, table->bits, target);
-        ms = rev_minimal_solve_with(solve, target, (size_t)table->bits, table->format->node_capacity,
-                                    &options, &mine, &info);
-        out->checked++;
-        out->steps += info.steps;
-        if (ms == REV_MIN_UNKNOWN) {
-            out->undecided++;
-        } else if (st == FRB_MINIMAL) {
-            if (ms == REV_MIN_MINIMAL && info.node_count == g.node_count) out->agree++;
-            else if (out->disagree++ == 0) out->first_bad = i;
-        } else if (st == FRB_WITNESS) {
-            if (ms != REV_MIN_MINIMAL || info.node_count > g.node_count) {
-                if (out->disagree++ == 0) out->first_bad = i; /* a witness below the minimum */
-            } else if (info.node_count < g.node_count) {
-                out->tightened++;
-            }
         }
     }
     free(order);
+    return out->disagree ? FRB_ERR_EVIDENCE : FRB_OK;
+}
+
+FrbError frb_recertify_hardest(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
+                               uint64_t limit, FrbRecertify *out) {
+    RevLevelOptions options = {max_steps};
+    int graph_bytes, max = 0;
+    if (!table || !table->entries || !table->format || !solve || !out) return FRB_ERR_ARG;
+    memset(out, 0, sizeof *out);
+    graph_bytes = table->format->graph_bytes;
+    for (uint32_t i = 0; i < table->count; i++) {
+        unsigned meta = frb_table_entry(table, i)[graph_bytes];
+        if ((meta >> 5) == (unsigned)FRB_MINIMAL && (int)(meta & 31u) > max) max = (int)(meta & 31u);
+    }
+    out->nodes = max;
+    for (uint32_t i = 0; i < table->count; i++) {
+        unsigned meta = frb_table_entry(table, i)[graph_bytes];
+        FrbError e;
+        if (max == 0 || (meta >> 5) != (unsigned)FRB_MINIMAL || (int)(meta & 31u) != max) continue;
+        out->hardest++;
+        if (limit && out->checked >= limit) continue; /* counted, not recomputed */
+        e = recertify_entry(table, i, solve, &options, out);
+        if (e != FRB_OK) return e;
+    }
     return out->disagree ? FRB_ERR_EVIDENCE : FRB_OK;
 }
 

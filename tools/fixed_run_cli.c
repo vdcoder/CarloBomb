@@ -387,7 +387,7 @@ static int cmd_build(const BombArgs *a) {
     frb_config_default(&cfg, (int)a->bits);
     if (a->format >= 0) { /* a newer format than the length needs, for a test of it */
         const FrbFormat *format = frb_format((int)a->format);
-        if (!format) return usage_error("--format must be 1 or 2");
+        if (!format) return usage_error("--format must be 1, 2 or 3");
         cfg.format = format->version;
         cfg.max_nodes = format->node_capacity;
     }
@@ -557,7 +557,7 @@ static int cmd_ladder(const BombArgs *a) {
     frb_config_default(&settings, 1);
     settings.format = a->format >= 0 ? (int)a->format : 0; /* 0: what each length needs */
     settings.max_nodes = 0;                               /* 0: all an entry can hold */
-    if (a->format >= 0 && !frb_format((int)a->format)) return usage_error("--format must be 1 or 2");
+    if (a->format >= 0 && !frb_format((int)a->format)) return usage_error("--format must be 1, 2 or 3");
     if (a->symmetry) {
         if (!strcmp(a->symmetry, "on")) settings.symmetry = 1;
         else if (!strcmp(a->symmetry, "off")) settings.symmetry = 0;

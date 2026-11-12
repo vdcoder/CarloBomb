@@ -116,6 +116,55 @@ static RevFixedBomb *bomb_of(const FrbTable *t) {
 
 /* ---- part 1: small Bombs ------------------------------------------------- */
 
+/* The same table in each of the three format versions: the same answers. */
+static void test_three_formats(int bits) {
+    char target[64];
+    FrbTable t, wide;
+    RevFixedBomb *b[4] = {NULL, NULL, NULL, NULL};
+    unsigned long long strings = 0, wrong = 0;
+    solver_table(&t, bits);
+    b[1] = bomb_of(&t);
+    for (int version = 2; version <= 3; version++) {
+        CHECK(frb_table_create_as(&wide, bits, frb_format(version)) == FRB_OK);
+        for (uint32_t i = 0; i < t.count; i++) {
+            RevGraph g;
+            FrbStatus st;
+            CHECK(frb_table_get(&t, i, &st, &g) == FRB_OK);
+            CHECK(frb_table_put(&wide, i, st, &g) == FRB_OK);
+        }
+        CHECK(rev_fixed_bomb_from_table(&wide, &b[version], NULL) == FRB_OK && wide.entries == NULL);
+    }
+    if (!b[1] || !b[2] || !b[3]) return;
+    for (int len = 1; len <= bits; len++) {
+        uint32_t h1[FRB_MAX_NODES + 1], h[FRB_MAX_NODES + 1];
+        for (uint32_t v = 0; v < (1u << len); v++) {
+            RevFixedBombInfo i1, i;
+            RevGraph g1, g;
+            frb_target_format(v, len, target);
+            CHECK(rev_fixed_bomb_solve(b[1], target, (size_t)len, 0, &g1, &i1) == REV_FIXED_BOMB_MINIMAL);
+            for (int version = 2; version <= 3; version++) {
+                int ok = rev_fixed_bomb_solve(b[version], target, (size_t)len, 0, &g, &i) == REV_FIXED_BOMB_MINIMAL;
+                ok = ok && i.min_nodes == i1.min_nodes && i.extension == i1.extension && same_graph(&g, &g1);
+                ok = ok && rev_fixed_bomb_min_nodes(b[version], len, v) == i1.min_nodes;
+                ok = ok && rev_fixed_bomb_solve(b[version], target, (size_t)len, i1.min_nodes - 1, &g, &i) ==
+                               (i1.min_nodes > 1 ? REV_FIXED_BOMB_PROVEN_UNSAT : REV_FIXED_BOMB_MINIMAL);
+                wrong += !ok;
+            }
+            strings++;
+        }
+        rev_fixed_bomb_histogram(b[1], len, h1);
+        for (int version = 2; version <= 3; version++) {
+            rev_fixed_bomb_histogram(b[version], len, h);
+            CHECK(memcmp(h, h1, sizeof h) == 0);
+        }
+    }
+    CHECK(wrong == 0);
+    for (int version = 1; version <= 3; version++) rev_fixed_bomb_close(b[version]);
+    frb_table_destroy(&t);
+    printf("three formats: a %d-bit Bomb in versions 1, 2 and 3 gives the same answer for all %llu strings\n",
+           bits, strings);
+}
+
 /* Every string of every length a small Bomb covers, against the MinimalSolver. */
 static void test_small(int bits) {
     char target[64];
@@ -392,9 +441,13 @@ static void test_rejections(void) {
     copy[30] ^= 0x01;
     CHECK(open_image(copy, size, NULL) == FRB_ERR_HEADER);        /* in the header */
     memcpy(copy, image, size);
-    copy[8] = 3;
+    copy[8] = 4;
     fix_crcs(copy, size);
     CHECK(open_image(copy, size, NULL) == FRB_ERR_VERSION);       /* a format this code does not read */
+    memcpy(copy, image, size);
+    copy[8] = 3;
+    fix_crcs(copy, size);
+    CHECK(open_image(copy, size, NULL) == FRB_ERR_HEADER);        /* nor is it version 3 */
     memcpy(copy, image, size);
     copy[8] = 2;
     fix_crcs(copy, size);
@@ -901,6 +954,7 @@ int main(int argc, char **argv) {
     test_small(5);
     test_small(8);
     test_small(10);
+    test_three_formats(9);
     test_rejections();
 
     if (!bomb_file) {

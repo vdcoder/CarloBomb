@@ -325,7 +325,7 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
     }
     if (!frb_format(cfg->format) || version != cfg->format) {
         set_err(err, errlen, "%s: journal format version %d and table format %d; this program reads "
-                             "versions 1 and 2 of both, and they must agree",
+                             "versions 1 to 3 of both, and they must agree",
                 path, version, cfg->format);
         return FRB_ERR_INCOMPATIBLE;
     }
@@ -1385,34 +1385,72 @@ static FrbError recertify_entry(const FrbTable *table, uint32_t i, RevLevelSolve
     return FRB_OK;
 }
 
+/*
+ * The first `todo` places of a Fisher-Yates shuffle of 0 .. count-1, without
+ * the array of count numbers: a place that was never exchanged holds its own
+ * index, and only the others are kept, in a small hash table.  The choice is
+ * the one the shuffle of the whole array makes.
+ */
+typedef struct {
+    uint32_t place, value;
+    uint8_t used;
+} Moved;
+
+static uint32_t moved_get(const Moved *map, size_t mask, uint32_t place) {
+    for (size_t h = ((size_t)place * 2654435761u) & mask;; h = (h + 1) & mask) {
+        if (!map[h].used) return place;
+        if (map[h].place == place) return map[h].value;
+    }
+}
+
+static void moved_put(Moved *map, size_t mask, uint32_t place, uint32_t value) {
+    size_t h = ((size_t)place * 2654435761u) & mask;
+    while (map[h].used && map[h].place != place) h = (h + 1) & mask;
+    map[h].used = 1;
+    map[h].place = place;
+    map[h].value = value;
+}
+
+static uint32_t *choose_sample(uint32_t count, uint32_t todo, uint64_t seed) {
+    uint32_t *chosen = malloc((size_t)todo * sizeof *chosen);
+    size_t cap = 16;
+    Moved *map;
+    while (cap < (size_t)todo * 4) cap *= 2; /* two places change per step: at most half full */
+    map = calloc(cap, sizeof *map);
+    if (!chosen || !map) {
+        free(chosen);
+        free(map);
+        return NULL;
+    }
+    for (uint32_t i = 0; i < todo; i++) {
+        uint32_t j = i + (uint32_t)(prng_next(&seed) % (uint64_t)(count - i));
+        uint32_t at_i = moved_get(map, cap - 1, i), at_j = moved_get(map, cap - 1, j);
+        moved_put(map, cap - 1, i, at_j);
+        moved_put(map, cap - 1, j, at_i);
+        chosen[i] = at_j; /* no later step touches place i */
+    }
+    free(map);
+    return chosen;
+}
+
 FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
                        uint64_t sample, uint64_t seed, FrbRecertify *out) {
     RevLevelOptions options = {max_steps};
-    uint32_t *order;
-    uint64_t state = seed, todo;
+    uint32_t *chosen = NULL;
+    uint64_t todo;
+    FrbError e = FRB_OK;
     if (!table || !table->entries || !solve || !out) return FRB_ERR_ARG;
     memset(out, 0, sizeof *out);
-    order = malloc((size_t)table->count * sizeof *order);
-    if (!order) return FRB_ERR_MEMORY;
-    for (uint32_t i = 0; i < table->count; i++) order[i] = i;
     todo = table->count;
     if (sample && sample < todo) {
         todo = sample;
-        for (uint32_t i = 0; i < todo; i++) {
-            uint32_t j = i + (uint32_t)(prng_next(&state) % (uint64_t)(table->count - i));
-            uint32_t tmp = order[i];
-            order[i] = order[j];
-            order[j] = tmp;
-        }
+        chosen = choose_sample(table->count, (uint32_t)todo, seed);
+        if (!chosen) return FRB_ERR_MEMORY;
     }
-    for (uint64_t k = 0; k < todo; k++) {
-        FrbError e = recertify_entry(table, order[k], solve, &options, out);
-        if (e != FRB_OK) {
-            free(order);
-            return e;
-        }
-    }
-    free(order);
+    for (uint64_t k = 0; k < todo && e == FRB_OK; k++)
+        e = recertify_entry(table, chosen ? chosen[k] : (uint32_t)k, solve, &options, out);
+    free(chosen);
+    if (e != FRB_OK) return e;
     return out->disagree ? FRB_ERR_EVIDENCE : FRB_OK;
 }
 

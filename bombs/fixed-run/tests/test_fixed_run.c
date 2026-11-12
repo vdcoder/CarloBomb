@@ -95,7 +95,8 @@ static void test_targets(void) {
     CHECK(!frb_target_parse("", &bits, &index));
     CHECK(frb_target_parse("01000100011010110", &bits, &index) && bits == 17 && index == 0x88D6u);
     CHECK(frb_target_parse("100000000000000000000001", &bits, &index) && bits == 24 && index == 0x800001u);
-    CHECK(!frb_target_parse("0100010001101011001000100", &bits, &index)); /* 25 bits */
+    CHECK(frb_target_parse("0100010001101011001000100", &bits, &index) && bits == 25);
+    CHECK(!frb_target_parse("01000100011010110010001000100010", &bits, &index)); /* 32 bits */
     CHECK(!frb_target_parse("0102", &bits, &index));
     CHECK(!frb_target_parse(NULL, &bits, &index));
     for (int b = 1; b <= FRB_MAX_BITS; b++) {
@@ -272,20 +273,28 @@ static void test_complement(void) {
 /* The ring emits its target, for every string of every length 1..16: no
  * L-bit string needs more than L nodes, and so none overflows an entry. */
 static void test_ring(void) {
-    unsigned long long checked = 0;
+    enum { ALL_UP_TO = 20 }; /* every string up to here; a sample of the 4 billion beyond */
+    unsigned long long checked = 0, sampled = 0;
     RevGraph g;
     for (int bits = 1; bits <= FRB_MAX_BITS; bits++) {
+        uint32_t top = (uint32_t)1 << (bits - 1);
+        uint32_t count = bits <= ALL_UP_TO ? top * 2u : 200000u;
         int bad = 0;
-        for (uint32_t i = 0; i < (1u << bits); i++) {
+        for (uint32_t k = 0; k < count; k++) {
+            /* Beyond ALL_UP_TO: the two ends of the table, then random strings. */
+            uint32_t i = bits <= ALL_UP_TO ? k : k < 1000 ? k : k < 2000 ? top * 2u - 1u - (k - 1000u)
+                                                                        : rnd(top) * 2u + rnd(2);
             frb_ring_witness(i, bits, &g);
             if (g.node_count != bits || rev_graph_validate(&g) != REV_OK ||
                 frb_graph_output(&g, bits) != i)
                 bad++;
-            checked++;
+            if (bits <= ALL_UP_TO) checked++;
+            else sampled++;
         }
         CHECK_MSG(bad == 0, "ring fails for %d strings of %d bits", bad, bits);
     }
-    printf("ring witness: valid for all %llu strings of 1..16 bits\n", checked);
+    printf("ring witness: valid for all %llu strings of 1..%d bits and %llu sampled ones of %d..%d bits\n",
+           checked, (int)ALL_UP_TO, sampled, ALL_UP_TO + 1, FRB_MAX_BITS);
 }
 
 /* A complete 8-bit table straight from the C MinimalSolver. */
@@ -364,10 +373,12 @@ static void test_table_and_image(void) {
         free(longer);
     }
     CHECK(parse_mutated(image, size, 0, 0x20, 0, NULL) == FRB_ERR_MAGIC);
-    CHECK(parse_mutated(image, size, 8, 0x02, 0, NULL) == FRB_ERR_VERSION);  /* version 3 */
-    CHECK(parse_mutated(image, size, 8, 0x02, 1, NULL) == FRB_ERR_VERSION);
+    CHECK(parse_mutated(image, size, 8, 0x05, 0, NULL) == FRB_ERR_VERSION);  /* version 4 */
+    CHECK(parse_mutated(image, size, 8, 0x05, 1, NULL) == FRB_ERR_VERSION);
     CHECK(parse_mutated(image, size, 8, 0x03, 0, NULL) == FRB_ERR_HEADER);   /* version 2 it is not */
     CHECK(parse_mutated(image, size, 8, 0x03, 1, NULL) == FRB_ERR_HEADER);
+    CHECK(parse_mutated(image, size, 8, 0x02, 0, NULL) == FRB_ERR_HEADER);   /* nor version 3 */
+    CHECK(parse_mutated(image, size, 8, 0x02, 1, NULL) == FRB_ERR_HEADER);
     CHECK(parse_mutated(image, size, 9, 0x01, 1, NULL) == FRB_ERR_VERSION);  /* version 257 */
     CHECK(parse_mutated(image, size, 24, 0x01, 0, NULL) == FRB_ERR_HEADER);  /* header checksum */
     CHECK(parse_mutated(image, size, 62, 0x40, 0, NULL) == FRB_ERR_HEADER);

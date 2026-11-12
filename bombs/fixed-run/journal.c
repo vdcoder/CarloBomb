@@ -22,6 +22,9 @@
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
 #endif
+#if !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64 /* a segment of a long construction passes 2 GB */
+#endif
 
 #include "fixed_run_build.h"
 
@@ -36,7 +39,7 @@
 
 static const uint8_t frj_magic[8] = {'C', 'B', 'F', 'R', 'J', 0x0D, 0x0A, 0x1A};
 
-enum { SEG_HEADER_BYTES = 64, MAX_RECORD_BYTES = 80 };
+enum { SEG_HEADER_BYTES = 64, MAX_RECORD_BYTES = 96 };
 
 /* Segment header field offsets. */
 enum {
@@ -59,7 +62,8 @@ enum {
 
 /* Record field offsets.  The packed graph follows at R_GRAPH; after it come
  * reserved bytes up to the checksum in the last four bytes of the record.
- * Journal version 1 (18-byte graphs): 64 bytes.  Version 2 (33): 80 bytes. */
+ * Journal version 1 (18-byte graphs): 64 bytes.  Version 2 (33): 80 bytes.
+ * Version 3 (43): 96 bytes. */
 enum {
     R_TYPE = 0,
     R_RESULT = 1,
@@ -295,7 +299,7 @@ static FrbError scan_segment(const char *dir, const FrbConfig *cfg, uint32_t num
     char path[4096];
     FrbSegmentInfo seg;
     uint64_t size, valid_end;
-    long end;
+    off_t end;
     FILE *f;
     FrbError e = FRB_OK;
     int header_ok;
@@ -307,7 +311,7 @@ static FrbError scan_segment(const char *dir, const FrbConfig *cfg, uint32_t num
         return FRB_ERR_IO;
     }
     setvbuf(f, NULL, _IOFBF, (size_t)1 << 20);
-    if (fseek(f, 0, SEEK_END) != 0 || (end = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
+    if (fseeko(f, 0, SEEK_END) != 0 || (end = ftello(f)) < 0 || fseeko(f, 0, SEEK_SET) != 0) {
         fclose(f);
         set_err(err, errlen, "cannot read %s", path);
         return FRB_ERR_IO;

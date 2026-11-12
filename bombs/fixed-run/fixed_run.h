@@ -1,8 +1,8 @@
 /*
  * FixedRunBomb: a table that maps every binary string of one fixed length
  * L to a REV that emits it.  Format version 1 holds strings of up to 16 bits
- * and REVs of up to 16 nodes; version 2, strings of up to 24 bits and REVs
- * of up to 24 nodes.
+ * and REVs of up to 16 nodes; version 2, up to 24 bits and 24 nodes; version
+ * 3, up to 31 bits and 31 nodes.
  *
  * FORMAT.md in this directory is the specification of the file.  This header
  * is the C interface to it: packing and unpacking of entries, the table in
@@ -38,25 +38,37 @@ extern "C" {
  * links of 5 bits), 33 bytes, plus the metadata byte: 34 bytes per entry. */
 #define FRB_FORMAT_VERSION_2 2
 
+/* Format version 3: 25 to 31 bits.  The nodes of version 2, 31 of them: 341
+ * bits in 43 bytes, plus the metadata byte: 44 bytes per entry.  Five bits
+ * hold a link to any of 31 nodes and a node count of up to 31, and a table
+ * index of 31 bits and a count of 2^31 entries fit the 32-bit fields of the
+ * header.  A target of 32 bits fits neither and is not in any version. */
+#define FRB_FORMAT_VERSION_3 3
+
 /* The largest of any version: sizes of buffers and of per-node-count arrays. */
-#define FRB_MAX_BITS 24
-#define FRB_MAX_NODES 24
-#define FRB_MAX_GRAPH_BYTES 33
-#define FRB_MAX_ENTRY_BYTES 34
+#define FRB_MAX_BITS 31
+#define FRB_MAX_NODES 31
+#define FRB_MAX_GRAPH_BYTES 43
+#define FRB_MAX_ENTRY_BYTES 44
 #define FRB_HEADER_BYTES 64
 
 typedef struct {
-    int version;       /* 1 or 2 */
-    int max_bits;      /* longest target: 16, 24 */
-    int node_capacity; /* nodes an entry can hold: 16, 24 */
-    int link_bits;     /* bits per link: 4, 5 */
-    int node_bits;     /* 1 + 2 * link_bits: 9, 11 */
-    int graph_bytes;   /* packed graph: 18, 33 */
-    int entry_bytes;   /* packed graph + metadata byte: 19, 34 */
+    int version;       /* 1, 2 or 3 */
+    int max_bits;      /* longest target: 16, 24, 31 */
+    int node_capacity; /* nodes an entry can hold: 16, 24, 31 */
+    int link_bits;     /* bits per link: 4, 5, 5 */
+    int node_bits;     /* 1 + 2 * link_bits: 9, 11, 11 */
+    int graph_bytes;   /* packed graph: 18, 33, 43 */
+    int entry_bytes;   /* packed graph + metadata byte: 19, 34, 44 */
 } FrbFormat;
 
 const FrbFormat *frb_format(int version);       /* NULL for a version this code does not know */
-const FrbFormat *frb_format_for_bits(int bits); /* version 1 up to 16 bits, 2 up to 24; else NULL */
+const FrbFormat *frb_format_for_bits(int bits); /* version 1 up to 16 bits, 2 up to 24, 3 up to 31 */
+
+/* Where things are in a file, as 64-bit numbers: the offset of an entry and
+ * the length of the whole file (0 if the format cannot hold that length). */
+uint64_t frb_entry_offset(const FrbFormat *format, uint32_t index);
+uint64_t frb_file_bytes(const FrbFormat *format, int bits);
 
 #define FRB_FLAG_COMPLETE 1u /* every entry is a certified minimum */
 

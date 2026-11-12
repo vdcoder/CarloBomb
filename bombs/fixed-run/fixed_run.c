@@ -5,6 +5,10 @@
  * file does not depend on the byte order, the alignment or the structure
  * layout of the machine that wrote it.
  */
+#if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64 /* files of more than 2 GB where off_t would otherwise be 32 bits */
+#endif
+
 #include "fixed_run.h"
 
 #include <stdio.h>
@@ -12,8 +16,35 @@
 #include <string.h>
 
 #if !defined(_WIN32)
+#include <sys/types.h>
 #include <unistd.h>
 #endif
+
+/*
+ * A table of 26 bits is longer than 2^31 bytes and one of 27 bits longer
+ * than 2^32: file positions are 64-bit numbers here, whatever `long` is.
+ */
+#if defined(_WIN32)
+static int seek64(FILE *f, uint64_t at) { return _fseeki64(f, (__int64)at, SEEK_SET); }
+static int length64(FILE *f, uint64_t *length) {
+    __int64 end;
+    if (_fseeki64(f, 0, SEEK_END) != 0 || (end = _ftelli64(f)) < 0) return -1;
+    *length = (uint64_t)end;
+    return 0;
+}
+#else
+typedef char frb_off_t_is_64_bits[sizeof(off_t) >= 8 ? 1 : -1];
+static int seek64(FILE *f, uint64_t at) { return fseeko(f, (off_t)at, SEEK_SET); }
+static int length64(FILE *f, uint64_t *length) {
+    off_t end;
+    if (fseeko(f, 0, SEEK_END) != 0 || (end = ftello(f)) < 0) return -1;
+    *length = (uint64_t)end;
+    return 0;
+}
+#endif
+
+/* Bytes read or written at a time: small against memory, large against a system call. */
+enum { IO_CHUNK = 1 << 22 };
 
 static const uint8_t frb_magic[8] = {'C', 'B', 'F', 'R', 'B', 0x0D, 0x0A, 0x1A};
 
@@ -95,18 +126,32 @@ static uint32_t get32(const uint8_t *p) {
 
 /* ---- formats ------------------------------------------------------------ */
 
-static const FrbFormat frb_formats[2] = {
+static const FrbFormat frb_formats[3] = {
     {1, 16, 16, 4, 9, 18, 19},
     {2, 24, 24, 5, 11, 33, 34},
+    {3, 31, 31, 5, 11, 43, 44},
 };
 
 const FrbFormat *frb_format(int version) {
-    return version == 1 ? &frb_formats[0] : version == 2 ? &frb_formats[1] : NULL;
+    return version >= 1 && version <= 3 ? &frb_formats[version - 1] : NULL;
 }
 
 const FrbFormat *frb_format_for_bits(int bits) {
     if (bits < 1 || bits > FRB_MAX_BITS) return NULL;
-    return bits <= frb_formats[0].max_bits ? &frb_formats[0] : &frb_formats[1];
+    for (int v = 0; v < 3; v++)
+        if (bits <= frb_formats[v].max_bits) return &frb_formats[v];
+    return NULL;
+}
+
+/* The arithmetic of the layout, in 64 bits: nothing here can overflow for
+ * any length a format allows (the largest file is 64 + 44 * 2^31 bytes). */
+uint64_t frb_entry_offset(const FrbFormat *format, uint32_t index) {
+    return format ? FRB_HEADER_BYTES + (uint64_t)index * (uint64_t)format->entry_bytes : 0;
+}
+
+uint64_t frb_file_bytes(const FrbFormat *format, int bits) {
+    if (!format || bits < 1 || bits > format->max_bits) return 0;
+    return FRB_HEADER_BYTES + ((uint64_t)format->entry_bytes << bits);
 }
 
 /*
@@ -303,6 +348,8 @@ FrbError frb_table_create_as(FrbTable *t, int bits, const FrbFormat *format) {
     t->entries = NULL;
     t->format = NULL;
     if (!format || bits < 1 || bits > format->max_bits) return FRB_ERR_ARG;
+    /* A table that does not fit the address space is not a table in memory. */
+    if (frb_file_bytes(format, bits) > (uint64_t)SIZE_MAX) return FRB_ERR_MEMORY;
     t->entries = calloc((size_t)1 << bits, (size_t)format->entry_bytes); /* all zero = FRB_EMPTY */
     if (!t->entries) return FRB_ERR_MEMORY;
     t->bits = bits;
@@ -625,7 +672,11 @@ static FrbError write_parts(const char *path, const void *a, size_t na, const vo
         return FRB_ERR_IO;
     }
     ok = na == 0 || fwrite(a, 1, na, f) == na;
-    ok = ok && (nb == 0 || fwrite(b, 1, nb, f) == nb);
+    for (size_t done = 0; ok && done < nb;) { /* a part may be many gigabytes */
+        size_t now = nb - done < (size_t)IO_CHUNK ? nb - done : (size_t)IO_CHUNK;
+        ok = fwrite((const char *)b + done, 1, now, f) == now;
+        done += now;
+    }
     ok = ok && fflush(f) == 0;
 #if !defined(_WIN32)
     ok = ok && fsync(fileno(f)) == 0; /* the data is on disk before the name changes */
@@ -660,8 +711,9 @@ static FrbError load_file(const char *path, FrbTable *t, FrbFileInfo *info, uint
     const FrbFormat *format;
     FrbFileInfo local;
     FrbTable table;
+    uint64_t length;
+    uint32_t crc = 0;
     size_t got, bytes;
-    long end;
     FILE *f;
     FrbError e;
     if (t) {
@@ -680,18 +732,23 @@ static FrbError load_file(const char *path, FrbTable *t, FrbFileInfo *info, uint
         fclose(f);
         return e;
     }
-    bytes = (size_t)info->count * (size_t)format->entry_bytes;
-    if (fseek(f, 0, SEEK_END) != 0 || (end = ftell(f)) < 0) e = FRB_ERR_IO;
-    else if ((size_t)end != FRB_HEADER_BYTES + bytes) e = FRB_ERR_SIZE;
+    if (length64(f, &length) != 0) e = FRB_ERR_IO;
+    else if (length != frb_file_bytes(format, info->bits)) e = FRB_ERR_SIZE;
     if (e == FRB_OK) e = frb_table_create_as(&table, info->bits, format);
     if (e != FRB_OK) {
         fclose(f);
         return e;
     }
-    if (fseek(f, FRB_HEADER_BYTES, SEEK_SET) != 0 || fread(table.entries, 1, bytes, f) != bytes)
-        e = FRB_ERR_IO;
+    bytes = table_bytes(&table);
+    if (seek64(f, FRB_HEADER_BYTES) != 0) e = FRB_ERR_IO;
+    for (size_t done = 0; e == FRB_OK && done < bytes;) { /* in pieces, the checksum with them */
+        size_t now = bytes - done < (size_t)IO_CHUNK ? bytes - done : (size_t)IO_CHUNK;
+        if (fread(table.entries + done, 1, now, f) != now) e = FRB_ERR_IO;
+        else crc = frb_crc32(crc, table.entries + done, now);
+        done += now;
+    }
     fclose(f);
-    if (e == FRB_OK && frb_crc32(0, table.entries, bytes) != info->table_crc) e = FRB_ERR_CHECKSUM;
+    if (e == FRB_OK && crc != info->table_crc) e = FRB_ERR_CHECKSUM;
     if (e == FRB_OK && validate) {
         FrbSummary s;
         e = frb_table_validate(&table, &s, bad_index);
@@ -713,8 +770,8 @@ FrbError frb_file_read_raw(const char *path, FrbTable *t, FrbFileInfo *info) {
 /* Open, read and check the header, check the length.  The caller closes. */
 static FrbError open_checked(const char *path, FrbFileInfo *info, const FrbFormat **format, FILE **out) {
     uint8_t header[FRB_HEADER_BYTES];
+    uint64_t length;
     size_t got;
-    long end;
     FILE *f;
     FrbError e;
     *out = NULL;
@@ -723,9 +780,8 @@ static FrbError open_checked(const char *path, FrbFileInfo *info, const FrbForma
     got = fread(header, 1, sizeof header, f);
     e = ferror(f) ? FRB_ERR_IO : parse_header(header, got, info, format);
     if (e == FRB_OK) {
-        size_t expect = FRB_HEADER_BYTES + (size_t)info->count * (size_t)(*format)->entry_bytes;
-        if (fseek(f, 0, SEEK_END) != 0 || (end = ftell(f)) < 0) e = FRB_ERR_IO;
-        else if ((size_t)end != expect) e = FRB_ERR_SIZE;
+        if (length64(f, &length) != 0) e = FRB_ERR_IO;
+        else if (length != frb_file_bytes(*format, info->bits)) e = FRB_ERR_SIZE;
     }
     if (e != FRB_OK) {
         fclose(f);
@@ -764,8 +820,8 @@ FrbError frb_file_lookup(const char *path, uint32_t index, FrbFileInfo *info, Fr
     if (e != FRB_OK) return e;
     if (index >= info->count) e = FRB_ERR_ARG;
     if (e == FRB_OK) {
-        long at = (long)(FRB_HEADER_BYTES + (size_t)index * (size_t)format->entry_bytes);
-        if (fseek(f, at, SEEK_SET) != 0 || fread(entry, 1, (size_t)format->entry_bytes, f) != (size_t)format->entry_bytes)
+        if (seek64(f, frb_entry_offset(format, index)) != 0 ||
+            fread(entry, 1, (size_t)format->entry_bytes, f) != (size_t)format->entry_bytes)
             e = FRB_ERR_IO;
         else e = check_entry(format, entry, info->bits, index, status, g);
     }

@@ -87,23 +87,81 @@ static void reference_table(FrbTable *t, int bits, const FrbFormat *format) {
 /* ---- format version 2 --------------------------------------------------- */
 
 static void test_formats(void) {
-    const FrbFormat *f1 = frb_format(1), *f2 = frb_format(2);
+    const FrbFormat *f1 = frb_format(1), *f2 = frb_format(2), *f3 = frb_format(3);
     CHECK(f1 && f1->version == 1 && f1->max_bits == 16 && f1->node_capacity == 16 &&
           f1->link_bits == 4 && f1->node_bits == 9 && f1->graph_bytes == 18 && f1->entry_bytes == 19);
     CHECK(f2 && f2->version == 2 && f2->max_bits == 24 && f2->node_capacity == 24 &&
           f2->link_bits == 5 && f2->node_bits == 11 && f2->graph_bytes == 33 && f2->entry_bytes == 34);
-    CHECK(!frb_format(0) && !frb_format(3) && !frb_format(-1) && !frb_format(257));
+    CHECK(f3 && f3->version == 3 && f3->max_bits == 31 && f3->node_capacity == 31 &&
+          f3->link_bits == 5 && f3->node_bits == 11 && f3->graph_bytes == 43 && f3->entry_bytes == 44);
+    CHECK(!frb_format(0) && !frb_format(4) && !frb_format(-1) && !frb_format(257));
     CHECK(frb_format_for_bits(1) == f1 && frb_format_for_bits(16) == f1);
     CHECK(frb_format_for_bits(17) == f2 && frb_format_for_bits(24) == f2);
-    CHECK(!frb_format_for_bits(0) && !frb_format_for_bits(25));
+    CHECK(frb_format_for_bits(25) == f3 && frb_format_for_bits(31) == f3);
+    CHECK(!frb_format_for_bits(0) && !frb_format_for_bits(32) && !frb_format_for_bits(-3));
     /* The constants of version 1 mean what they always meant. */
     CHECK(FRB_FORMAT_VERSION == 1 && FRB_NODE_CAPACITY == 16 && FRB_NODE_BITS == 9 &&
           FRB_GRAPH_BYTES == 18 && FRB_ENTRY_BYTES == 19 && FRB_HEADER_BYTES == 64);
-    CHECK(FRB_MAX_BITS == 24 && FRB_MAX_NODES == 24 && FRB_MAX_GRAPH_BYTES == 33 &&
-          FRB_MAX_ENTRY_BYTES == 34);
-    /* 24 nodes of 11 bits are exactly 33 bytes; the largest table is 544 MiB. */
-    CHECK(24 * 11 == 33 * 8);
-    CHECK((uint64_t)34 << 24 == (uint64_t)544 << 20);
+    CHECK(FRB_MAX_BITS == 31 && FRB_MAX_NODES == 31 && FRB_MAX_GRAPH_BYTES == 43 &&
+          FRB_MAX_ENTRY_BYTES == 44);
+    /* 24 nodes of 11 bits are exactly 33 bytes; 31 of them are 341 bits, 43
+     * bytes with three bits to spare. */
+    CHECK(24 * 11 == 33 * 8 && 31 * 11 == 43 * 8 - 3);
+    /* A node count, and a link to any node, fit five bits in every version. */
+    for (int v = 1; v <= 3; v++) {
+        const FrbFormat *f = frb_format(v);
+        CHECK(f->node_capacity <= 31 && f->node_capacity <= (1 << f->link_bits) && f->node_capacity <= 64);
+        CHECK(f->max_bits <= f->node_capacity); /* the ring of L nodes always fits */
+        CHECK(f->node_bits == 1 + 2 * f->link_bits && f->entry_bytes == f->graph_bytes + 1);
+        CHECK(f->graph_bytes == (f->node_capacity * f->node_bits + 7) / 8);
+    }
+}
+
+/* Sizes, counts and offsets at the limits of every version: 64-bit numbers,
+ * computed here a second way. */
+static void test_limits(void) {
+    static const struct { int version, bits; uint64_t bytes; } known[] = {
+        {1, 16, 1245248ull},        {2, 24, 570425408ull},      {3, 25, 1476395072ull},
+        {3, 26, 2952790080ull},     {3, 27, 5905580096ull},     {3, 31, 94489280576ull},
+    };
+    for (size_t k = 0; k < sizeof known / sizeof known[0]; k++)
+        CHECK(frb_file_bytes(frb_format(known[k].version), known[k].bits) == known[k].bytes);
+    for (int v = 1; v <= 3; v++) {
+        const FrbFormat *f = frb_format(v);
+        for (int bits = 1; bits <= f->max_bits; bits++) {
+            uint64_t count = 1, bytes;
+            for (int i = 0; i < bits; i++) count *= 2;
+            bytes = 64 + count * (uint64_t)f->entry_bytes;
+            CHECK(frb_file_bytes(f, bits) == bytes);
+            CHECK(count <= 0x80000000ull);                          /* fits the 32-bit count field */
+            CHECK(count - 1 <= 0x7FFFFFFFull);                      /* and an index 31 bits */
+            CHECK(frb_entry_offset(f, (uint32_t)(count - 1)) == bytes - (uint64_t)f->entry_bytes);
+            CHECK(frb_entry_offset(f, 0) == 64 && frb_entry_offset(f, 1) == 64u + (unsigned)f->entry_bytes);
+            CHECK(bytes < ((uint64_t)1 << 37));                     /* far inside a signed 64-bit offset */
+        }
+        CHECK(frb_file_bytes(f, f->max_bits + 1) == 0 && frb_file_bytes(f, 0) == 0);
+    }
+    CHECK(frb_file_bytes(NULL, 8) == 0 && frb_entry_offset(NULL, 5) == 0);
+    /* The first table longer than 2^31 bytes, and the first longer than 2^32. */
+    CHECK(frb_file_bytes(frb_format(3), 25) < ((uint64_t)1 << 31));
+    CHECK(frb_file_bytes(frb_format(3), 26) > ((uint64_t)1 << 31));
+    CHECK(frb_file_bytes(frb_format(3), 27) > ((uint64_t)1 << 32));
+    /* Targets: 31 characters are the longest; the index of the last one. */
+    {
+        uint32_t index = 0;
+        int bits = 0;
+        char all_ones[40], back[FRB_MAX_BITS + 1];
+        memset(all_ones, '1', 32);
+        all_ones[31] = '\0';
+        CHECK(frb_target_parse(all_ones, &bits, &index) && bits == 31 && index == 0x7FFFFFFFu);
+        frb_target_format(index, 31, back);
+        CHECK(strcmp(back, all_ones) == 0);
+        all_ones[31] = '1';
+        all_ones[32] = '\0';
+        CHECK(!frb_target_parse(all_ones, &bits, &index)); /* 32 bits: in no version */
+        CHECK(frb_target_parse("1000000000000000000000000000000", &bits, &index) && bits == 31 &&
+              index == 0x40000000u);
+    }
 }
 
 /* Bit `bit` of a packed graph, least significant bit of byte 0 first. */
@@ -111,10 +169,12 @@ static unsigned bit_at(const uint8_t *packed, int bit) {
     return ((unsigned)packed[bit >> 3] >> (bit & 7)) & 1u;
 }
 
-static void test_v2_golden(void) {
-    /* The worked example of FORMAT.md in version 2, byte for byte. */
+/* Versions 2 and 3: the same 11-bit nodes, 24 or 31 of them. */
+static void test_wide_golden(int version) {
+    /* The worked example of FORMAT.md, byte for byte. */
     static const uint8_t expect[4] = {0x45, 0x00, 0x80, 0x20};
-    const FrbFormat *f2 = frb_format(2);
+    const FrbFormat *f = frb_format(version);
+    const int C = f->node_capacity, G = f->graph_bytes;
     uint8_t entry[FRB_MAX_ENTRY_BYTES];
     RevGraph g, back;
     FrbStatus st;
@@ -124,66 +184,71 @@ static void test_v2_golden(void) {
     g.nodes[1].color = REV_WHITE; g.nodes[1].links[0] = 0; g.nodes[1].links[1] = 0;
     g.nodes[2].color = REV_WHITE; g.nodes[2].links[0] = 1; g.nodes[2].links[1] = 2;
     CHECK(frb_graph_output(&g, 9) == 145);
-    CHECK(frb_entry_encode_as(f2, FRB_MINIMAL, &g, entry) == FRB_OK);
+    CHECK(frb_entry_encode_as(f, FRB_MINIMAL, &g, entry) == FRB_OK);
     CHECK(memcmp(entry, expect, sizeof expect) == 0);
-    for (int i = 4; i < 33; i++) CHECK(entry[i] == 0);
-    CHECK(entry[33] == 0x43); /* status 2 in the top three bits, 3 nodes in the low five */
-    CHECK(frb_entry_decode_as(f2, entry, &st, &back) == FRB_OK && st == FRB_MINIMAL && same_graph(&g, &back));
+    for (int i = 4; i < G; i++) CHECK(entry[i] == 0);
+    CHECK(entry[G] == 0x43); /* status 2 in the top three bits, 3 nodes in the low five */
+    CHECK(frb_entry_decode_as(f, entry, &st, &back) == FRB_OK && st == FRB_MINIMAL && same_graph(&g, &back));
 
     /* Node i occupies bits 11i..11i+10: color, then link 0 (5 bits), then
-     * link 1 (5 bits).  One node set in an otherwise all-zero 24-node graph. */
+     * link 1 (5 bits).  One node set in an otherwise all-zero graph of C nodes. */
     for (int rep = 0; rep < 2000; rep++) {
         uint8_t packed[FRB_MAX_GRAPH_BYTES];
-        int i = (int)rnd(24), color = (int)rnd(2), l0 = (int)rnd(24), l1 = (int)rnd(24);
+        int i = (int)rnd((uint32_t)C), color = (int)rnd(2), l0 = (int)rnd((uint32_t)C), l1 = (int)rnd((uint32_t)C);
         unsigned value = (unsigned)color | ((unsigned)l0 << 1) | ((unsigned)l1 << 6);
         int wrong = 0;
         memset(&g, 0, sizeof g);
-        g.node_count = 24;
+        g.node_count = C;
         g.nodes[i].color = color;
         g.nodes[i].links[0] = l0;
         g.nodes[i].links[1] = l1;
-        CHECK(frb_graph_pack_as(f2, &g, packed) == FRB_OK);
-        for (int bit = 0; bit < 264; bit++) {
+        CHECK(frb_graph_pack_as(f, &g, packed) == FRB_OK);
+        for (int bit = 0; bit < 8 * G; bit++) {
             unsigned want = bit >= 11 * i && bit < 11 * i + 11 ? (value >> (bit - 11 * i)) & 1u : 0u;
             wrong += bit_at(packed, bit) != want;
         }
         CHECK(wrong == 0);
     }
-    /* All 264 bits can be in use: 24 black nodes with both links to node 23. */
+    /* Every node slot in use: C black nodes with both links to the last. */
     memset(&g, 0, sizeof g);
-    g.node_count = 24;
-    for (int i = 0; i < 24; i++) {
+    g.node_count = C;
+    for (int i = 0; i < C; i++) {
         g.nodes[i].color = REV_BLACK;
-        g.nodes[i].links[0] = g.nodes[i].links[1] = 23;
+        g.nodes[i].links[0] = g.nodes[i].links[1] = C - 1;
     }
-    CHECK(frb_entry_encode_as(f2, FRB_WITNESS, &g, entry) == FRB_OK);
-    for (int i = 0; i < 24; i++)
-        for (int k = 0; k < 11; k++) /* 1 | 23 << 1 | 23 << 6 = 10111101111 */
-            CHECK(bit_at(entry, 11 * i + k) == ((0x5EFu >> k) & 1u));
-    CHECK(entry[33] == ((1u << 5) | 24u));
-    CHECK(frb_entry_decode_as(f2, entry, &st, &back) == FRB_OK && st == FRB_WITNESS && same_graph(&g, &back));
+    CHECK(frb_entry_encode_as(f, FRB_WITNESS, &g, entry) == FRB_OK);
+    {
+        unsigned value = 1u | ((unsigned)(C - 1) << 1) | ((unsigned)(C - 1) << 6);
+        for (int i = 0; i < C; i++)
+            for (int k = 0; k < 11; k++) CHECK(bit_at(entry, 11 * i + k) == ((value >> k) & 1u));
+        for (int bit = 11 * C; bit < 8 * G; bit++) CHECK(bit_at(entry, bit) == 0); /* 0 or 3 bits to spare */
+    }
+    CHECK(entry[G] == ((1u << 5) | (unsigned)C));
+    CHECK(frb_entry_decode_as(f, entry, &st, &back) == FRB_OK && st == FRB_WITNESS && same_graph(&g, &back));
 }
 
-static void test_v2_roundtrip(void) {
-    const FrbFormat *f1 = frb_format(1), *f2 = frb_format(2);
+static void test_wide_roundtrip(int version) {
+    const FrbFormat *f1 = frb_format(1), *f2 = frb_format(2), *f = frb_format(version);
+    const int C = f->node_capacity, G = f->graph_bytes;
     uint8_t packed[FRB_MAX_GRAPH_BYTES], entry[FRB_MAX_ENTRY_BYTES];
     RevGraph g, back;
     FrbStatus st;
-    for (int n = 1; n <= 24; n++) {
-        int reps = n == 1 || n == 16 || n == 17 || n == 23 || n == 24 ? 2000 : 300;
+    for (int n = 1; n <= C; n++) {
+        int reps = n == 1 || n == 16 || n == 17 || n == 24 || n == 25 || n >= C - 1 ? 2000 : 300;
         for (int r = 0; r < reps; r++) {
             random_graph(&g, n);
-            CHECK(frb_graph_pack_as(f2, &g, packed) == FRB_OK);
-            CHECK(frb_graph_unpack_as(f2, packed, n, &back) == FRB_OK && same_graph(&g, &back));
-            for (int bit = 11 * n; bit < 264; bit++) CHECK(bit_at(packed, bit) == 0);
-            if (n < 24) { /* one node count more is not the same graph */
-                FrbError e = frb_graph_unpack_as(f2, packed, n + 1, &back);
+            CHECK(frb_graph_pack_as(f, &g, packed) == FRB_OK);
+            CHECK(frb_graph_unpack_as(f, packed, n, &back) == FRB_OK && same_graph(&g, &back));
+            for (int bit = 11 * n; bit < 8 * G; bit++) CHECK(bit_at(packed, bit) == 0);
+            if (n < C) { /* one node count more is not the same graph */
+                FrbError e = frb_graph_unpack_as(f, packed, n + 1, &back);
                 CHECK(e == FRB_OK ? !same_graph(&g, &back) : e == FRB_ERR_ENTRY);
             }
-            CHECK(frb_entry_encode_as(f2, r & 1 ? FRB_MINIMAL : FRB_WITNESS, &g, entry) == FRB_OK);
-            CHECK(frb_entry_decode_as(f2, entry, &st, &back) == FRB_OK && same_graph(&g, &back));
+            CHECK(frb_entry_encode_as(f, r & 1 ? FRB_MINIMAL : FRB_WITNESS, &g, entry) == FRB_OK);
+            CHECK(frb_entry_decode_as(f, entry, &st, &back) == FRB_OK && same_graph(&g, &back));
             CHECK(st == (r & 1 ? FRB_MINIMAL : FRB_WITNESS));
-            /* Up to 16 nodes the two versions hold the same graphs. */
+            /* A graph the narrower versions can hold is the same graph there,
+             * and in version 2 the same bytes as far as they go. */
             if (n <= 16) {
                 uint8_t v1[FRB_GRAPH_BYTES];
                 RevGraph from_v1;
@@ -192,47 +257,65 @@ static void test_v2_roundtrip(void) {
             } else {
                 CHECK(frb_graph_pack_as(f1, &g, packed) == FRB_ERR_CAPACITY);
             }
+            if (n <= 24) {
+                uint8_t v2[FRB_MAX_GRAPH_BYTES], mine[FRB_MAX_GRAPH_BYTES];
+                CHECK(frb_graph_pack_as(f2, &g, v2) == FRB_OK && frb_graph_pack_as(f, &g, mine) == FRB_OK);
+                CHECK(memcmp(v2, mine, 33) == 0);
+            } else {
+                CHECK(frb_graph_pack_as(f2, &g, packed) == FRB_ERR_CAPACITY);
+            }
         }
     }
     /* Rejections. */
-    random_graph(&g, 25);
-    CHECK(frb_graph_pack_as(f2, &g, packed) == FRB_ERR_CAPACITY);
+    random_graph(&g, C + 1);
+    CHECK(frb_graph_pack_as(f, &g, packed) == FRB_ERR_CAPACITY);
     random_graph(&g, 5);
-    CHECK(frb_graph_pack_as(f2, &g, packed) == FRB_OK);
-    CHECK(frb_graph_unpack_as(f2, packed, 0, &back) == FRB_ERR_ENTRY);
-    CHECK(frb_graph_unpack_as(f2, packed, 25, &back) == FRB_ERR_ENTRY);
+    CHECK(frb_graph_pack_as(f, &g, packed) == FRB_OK);
+    CHECK(frb_graph_unpack_as(f, packed, 0, &back) == FRB_ERR_ENTRY);
+    CHECK(frb_graph_unpack_as(f, packed, C + 1, &back) == FRB_ERR_ENTRY);
     for (int r = 0; r < 500; r++) {
-        int n = 1 + (int)rnd(23), node = (int)rnd((uint32_t)n), which = (int)rnd(2);
+        int n = 1 + (int)rnd((uint32_t)C - 1u), node = (int)rnd((uint32_t)n), which = (int)rnd(2);
         int bad = n + (int)rnd((uint32_t)(32 - n)); /* a link to a node that is not there */
         int at = 11 * node + 1 + 5 * which;
         random_graph(&g, n);
-        CHECK(frb_graph_pack_as(f2, &g, packed) == FRB_OK);
+        CHECK(frb_graph_pack_as(f, &g, packed) == FRB_OK);
         for (int k = 0; k < 5; k++) {
             packed[(at + k) >> 3] &= (uint8_t)~(1u << ((at + k) & 7));
             packed[(at + k) >> 3] |= (uint8_t)(((unsigned)(bad >> k) & 1u) << ((at + k) & 7));
         }
-        CHECK(frb_graph_unpack_as(f2, packed, n, &back) == FRB_ERR_ENTRY);
+        CHECK(frb_graph_unpack_as(f, packed, n, &back) == FRB_ERR_ENTRY);
         /* A bit set above the last node. */
-        CHECK(frb_graph_pack_as(f2, &g, packed) == FRB_OK);
-        at = 11 * n + (int)rnd((uint32_t)(264 - 11 * n));
+        CHECK(frb_graph_pack_as(f, &g, packed) == FRB_OK);
+        at = 11 * n + (int)rnd((uint32_t)(8 * G - 11 * n));
         packed[at >> 3] |= (uint8_t)(1u << (at & 7));
-        CHECK(frb_graph_unpack_as(f2, packed, n, &back) == FRB_ERR_ENTRY);
+        CHECK(frb_graph_unpack_as(f, packed, n, &back) == FRB_ERR_ENTRY);
     }
+    /* The bits to spare after the last of all the nodes are zero too. */
+    random_graph(&g, C);
+    CHECK(frb_graph_pack_as(f, &g, packed) == FRB_OK);
+    for (int bit = 11 * C; bit < 8 * G; bit++) {
+        packed[bit >> 3] |= (uint8_t)(1u << (bit & 7));
+        CHECK(frb_graph_unpack_as(f, packed, C, &back) == FRB_ERR_ENTRY);
+        packed[bit >> 3] &= (uint8_t)~(1u << (bit & 7));
+    }
+    CHECK(frb_graph_unpack_as(f, packed, C, &back) == FRB_OK);
     /* Metadata. */
     random_graph(&g, 7);
-    CHECK(frb_entry_encode_as(f2, FRB_MINIMAL, &g, entry) == FRB_OK);
-    entry[33] = (uint8_t)((5u << 5) | 7u);
-    CHECK(frb_entry_decode_as(f2, entry, &st, &back) == FRB_ERR_ENTRY); /* status 5 */
-    entry[33] = (uint8_t)((2u << 5) | 25u);
-    CHECK(frb_entry_decode_as(f2, entry, &st, &back) == FRB_ERR_ENTRY); /* 25 nodes */
-    entry[33] = (uint8_t)(0u << 5);
-    CHECK(frb_entry_decode_as(f2, entry, &st, &back) == FRB_ERR_ENTRY); /* EMPTY with a graph */
-    CHECK(frb_entry_encode_as(f2, FRB_EMPTY, NULL, entry) == FRB_OK);
-    for (int i = 0; i < 34; i++) CHECK(entry[i] == 0);
-    CHECK(frb_entry_decode_as(f2, entry, &st, &back) == FRB_OK && st == FRB_EMPTY && back.node_count == 0);
-    CHECK(frb_entry_encode_as(f2, FRB_UNRESOLVED, NULL, entry) == FRB_OK && entry[33] == (3u << 5));
-    CHECK(frb_entry_encode_as(f2, FRB_MINIMAL, NULL, entry) == FRB_ERR_ARG);
-    CHECK(frb_entry_encode_as(f2, FRB_EMPTY, &g, entry) == FRB_ERR_ARG);
+    CHECK(frb_entry_encode_as(f, FRB_MINIMAL, &g, entry) == FRB_OK);
+    entry[G] = (uint8_t)((5u << 5) | 7u);
+    CHECK(frb_entry_decode_as(f, entry, &st, &back) == FRB_ERR_ENTRY); /* status 5 */
+    if (C < 31) {
+        entry[G] = (uint8_t)((2u << 5) | (unsigned)(C + 1));
+        CHECK(frb_entry_decode_as(f, entry, &st, &back) == FRB_ERR_ENTRY); /* more nodes than fit */
+    }
+    entry[G] = (uint8_t)(0u << 5);
+    CHECK(frb_entry_decode_as(f, entry, &st, &back) == FRB_ERR_ENTRY); /* EMPTY with a graph */
+    CHECK(frb_entry_encode_as(f, FRB_EMPTY, NULL, entry) == FRB_OK);
+    for (int i = 0; i <= G; i++) CHECK(entry[i] == 0);
+    CHECK(frb_entry_decode_as(f, entry, &st, &back) == FRB_OK && st == FRB_EMPTY && back.node_count == 0);
+    CHECK(frb_entry_encode_as(f, FRB_UNRESOLVED, NULL, entry) == FRB_OK && entry[G] == (3u << 5));
+    CHECK(frb_entry_encode_as(f, FRB_MINIMAL, NULL, entry) == FRB_ERR_ARG);
+    CHECK(frb_entry_encode_as(f, FRB_EMPTY, &g, entry) == FRB_ERR_ARG);
     CHECK(frb_entry_encode_as(NULL, FRB_EMPTY, NULL, entry) == FRB_ERR_ARG);
 }
 
@@ -243,8 +326,10 @@ static void fix_crcs(uint8_t *image, size_t size) {
     for (int i = 0; i < 4; i++) image[60 + i] = (uint8_t)(crc >> (8 * i));
 }
 
-static void test_v2_table_and_image(void) {
-    const FrbFormat *f1 = frb_format(1), *f2 = frb_format(2);
+static void test_wide_table_and_image(int version) {
+    const FrbFormat *f1 = frb_format(1), *f = frb_format(version);
+    const size_t E = (size_t)f->entry_bytes, G = (size_t)f->graph_bytes;
+    const int first = version == 2 ? 17 : 25; /* the shortest length that needs this version */
     FrbTable t, back, t1;
     FrbSummary sum;
     FrbFileInfo info;
@@ -252,40 +337,44 @@ static void test_v2_table_and_image(void) {
     size_t size = 0;
     uint32_t bad = 0;
 
-    /* A table of 17 bits is version 2 and cannot be anything else. */
-    CHECK(frb_table_create(&t, 17) == FRB_OK && t.format == f2 && t.count == 131072u);
-    for (int r = 0; r < 200; r++) {
-        uint32_t index = rnd(131072u);
-        RevGraph ring, got;
-        FrbStatus st;
-        frb_ring_witness(index, 17, &ring);
-        CHECK(ring.node_count == 17 && frb_graph_output(&ring, 17) == index);
-        CHECK(frb_table_put(&t, index, FRB_WITNESS, &ring) == FRB_OK);
-        CHECK(frb_table_put(&t, index ^ 1u, FRB_WITNESS, &ring) == FRB_ERR_OUTPUT);
-        CHECK(frb_table_get(&t, index, &st, &got) == FRB_OK && st == FRB_WITNESS && same_graph(&ring, &got));
-        CHECK(frb_table_nodes(&t, index) == 17);
+    /* A table of the first length that needs the version is of that version. */
+    if (version == 2) { /* 4 MB; the same for 25 bits would be 1.4 GB */
+        CHECK(frb_table_create(&t, 17) == FRB_OK && t.format == f && t.count == 131072u);
+        for (int r = 0; r < 200; r++) {
+            uint32_t index = rnd(131072u);
+            RevGraph ring, got;
+            FrbStatus st;
+            frb_ring_witness(index, 17, &ring);
+            CHECK(ring.node_count == 17 && frb_graph_output(&ring, 17) == index);
+            CHECK(frb_table_put(&t, index, FRB_WITNESS, &ring) == FRB_OK);
+            CHECK(frb_table_put(&t, index ^ 1u, FRB_WITNESS, &ring) == FRB_ERR_OUTPUT);
+            CHECK(frb_table_get(&t, index, &st, &got) == FRB_OK && st == FRB_WITNESS && same_graph(&ring, &got));
+            CHECK(frb_table_nodes(&t, index) == 17);
+        }
+        frb_table_destroy(&t);
     }
-    frb_table_destroy(&t);
+    CHECK(frb_table_create_as(&t, first, frb_format(version - 1)) == FRB_ERR_ARG && t.entries == NULL);
     CHECK(frb_table_create_as(&t, 17, f1) == FRB_ERR_ARG && t.entries == NULL);
-    CHECK(frb_table_create(&t, 25) == FRB_ERR_ARG && t.entries == NULL);
-    CHECK(frb_table_create_as(&t, 25, f2) == FRB_ERR_ARG);
+    CHECK(frb_table_create(&t, 32) == FRB_ERR_ARG && t.entries == NULL);
+    CHECK(frb_table_create_as(&t, f->max_bits + 1, f) == FRB_ERR_ARG);
 
-    /* The ring is valid at every length the format holds. */
-    for (int bits = 17; bits <= 24; bits++) {
+    /* The ring is valid at every length the version holds. */
+    for (int bits = first; bits <= f->max_bits; bits++) {
         for (int r = 0; r < 300; r++) {
-            uint32_t index = r == 0 ? 0u : r == 1 ? 1u : r == 2 ? (1u << bits) - 1u : rnd(1u << bits);
+            uint32_t top = (uint32_t)1 << (bits - 1);
+            uint32_t index = r == 0 ? 0u : r == 1 ? 1u : r == 2 ? top + (top - 1u) : rnd(top) * 2u + rnd(2);
             uint8_t packed[FRB_MAX_GRAPH_BYTES];
             RevGraph ring, unpacked;
             frb_ring_witness(index, bits, &ring);
             CHECK(ring.node_count == bits && rev_graph_validate(&ring) == REV_OK);
             CHECK(frb_graph_output(&ring, bits) == index);
-            CHECK(frb_graph_pack_as(f2, &ring, packed) == FRB_OK);
-            CHECK(frb_graph_unpack_as(f2, packed, bits, &unpacked) == FRB_OK && same_graph(&ring, &unpacked));
+            CHECK(frb_graph_pack_as(f, &ring, packed) == FRB_OK);
+            CHECK(frb_graph_unpack_as(f, packed, bits, &unpacked) == FRB_OK && same_graph(&ring, &unpacked));
         }
     }
 
-    /* A small table in version 2: same content as in version 1, other bytes. */
-    reference_table(&t, 8, f2);
+    /* A small table in this version: same content as in version 1, other bytes. */
+    reference_table(&t, 8, f);
     reference_table(&t1, 8, f1);
     CHECK(frb_table_validate(&t, &sum, NULL) == FRB_OK && sum.complete && sum.count == 256);
     CHECK(frb_table_check_symmetry(&t, NULL) == FRB_OK);
@@ -295,22 +384,25 @@ static void test_v2_table_and_image(void) {
         CHECK(frb_table_get(&t, i, &sa, &a) == FRB_OK);
         CHECK(frb_table_get(&t1, i, &sb, &b) == FRB_OK);
         CHECK(sa == sb && same_graph(&a, &b) && frb_table_nodes(&t, i) == ref_min[8][i]);
-        CHECK(frb_table_entry(&t, i) == t.entries + 34u * i);
+        CHECK(frb_table_entry(&t, i) == t.entries + E * i);
     }
-    CHECK(frb_image_build(&t, &image, &size) == FRB_OK && size == 64 + 256 * 34);
-    CHECK(image[8] == 2 && image[9] == 0 && image[12] == 8 && image[13] == 24 && image[14] == 11 &&
-          image[15] == 34);
+    CHECK(frb_image_build(&t, &image, &size) == FRB_OK && size == 64 + 256 * E);
+    CHECK(image[8] == version && image[9] == 0 && image[12] == 8 && image[13] == f->node_capacity &&
+          image[14] == 11 && image[15] == f->entry_bytes);
     CHECK(frb_image_parse(image, size, &back, &info, &bad) == FRB_OK);
-    CHECK(info.version == 2 && info.bits == 8 && info.node_capacity == 24 && info.entry_bytes == 34 &&
-          info.complete && info.count == 256);
-    CHECK(back.format == f2 && memcmp(back.entries, t.entries, 256 * 34) == 0);
+    CHECK(info.version == version && info.bits == 8 && info.node_capacity == f->node_capacity &&
+          info.entry_bytes == f->entry_bytes && info.complete && info.count == 256);
+    CHECK(back.format == f && memcmp(back.entries, t.entries, 256 * E) == 0);
     frb_table_destroy(&back);
 
     copy = malloc(size + 1);
-    memcpy(copy, image, size);
-    copy[8] = 1; /* says version 1; the entries are not */
-    fix_crcs(copy, size);
-    CHECK(frb_image_parse(copy, size, NULL, NULL, NULL) == FRB_ERR_HEADER);
+    for (int other = 1; other <= 4; other++) { /* says another version; the entries are not */
+        if (other == version) continue;
+        memcpy(copy, image, size);
+        copy[8] = (uint8_t)other;
+        fix_crcs(copy, size);
+        CHECK(frb_image_parse(copy, size, NULL, NULL, NULL) == (other == 4 ? FRB_ERR_VERSION : FRB_ERR_HEADER));
+    }
     memcpy(copy, image, size);
     copy[15] = 19;
     fix_crcs(copy, size);
@@ -320,28 +412,32 @@ static void test_v2_table_and_image(void) {
     fix_crcs(copy, size);
     CHECK(frb_image_parse(copy, size, NULL, NULL, NULL) == FRB_ERR_HEADER);
     memcpy(copy, image, size);
-    copy[12] = 25; /* more bits than any version holds */
+    copy[12] = (uint8_t)(f->max_bits + 1); /* more bits than the version holds */
+    fix_crcs(copy, size);
+    CHECK(frb_image_parse(copy, size, NULL, NULL, NULL) == FRB_ERR_HEADER);
+    memcpy(copy, image, size);
+    copy[12] = 32; /* and more than any version holds */
     fix_crcs(copy, size);
     CHECK(frb_image_parse(copy, size, NULL, NULL, NULL) == FRB_ERR_HEADER);
     CHECK(frb_image_parse(image, size - 1, NULL, NULL, NULL) == FRB_ERR_SIZE);
-    CHECK(frb_image_parse(image, size - 34, NULL, NULL, NULL) == FRB_ERR_SIZE);
+    CHECK(frb_image_parse(image, size - E, NULL, NULL, NULL) == FRB_ERR_SIZE);
     memcpy(copy, image, size);
-    copy[64 + 34 * 100 + 5] ^= 0x10;
+    copy[64 + E * 100 + 5] ^= 0x10;
     CHECK(frb_image_parse(copy, size, NULL, NULL, NULL) == FRB_ERR_CHECKSUM);
     memcpy(copy, image, size);
-    memcpy(copy + 64 + 34 * 31, image + 64 + 34 * 32, 34); /* entry 31 holds the graph of entry 32 */
+    memcpy(copy + 64 + E * 31, image + 64 + E * 32, E); /* entry 31 holds the graph of entry 32 */
     fix_crcs(copy, size);
     CHECK(frb_image_parse(copy, size, NULL, NULL, &bad) == FRB_ERR_OUTPUT && bad == 31);
     memcpy(copy, image, size);
-    copy[64 + 34 * 12 + 32] |= 0x80; /* the last bit of the last node slot of a small graph */
+    copy[64 + E * 12 + G - 1] |= 0x80; /* the last bit of the packed graph, far above a small graph */
     fix_crcs(copy, size);
     CHECK(frb_image_parse(copy, size, NULL, NULL, &bad) == FRB_ERR_ENTRY && bad == 12);
     memcpy(copy, image, size);
-    copy[64 + 34 * 40 + 33] = (uint8_t)(7u << 5);
+    copy[64 + E * 40 + G] = (uint8_t)(7u << 5);
     fix_crcs(copy, size);
     CHECK(frb_image_parse(copy, size, NULL, NULL, &bad) == FRB_ERR_ENTRY && bad == 40);
     memcpy(copy, image, size);
-    copy[64 + 34 * 77 + 33] = (uint8_t)((1u << 5) | (unsigned)ref_min[8][77]); /* MINIMAL -> WITNESS */
+    copy[64 + E * 77 + G] = (uint8_t)((1u << 5) | (unsigned)ref_min[8][77]); /* MINIMAL -> WITNESS */
     fix_crcs(copy, size);
     CHECK(frb_image_parse(copy, size, NULL, NULL, NULL) == FRB_ERR_SUMMARY); /* header says complete */
     free(copy);
@@ -352,11 +448,12 @@ static void test_v2_table_and_image(void) {
 
 /* Two complete tables of different lengths against each other. */
 static void test_chain(void) {
-    const FrbFormat *f1 = frb_format(1), *f2 = frb_format(2);
+    const FrbFormat *f1 = frb_format(1), *f2 = frb_format(2), *f3 = frb_format(3);
     FrbTable t[REF_MAX + 1], forged;
     uint32_t bad = 0, pick = 0;
     int found = 0;
-    for (int bits = 5; bits <= REF_MAX; bits++) reference_table(&t[bits], bits, bits & 1 ? f1 : f2);
+    for (int bits = 5; bits <= REF_MAX; bits++) /* the three versions mixed */
+        reference_table(&t[bits], bits, bits % 3 == 0 ? f3 : bits % 3 == 1 ? f1 : f2);
     for (int longer = 6; longer <= REF_MAX; longer++)
         for (int shorter = 5; shorter < longer; shorter++)
             CHECK(frb_table_check_chain(&t[longer], &t[shorter], &bad) == FRB_OK);
@@ -705,46 +802,80 @@ static void test_ladder_resume(void) {
            REF_MAX - 1, calls);
 }
 
-/* Format version 2 forced on short strings: the content of version 1. */
-static void test_ladder_v2(void) {
-    const char *dir = in_base("ladder_v2"), *v1 = in_base("ladder a");
+/*
+ * Ladders in the wider formats, forced on short strings: version 2
+ * throughout, version 3 throughout, and version 3 built on a version-2 base
+ * (what a 25-bit level on a 24-bit Bomb is).  Each must hold, entry for
+ * entry, the graphs of the version-1 ladder.
+ */
+static void test_ladder_wide(void) {
+    static const struct { const char *name; int low, high, change; } plan[] = {
+        {"ladder_v2", 2, 2, 0}, {"ladder_v3", 3, 3, 0}, {"ladder_v2_v3", 2, 3, 8}};
+    static const int record_bytes[4] = {0, 64, 80, 96};
+    const char *v1 = in_base("ladder a");
     FrbRunOptions opt = quiet_options();
     FrbLadderResult res;
     FrbConfig settings;
-    remove_tree(dir);
-    ladder_settings(&settings, 2, 2);
-    CHECK_MSG(frb_ladder_run(dir, base6, 10, &settings, &opt, &res, last_err, sizeof last_err) == FRB_OK, "%s",
-              last_err);
-    CHECK(res.complete && res.top_bits == 10);
-    if (!res.complete) return;
-    check_bomb(level_file(dir, 6), 6, 1); /* the starting Bomb is copied as it is */
-    for (int bits = 7; bits <= 10; bits++) {
-        FrbTable a, b;
-        FrbConfig cfg;
-        Tally t;
-        int differ = 0;
-        check_bomb(level_file(dir, bits), bits, 2);
-        CHECK(frb_config_read(level_work(dir, bits), &cfg, last_err, sizeof last_err) == FRB_OK);
-        CHECK(cfg.format == 2 && cfg.max_nodes == 24);
-        t = tally_level(dir, bits, 80); /* 33-byte graphs: records of 80 bytes */
-        CHECK(t.duplicates == 0);
-        /* Entry for entry the graphs of the version-1 ladder. */
-        memset(&a, 0, sizeof a);
-        memset(&b, 0, sizeof b);
-        CHECK(frb_file_read(level_file(dir, bits), &a, NULL, NULL) == FRB_OK);
-        CHECK(frb_file_read(level_file(v1, bits), &b, NULL, NULL) == FRB_OK);
-        for (uint32_t i = 0; a.entries && b.entries && i < a.count; i++) {
-            RevGraph ga, gb;
-            FrbStatus sa = FRB_EMPTY, sb = FRB_UNRESOLVED;
-            CHECK(frb_table_get(&a, i, &sa, &ga) == FRB_OK);
-            CHECK(frb_table_get(&b, i, &sb, &gb) == FRB_OK);
-            differ += sa != sb || !same_graph(&ga, &gb);
+    for (size_t k = 0; k < sizeof plan / sizeof plan[0]; k++) {
+        const char *dir = in_base(plan[k].name);
+        remove_tree(dir);
+        if (plan[k].change) { /* up to `change` bits in the lower format, stopped there */
+            ladder_settings(&settings, 2, plan[k].low);
+            CHECK(frb_ladder_run(dir, base6, plan[k].change, &settings, &opt, &res, last_err, sizeof last_err) ==
+                  FRB_OK);
+            CHECK(res.complete && res.top_bits == plan[k].change);
         }
-        CHECK(differ == 0);
-        frb_table_destroy(&a);
-        frb_table_destroy(&b);
+        ladder_settings(&settings, 2, plan[k].high);
+        CHECK_MSG(frb_ladder_run(dir, plan[k].change ? NULL : base6, 10, &settings, &opt, &res, last_err,
+                                 sizeof last_err) == FRB_OK,
+                  "%s", last_err);
+        CHECK(res.complete && res.top_bits == 10);
+        if (!res.complete) return;
+        check_bomb(level_file(dir, 6), 6, 1); /* the starting Bomb is copied as it is */
+        for (int bits = 7; bits <= 10; bits++) {
+            int version = plan[k].change && bits <= plan[k].change ? plan[k].low : plan[k].high;
+            const FrbFormat *f = frb_format(version);
+            FrbTable a, b;
+            FrbConfig cfg;
+            FrbState *st = NULL;
+            Tally t;
+            int differ = 0;
+            check_bomb(level_file(dir, bits), bits, version);
+            CHECK(frb_config_read(level_work(dir, bits), &cfg, last_err, sizeof last_err) == FRB_OK);
+            CHECK(cfg.format == version && cfg.max_nodes == f->node_capacity && cfg.base_bits == bits - 1);
+            t = tally_level(dir, bits, record_bytes[version]);
+            CHECK(t.duplicates == 0);
+            /* Entry for entry the graphs of the version-1 ladder. */
+            memset(&a, 0, sizeof a);
+            memset(&b, 0, sizeof b);
+            CHECK(frb_file_read(level_file(dir, bits), &a, NULL, NULL) == FRB_OK);
+            CHECK(frb_file_read(level_file(v1, bits), &b, NULL, NULL) == FRB_OK);
+            for (uint32_t i = 0; a.entries && b.entries && i < a.count; i++) {
+                RevGraph ga, gb;
+                FrbStatus sa = FRB_EMPTY, sb = FRB_UNRESOLVED;
+                CHECK(frb_table_get(&a, i, &sa, &ga) == FRB_OK);
+                CHECK(frb_table_get(&b, i, &sb, &gb) == FRB_OK);
+                differ += sa != sb || !same_graph(&ga, &gb);
+            }
+            CHECK(differ == 0);
+            /* The level's own journal certifies its table, whatever format the level below is in. */
+            CHECK(frb_state_load(level_work(dir, bits), &cfg, &st, last_err, sizeof last_err) == FRB_OK);
+            if (st && a.entries) {
+                CHECK(st->conflicts == 0 && st->by_status[FRB_MINIMAL] == st->count && st->format == f);
+                CHECK(frb_verify_evidence(&a, st, NULL, last_err, sizeof last_err) == FRB_OK);
+            }
+            frb_state_free(st);
+            if (a.entries && b.entries) CHECK(frb_table_check_chain(&a, &b, NULL) == FRB_ERR_ARG); /* same length */
+            frb_table_destroy(&b);
+            memset(&b, 0, sizeof b);
+            CHECK(frb_file_read(level_file(dir, bits - 1), &b, NULL, NULL) == FRB_OK);
+            if (a.entries && b.entries) CHECK(frb_table_check_chain(&a, &b, NULL) == FRB_OK);
+            frb_table_destroy(&a);
+            frb_table_destroy(&b);
+        }
     }
-    printf("version 2: a ladder forced into the 24-bit format holds the graphs of the version-1 ladder\n");
+    printf("wide formats: ladders in version 2, in version 3, and in version 3 on a version-2 base\n"
+           "              hold the graphs of the version-1 ladder, entry for entry\n");
 }
 
 static void write_file(const char *path, const uint8_t *data, size_t size) {
@@ -816,6 +947,18 @@ static void test_base_refusals(void) {
     cfg.format = 2;
     CHECK(frb_config_check(&cfg, last_err, sizeof last_err) == FRB_OK);
     cfg.max_nodes = 25;
+    CHECK(frb_config_check(&cfg, last_err, sizeof last_err) == FRB_ERR_ARG);
+    cfg.format = 3;
+    CHECK(frb_config_check(&cfg, last_err, sizeof last_err) == FRB_OK);
+    cfg.max_nodes = 32;
+    CHECK(frb_config_check(&cfg, last_err, sizeof last_err) == FRB_ERR_ARG);
+    cfg.format = 4;
+    cfg.max_nodes = 8;
+    CHECK(frb_config_check(&cfg, last_err, sizeof last_err) == FRB_ERR_ARG);
+    frb_config_default(&cfg, 25);
+    cfg.format = 2; /* 25 bits do not fit version 2 */
+    CHECK(frb_config_check(&cfg, last_err, sizeof last_err) == FRB_ERR_ARG);
+    frb_config_default(&cfg, 32);
     CHECK(frb_config_check(&cfg, last_err, sizeof last_err) == FRB_ERR_ARG);
 
     /* A construction on base7, half done. */
@@ -1022,7 +1165,7 @@ static void test_recertify_hardest(void) {
     FrbRecertify r;
     RevGraph ring;
     uint32_t want = 0, pick = 0;
-    reference_table(&t, 9, frb_format(2));
+    reference_table(&t, 9, frb_format(3));
     for (uint32_t i = 0; i < 512; i++) want += ref_min[9][i] == 5;
     CHECK(want == 94);
     CHECK(frb_recertify_hardest(&t, rev_level_solve_ex, 0, 0, &r) == FRB_OK);
@@ -1083,6 +1226,22 @@ static void test_config_layouts(void) {
         free(text);
     }
     CHECK(frb_config_read(dir, &back, last_err, sizeof last_err) == FRB_OK && memcmp(&back, &cfg, sizeof cfg) == 0);
+    /* 25 bits and more: version 3, and all 31 nodes an entry holds. */
+    remove_tree(dir);
+    frb_config_default(&cfg, 25);
+    CHECK(cfg.format == 3 && cfg.max_nodes == 31);
+    CHECK(frb_work_create(dir, &cfg, last_err, sizeof last_err) == FRB_OK);
+    text = (char *)slurp(in_base("layout/config.txt"), &size);
+    CHECK(text != NULL);
+    if (text) {
+        text[size] = '\0';
+        CHECK(strstr(text, "\njournal_version 3\n") && strstr(text, "\nformat 3\n") &&
+              strstr(text, "\nbits 25\n") && strstr(text, "\nmax_nodes 31\n"));
+        free(text);
+    }
+    CHECK(frb_config_read(dir, &back, last_err, sizeof last_err) == FRB_OK && memcmp(&back, &cfg, sizeof cfg) == 0);
+    frb_config_default(&cfg, 31);
+    CHECK(cfg.format == 3 && frb_config_check(&cfg, last_err, sizeof last_err) == FRB_OK);
     /* A base line in a layout that has none, and a missing one in the layout that needs it. */
     {
         FILE *f = fopen(in_base("layout/config.txt"), "w");
@@ -1115,9 +1274,12 @@ static void test_config_layouts(void) {
 int main(int argc, char **argv) {
     compute_reference();
     test_formats();
-    test_v2_golden();
-    test_v2_roundtrip();
-    test_v2_table_and_image();
+    test_limits();
+    for (int version = 2; version <= 3; version++) {
+        test_wide_golden(version);
+        test_wide_roundtrip(version);
+        test_wide_table_and_image(version);
+    }
     test_chain();
 
 #ifdef CARLOBOMB_HAVE_BOMB_BUILD
@@ -1138,7 +1300,7 @@ int main(int argc, char **argv) {
     if (!t_failures) test_config_layouts();
     if (!t_failures) test_ladder_basic();
     if (!t_failures) test_ladder_resume();
-    if (!t_failures) test_ladder_v2();
+    if (!t_failures) test_ladder_wide();
     if (!t_failures) test_base_refusals();
     if (!t_failures) test_base_evidence();
     if (!t_failures) test_disk_watch();

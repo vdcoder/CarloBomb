@@ -107,8 +107,10 @@ if(MODE STREQUAL "small")
   run(2 "fixed for the life of a work directory" bomb resume --work-dir ${W}/a --enumerate-max 4)
   run(2 "no FixedRunBomb construction here" bomb resume --work-dir ${W}/nothing)
   run(2 "no FixedRunBomb construction here" bomb status --work-dir ${W}/nothing)
-  run(2 "bits must be 1..24" bomb build --bits 25 --work-dir ${W}/x)
+  run(2 "bits must be 1..31" bomb build --bits 32 --work-dir ${W}/x)
   run(2 "table format 1 cannot hold 17-bit targets" bomb build --bits 17 --format 1 --work-dir ${W}/x)
+  run(2 "table format 2 cannot hold 25-bit targets" bomb build --bits 25 --format 2 --work-dir ${W}/x)
+  run(2 "--format must be 1, 2 or 3" bomb build --bits 10 --format 4 --work-dir ${W}/x)
   run(2 "max-nodes must be 1..16" bomb build --bits 10 --max-nodes 17 --work-dir ${W}/x)
   run(2 "enumerate-max must be 0..6" bomb build --bits 10 --enumerate-max 7 --work-dir ${W}/x)
   run(2 "workers must be" bomb build --bits 10 --workers 0 --work-dir ${W}/x)
@@ -163,10 +165,25 @@ if(MODE STREQUAL "small")
   run(0 "Result: MINIMAL.*Verification: PASS" fixed --bomb ${W}/v2-11.frb --target 0110100110)
   run(2 "--against takes a Bomb for fewer bits" bomb verify --file ${W}/a.frb --against ${W}/v2-11.frb)
   run(1 "Against [^\n]*a-partial.frb: FAIL \\(table is not complete" bomb verify --file ${W}/v2-11.frb --against ${W}/a-partial.frb)
+  # The 31-bit format, and a ladder that crosses from one format into the next:
+  # levels 11 and 12 in version 2, then 13 in version 3 on the version-2 table.
+  run(0 "The ladder is complete" bomb ladder --dir ${W}/lad3 --from ${W}/a.frb --to 12 --format 2 --workers 2 --progress 0)
+  run(0 "continuing from it.*FixedRunBomb\\(13\\) is complete.*The ladder is complete"
+      bomb ladder --dir ${W}/lad3 --to 13 --format 3 --workers 2 --progress 0)
+  run(0 "  12 +4096 +6 +[0-9a-f]+ +2 .*  13 +8192 +7 +[0-9a-f]+ +3 " bomb ladder --dir ${W}/lad3 --status)
+  run(0 "Format version 3, 13-bit targets.*Against the complete 12-bit Bomb.*PASS.*against the journal[^\n]*PASS.*8192 certified minima reproduced.*Verification: PASS \\(complete certified table\\)"
+      bomb verify --file ${W}/lad3/fixed-run-13.frb --work-dir ${W}/lad3/work-13 --against ${W}/lad3/fixed-run-12.frb --recertify --engine c)
+  run(0 "built on +the complete 12-bit Bomb.*journal format 3, table format 3.*COMPLETE" bomb status --work-dir ${W}/lad3/work-13)
+  run(0 "Result: MINIMAL.*Verification: PASS" fixed --bomb ${W}/lad3/fixed-run-13.frb --target 0110100110011)
+  run(0 "Status: MINIMAL.*Nodes: 7.*Verification: PASS" bomb lookup --file ${W}/lad3/fixed-run-13.frb --target 0000000000001)
+  # 64 + 34 * 2^11 and 64 + 44 * 2^13 bytes.
+  run(0 "Wrote .*: 69696 bytes" bomb finalize --work-dir ${W}/lad3/work-11 --output ${W}/v2-again.frb)
+  run(0 "Wrote .*: 360512 bytes" bomb finalize --work-dir ${W}/lad3/work-13 --output ${W}/v3-again.frb)
+
   # Ladder refusals.
   run(2 "ladder needs --dir" bomb ladder --to 12)
   run(2 "ladder needs --to" bomb ladder --dir ${W}/lad)
-  run(2 "the ladder climbs to 2..24 bits" bomb ladder --dir ${W}/lad --to 25)
+  run(2 "the ladder climbs to 2..31 bits" bomb ladder --dir ${W}/lad --to 32)
   run(2 "name a complete one with --from" bomb ladder --dir ${W}/empty --to 12)
   run(3 "is not a complete Bomb" bomb ladder --dir ${W}/empty --from ${W}/a-partial.frb --to 12)
   run(2 "is a Bomb for 10-bit targets; a construction for 9 bits needs a shorter one"

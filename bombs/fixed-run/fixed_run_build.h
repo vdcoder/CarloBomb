@@ -52,8 +52,8 @@ extern "C" {
 
 typedef struct {
     /* Fixed when the work directory is created. */
-    int bits;          /* target length, 1..24 */
-    int format;        /* table format version: 1 (up to 16 bits) or 2 (up to 24) */
+    int bits;          /* target length, 1..31 */
+    int format;        /* table format version: 1 (up to 16 bits), 2 (up to 24) or 3 (up to 31) */
     int symmetry;      /* 1: work on one string of each complement pair and derive the other */
     int enumerate_max; /* exhaustive enumeration for node counts 1..enumerate_max; 0 = none */
     /*
@@ -183,7 +183,7 @@ typedef struct {
 } FrbTargetState;
 
 typedef struct {
-    uint32_t searches, solved, unsat, limited;
+    uint64_t searches, solved, unsat, limited; /* a long construction makes over 2^32 of them */
     uint64_t steps, ns;
 } FrbBudgetEffort;
 

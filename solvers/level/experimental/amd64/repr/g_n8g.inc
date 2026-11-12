@@ -7,7 +7,7 @@
  * With CB_BMI2 the variable shifts are SHLX/SHRX and the clear is ANDN;
  * without, they are shifts by cl (the designator lives in rcx).
  */
-#include "asm_layout.h"
+#include "skel_defs.inc"
 #include "g_colbm.inc"
 
 .macro LNK_READ                         /* eax = nibble at bit rcx */

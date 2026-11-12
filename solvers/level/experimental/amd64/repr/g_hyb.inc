@@ -4,7 +4,7 @@
  * rbx = link bytes (the start of state->nodes is used as storage).
  * A slot designator is the link's index, 2*node + d.
  */
-#include "asm_layout.h"
+#include "skel_defs.inc"
 #include "g_colbm.inc"
 
 .macro G_ENTER

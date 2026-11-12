@@ -71,3 +71,14 @@
     setc    al
 49:
 .endm
+
+#ifdef CB_BULK_ANY
+/* Jump to \u if any of nodes 0..r11-1 has no color yet. */
+.macro G_BULK_ANY_UNCOLORED u
+    mov     rdi, r13
+    not     rdi
+    bzhi    rdi, rdi, r11
+    test    rdi, rdi
+    jnz     \u
+.endm
+#endif

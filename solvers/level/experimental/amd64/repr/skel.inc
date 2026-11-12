@@ -49,21 +49,26 @@
  *                        becomes a fresh all-undecided node.  Preserve rcx.
  *   G_LINK_GET           eax = link at slot rcx (decided).  Preserve rcx.
  * Macros may use rdi freely, and numeric labels 40-49.
+ *
+ * Optional: CB_BULK (needs BMI1/BMI2 and a representation whose colors are
+ * the bitmaps of g_colbm.inc).  In a link loop, the attempts that are certain
+ * to fail at once are not executed one by one: a bit scan finds the next
+ * node worth trying and the failures before it are accounted for
+ * arithmetically, with exactly the steps and stack depth they would have
+ * used.  Whenever that could differ from doing them singly (the step limit
+ * or the stack limit is near, or an existing node is uncolored) the per-node
+ * code below is used instead.  The representation supplies
+ *   G_BULK_ANY_UNCOLORED u   jump to u if an existing node is uncolored
+ *   G_BULK_FLOW_WORK         rdi = existing nodes n for which CTRL(n, cp)
+ *                            is not certain to fail in its INIT; r8 = nodes
+ *                            of the target color; preserve eax, ebp, r8.
+ *                            It runs once per FLOW link loop, before the
+ *                            first attempt, when the link being tried is
+ *                            still undecided: if that link is one of cp's
+ *                            own, the nodes that would use it are therefore
+ *                            never skipped.  Budgets up to 8 only.
  */
-#include "asm_layout.h"
-
-#ifdef CB_FRAME8
-#define FRAME 8
-#define FRAME_SHIFT 3
-#else
-#define FRAME 16
-#define FRAME_SHIFT 4
-#endif
-
-#define L_LIMIT  qword ptr [rsp]
-#define L_TEND   qword ptr [rsp + 8]
-#define L_MAX    dword ptr [rsp + 16]
-#define L_STATE  qword ptr [rsp + 24]
+#include "skel_defs.inc"
 
     .intel_syntax noprefix
     .text
@@ -236,7 +241,7 @@ KERNEL:
     push    r13
     push    r14
     push    r15
-    sub     rsp, 32
+    sub     rsp, LOCALS
 
     mov     L_STATE, rdi
     mov     L_MAX, esi
@@ -296,9 +301,52 @@ KERNEL:
 
     .balign 16
 .Lctrl_link:                                    /* rcx = slot of G[cp].links[d] */
+#ifdef CB_BULK_CTRL
+    SAVE    cx                                  /* kept in the frame for the whole loop */
     xor     eax, eax                            /* it = 0 */
     TARGET_BIT                                  /* same bit for every attempt */
     STEP                                        /* LOOP_L */
+    G_BULK_ANY_UNCOLORED .Lctrl_link_next
+.Lctrl_bulk:                                    /* eax = it, its LOOP_L step counted, r8 = nodes of the right color */
+    cmp     eax, r11d
+    jae     .Lctrl_bulk_exhausted
+    cmp     r10, CB_BULK_MARGIN
+    jb      .Lctrl_bulk_slow
+    cmp     r12, L_LIMIT
+    je      .Lctrl_bulk_slow
+    shrx    rdi, r8, rax
+    tzcnt   rcx, rdi                            /* nodes of the wrong color before the next right one */
+    jc      .Lctrl_bulk_none
+    lea     rdi, [rcx + rcx*2]                  /* each: child INIT, LOOP_L_R, LOOP_L */
+    sub     r10, rdi
+    add     eax, ecx                            /* it = the next node of the right color */
+    RESTORE cx
+    G_LINK_SET_IT
+    PUSHCHK                                     /* push(CTRL, fp, cp); the skipped ones pushed to the same depth */
+    STEP                                        /* child: CTRL INIT, color matches */
+    CALLF   .Lmatch_ok
+    STEPS   2                                   /* LOOP_L_R, then LOOP_L */
+    RESTORE cx
+    G_LINK_GET
+    inc     eax
+    TARGET_BIT
+    jmp     .Lctrl_bulk
+.Lctrl_bulk_none:                               /* every node left has the wrong color */
+    mov     ecx, r11d
+    sub     ecx, eax
+    lea     rdi, [rcx + rcx*2]
+    sub     r10, rdi
+    PUSHCHK
+.Lctrl_bulk_exhausted:
+    RESTORE cx
+    jmp     .Lctrl_try_n
+.Lctrl_bulk_slow:
+    RESTORE cx
+#else
+    xor     eax, eax                            /* it = 0 */
+    TARGET_BIT                                  /* same bit for every attempt */
+    STEP                                        /* LOOP_L */
+#endif
 .Lctrl_link_next:                               /* (this LOOP_L step is already counted) */
     cmp     eax, r11d
     jae     .Lctrl_try_n
@@ -358,8 +406,80 @@ KERNEL:
 
     .balign 16
 .Lflow_link:                                    /* rcx = slot of G[fp].links[d] */
+#ifdef CB_BULK_FLOW
+    /* Which nodes need a real attempt depends only on state that is the same
+     * at the start of every iteration of this loop, so it is worked out once
+     * and kept in the frame above the slot designator (budgets up to 8:
+     * eight bits). */
+    SAVE    cx
     xor     eax, eax
     STEP                                        /* LOOP_L */
+    TARGET_BIT
+    G_BULK_FLOW_WORK                            /* rdi = nodes that need a real attempt */
+    RESTORE cx
+    shl     rdi, 8
+    or      rcx, rdi
+    SAVE    cx                                  /* slot | nodes << 8 */
+.Lflow_bulk:                                    /* eax = it, its LOOP_L step counted */
+    cmp     eax, r11d
+    jae     .Lflow_bulk_exhausted
+    cmp     r10, CB_BULK_MARGIN
+    jb      .Lflow_bulk_slow
+    lea     rdi, [r12 + FRAME]                  /* a skipped attempt pushes two frames */
+    cmp     rdi, L_LIMIT
+    jae     .Lflow_bulk_slow
+    RESTORE cx
+    mov     rdi, rcx
+    shr     rdi, 8
+    shrx    rdi, rdi, rax
+    tzcnt   rcx, rdi                            /* certain failures before the next real attempt */
+    jc      .Lflow_bulk_none
+    lea     rdi, [rcx + rcx*4]                  /* each: FLOW INIT, CTRL INIT, SIMPLE_R, LOOP_L_R, LOOP_L */
+    sub     r10, rdi
+    lea     rdi, [r12 + 2*FRAME]                /* depth their pushes reached, if there were any */
+    test    ecx, ecx
+    cmovz   rdi, r14
+    cmp     rdi, r14
+    cmova   r14, rdi
+    add     eax, ecx
+    RESTORE cx
+    movzx   ecx, cl
+    G_LINK_SET_IT
+    PUSHCHK                                     /* push(FLOW, fp, cp) */
+    add     r12, FRAME                          /* the child FLOW frame's slot */
+    STEP                                        /* child: FLOW INIT, nxt = it */
+    SAVE    si
+    mov     esi, eax
+    PUSHCHK                                     /* push(CTRL, it, cp) */
+    TARGET_BIT
+    PEEK_CTRL
+    STEPS   3                                   /* child SIMPLE_R, LOOP_L_R, LOOP_L */
+    RESTORE si
+    sub     r12, FRAME
+    RESTORE cx
+    movzx   ecx, cl
+    G_LINK_GET
+    inc     eax
+    jmp     .Lflow_bulk
+.Lflow_bulk_none:                               /* every node left is a certain failure */
+    mov     ecx, r11d
+    sub     ecx, eax
+    lea     rdi, [rcx + rcx*4]
+    sub     r10, rdi
+    lea     rdi, [r12 + 2*FRAME]
+    cmp     rdi, r14
+    cmova   r14, rdi
+.Lflow_bulk_exhausted:
+    RESTORE cx
+    movzx   ecx, cl
+    jmp     .Lflow_try_n
+.Lflow_bulk_slow:
+    RESTORE cx
+    movzx   ecx, cl
+#else
+    xor     eax, eax
+    STEP                                        /* LOOP_L */
+#endif
 .Lflow_link_next:                               /* (this LOOP_L step is already counted) */
     cmp     eax, r11d
     jae     .Lflow_try_n
@@ -426,7 +546,7 @@ KERNEL:
     sub     r14, rcx
     shr     r14, FRAME_SHIFT
     mov     dword ptr [rdi + CB_ST_PEAK_STACK], r14d
-    add     rsp, 32
+    add     rsp, LOCALS
     pop     r15
     pop     r14
     pop     r13

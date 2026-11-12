@@ -46,10 +46,13 @@ int cb_amd64_k_hyb_f8(CbAsmState *, int);
 int cb_amd64_k_n8g_f8(CbAsmState *, int);
 int cb_amd64_k_n8s(CbAsmState *, int);
 int cb_amd64_k_n8s_bmi2(CbAsmState *, int);
+int cb_amd64_k_n8x(CbAsmState *, int);
+int cb_amd64_k_n8xa(CbAsmState *, int);
+int cb_amd64_k_n8xb(CbAsmState *, int);
 
 enum {
     K_ASM, K_B4, K_HYB, K_N8G, K_N8G_BMI2, K_P16M, K_P16G, K_P16X, K_HYB_F8, K_N8G_F8,
-    K_N8S, K_N8S_BMI2, K_AUTO
+    K_N8S, K_N8S_BMI2, K_N8X, K_N8XA, K_N8XB, K_AUTO
 };
 
 static const CbAmd64Kernel kernels[] = {
@@ -73,6 +76,12 @@ static const CbAmd64Kernel kernels[] = {
                "whole graph in registers, links split by link number, baseline instructions"},
     [K_N8S_BMI2] = {"n8s-bmi2", cb_amd64_k_n8s_bmi2, 8, K_HYB, CB_ISA_BMI2,
                     "whole graph in registers, links split by link number, BMI2"},
+    [K_N8X] = {"n8x", cb_amd64_k_n8x, 8, K_HYB, CB_ISA_BMI2,
+               "n8s-bmi2 with certain link-loop failures accounted for in bulk"},
+    [K_N8XA] = {"n8xa", cb_amd64_k_n8xa, 8, K_HYB, CB_ISA_BMI2,
+                "n8s-bmi2 with bulk accounting in the CTRL link loop only"},
+    [K_N8XB] = {"n8xb", cb_amd64_k_n8xb, 8, K_HYB, CB_ISA_BMI2,
+                "n8s-bmi2 with bulk accounting in the FLOW link loop only"},
     /* Chosen once per search from the node budget and the CPU: n8s-bmi2 (or
      * n8s without BMI2) up to 8 nodes, hyb above. */
     [K_AUTO] = {"auto", NULL, 8, K_HYB, 0, "best measured kernel for the budget and CPU"},

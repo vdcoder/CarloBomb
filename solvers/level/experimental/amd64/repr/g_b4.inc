@@ -3,7 +3,7 @@
  * each (color, link 0, link 1, unused), -1 = undecided.  rbx = node array.
  * A slot designator is the address of the link byte.
  */
-#include "asm_layout.h"
+#include "skel_defs.inc"
 
 #ifdef CB_FRAME8
 #error "b4 slot designators are pointers and do not fit an 8-byte frame"

@@ -17,7 +17,7 @@
  * is the field's shift count and ch the node.
  * Scratch used here beyond rdi: r8, r13, r15.
  */
-#include "asm_layout.h"
+#include "skel_defs.inc"
 
 #define P16_BLANK 0xA040                /* both links 64, color 2 */
 

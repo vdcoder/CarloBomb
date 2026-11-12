@@ -63,6 +63,20 @@ add_library(carlobomb_minimal STATIC solvers/minimal/minimal_solver.c)
 target_include_directories(carlobomb_minimal PUBLIC solvers/minimal)
 target_link_libraries(carlobomb_minimal PUBLIC carlobomb_level)
 
+# FixedRunBomb.  The file format and the enumerator are plain C11; building a
+# table (journal, worker processes) needs POSIX.
+add_library(carlobomb_fixed_run STATIC bombs/fixed-run/fixed_run.c bombs/fixed-run/enumerate.c)
+target_include_directories(carlobomb_fixed_run PUBLIC bombs/fixed-run)
+target_link_libraries(carlobomb_fixed_run PUBLIC carlobomb_rev)
+set(CARLOBOMB_HAVE_BOMB_BUILD OFF)
+if(UNIX)
+  set(CARLOBOMB_HAVE_BOMB_BUILD ON)
+  add_library(carlobomb_fixed_run_build STATIC
+    bombs/fixed-run/journal.c bombs/fixed-run/construct.c bombs/fixed-run/statistics.c)
+  target_link_libraries(carlobomb_fixed_run_build PUBLIC carlobomb_fixed_run carlobomb_minimal)
+  target_compile_definitions(carlobomb_fixed_run_build INTERFACE CARLOBOMB_HAVE_BOMB_BUILD=1)
+endif()
+
 # AMD64 assembly challenger: Linux/ELF x86-64 with the System V ABI only.
 # Everywhere else it is not built and the portable C solver is all there is.
 option(CARLOBOMB_AMD64_ASM "Build the experimental AMD64 assembly LevelSolver" ON)
@@ -108,9 +122,12 @@ if(NOT MSVC)
                          -Wno-sign-conversion -Wno-unused-value)
 endif()
 
-add_executable(carlobomb tools/carlobomb.c)
+add_executable(carlobomb tools/carlobomb.c tools/fixed_run_cli.c)
 target_include_directories(carlobomb PRIVATE benchmarks)
-target_link_libraries(carlobomb PRIVATE carlobomb_minimal)
+target_link_libraries(carlobomb PRIVATE carlobomb_minimal carlobomb_fixed_run)
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  target_link_libraries(carlobomb PRIVATE carlobomb_fixed_run_build)
+endif()
 
 add_executable(baseline benchmarks/baseline.c)
 target_include_directories(baseline PRIVATE tests)
@@ -166,6 +183,35 @@ if(CARLOBOMB_HAVE_AMD64_ASM)
   target_link_libraries(characterize PRIVATE carlobomb_level_amd64 m)
   target_compile_definitions(characterize PRIVATE CARLOBOMB_REVISION="${CARLOBOMB_REVISION}")
   add_test(NAME perf_counter_plumbing COMMAND characterize --perf-selftest)
+endif()
+
+# FixedRunBomb: format, enumerator, construction, interruption, damage.
+add_executable(test_fixed_run bombs/fixed-run/tests/test_fixed_run.c)
+target_include_directories(test_fixed_run PRIVATE tests)
+target_link_libraries(test_fixed_run PRIVATE carlobomb_fixed_run carlobomb_minimal)
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  target_link_libraries(test_fixed_run PRIVATE carlobomb_fixed_run_build)
+endif()
+add_test(NAME test_fixed_run
+  COMMAND test_fixed_run ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_test_work)
+set_tests_properties(test_fixed_run PROPERTIES TIMEOUT 600)
+
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  # The bomb commands end to end.  bomb_16 builds the whole 16-bit table with
+  # enumeration up to 4 nodes; bomb_16full builds it with the default
+  # settings (enumeration up to 5, 312 million graph runs) and is left out
+  # of sanitizer builds, where that takes minutes.
+  set(CARLOBOMB_BOMB_MODES small 16)
+  if(NOT CARLOBOMB_SANITIZE)
+    list(APPEND CARLOBOMB_BOMB_MODES 16full)
+  endif()
+  foreach(mode ${CARLOBOMB_BOMB_MODES})
+    add_test(NAME bomb_${mode}
+      COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
+              -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM} -DMODE=${mode}
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/bomb_smoke.cmake)
+    set_tests_properties(bomb_${mode} PROPERTIES TIMEOUT 900)
+  endforeach()
 endif()
 
 add_test(NAME legacy_original_runs COMMAND legacy_original)

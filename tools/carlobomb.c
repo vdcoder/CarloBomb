@@ -6,6 +6,7 @@
  *   carlobomb verify --target S --graph FILE
  *   carlobomb run    --graph FILE --bits L
  *   carlobomb bench  --target S [--max-nodes N] [--reps R]
+ *   carlobomb bomb   build|resume|status|finalize|verify|lookup ...   (fixed_run_cli.c)
  *
  * solve, level and bench accept --engine c (default) or, in builds for Linux
  * x86-64, --engine amd64-NAME for an assembly kernel.  amd64-asm is the
@@ -20,10 +21,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cli_engine.h"
+#include "fixed_run_cli.h"
 #include "minimal_solver.h"
-#ifdef CARLOBOMB_HAVE_AMD64_ASM
-#include "asm_solver.h"
-#endif
 
 enum { EXIT_OK = 0, EXIT_NO = 1, EXIT_USAGE = 2, EXIT_LIMIT = 3 };
 
@@ -50,7 +50,8 @@ static int usage(void) {
             "  carlobomb engines\n"
             "      list the search engines in this build\n"
             "S is a string of 0 and 1.  --max-steps limits search effort per budget.\n"
-            "solve, level and bench take --engine c (default)%s.\n",
+            "solve, level and bench take --engine c (default)%s.\n"
+            "FixedRunBomb, the table of minimum-node REVs for every string of one length:\n",
             REV_LEVEL_MAX_NODES,
 #ifdef CARLOBOMB_HAVE_AMD64_ASM
             " or amd64-NAME (experimental; `carlobomb engines` lists them)"
@@ -58,6 +59,7 @@ static int usage(void) {
             "; the amd64 engines are not part of this build"
 #endif
     );
+    fixed_run_cli_usage();
     return EXIT_USAGE;
 }
 
@@ -83,24 +85,17 @@ static int parse_args(int argc, char **argv, Args *a) {
         else if (!strcmp(k, "--graph")) a->graph = v;
         else if (!strcmp(k, "--out")) a->out = v;
         else if (!strcmp(k, "--engine")) {
-            if (!strcmp(v, "c")) { a->engine = rev_level_solve_ex; a->engine_name = "c"; }
-#ifdef CARLOBOMB_HAVE_AMD64_ASM
-            else if (!strncmp(v, "amd64-", 6) && cb_amd64_kernel_find(v + 6) >= 0) {
-                if (cb_amd64_kernel_select(cb_amd64_kernel_find(v + 6)) != 0) {
-                    fprintf(stderr, "engine %s needs an instruction set this CPU lacks\n", v);
-                    return 0;
-                }
-                a->engine = rev_level_solve_amd64_ex;
-                a->engine_name = v;
-            }
-#else
-            else if (!strncmp(v, "amd64-", 6)) {
+            switch (cli_engine_select(v, &a->engine)) {
+            case CLI_ENGINE_OK: a->engine_name = v; break;
+            case CLI_ENGINE_NO_ISA:
+                fprintf(stderr, "engine %s needs an instruction set this CPU lacks\n", v);
+                return 0;
+            case CLI_ENGINE_NOT_BUILT:
                 fprintf(stderr, "engine %s is not available in this build "
                                 "(Linux x86-64 only)\n", v);
                 return 0;
+            default: fprintf(stderr, "unknown engine %s\n", v); return 0;
             }
-#endif
-            else { fprintf(stderr, "unknown engine %s\n", v); return 0; }
         }
         else if (!parse_long(v, &n) || n < 0) { fprintf(stderr, "bad value for %s: %s\n", k, v); return 0; }
         else if (!strcmp(k, "--nodes")) a->nodes = n;
@@ -325,6 +320,7 @@ int main(int argc, char **argv) {
     Args a;
     if (argc < 2) return usage();
     if (!strcmp(argv[1], "engines")) return cmd_engines();
+    if (!strcmp(argv[1], "bomb")) return fixed_run_cli(argc, argv);
     if (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")) {
         usage();
         return EXIT_OK;

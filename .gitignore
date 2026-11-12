@@ -1,3 +1,6 @@
 build*/
 build*.log
 machine-report-*.txt
+# FixedRunBomb work directories and tables made by the documented commands
+/bomb-work*/
+/fixed-run-*.frb

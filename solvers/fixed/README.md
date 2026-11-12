@@ -9,4 +9,4 @@ Planned use: a neural evaluator will score the legal destinations of a link
 engine keeps full backtracking. The evaluator only changes the order in which
 moves are tried; the search remains exhaustive, so answers stay exact.
 
-Not part of Milestone 0.
+Not part of Milestones 0 to 2.

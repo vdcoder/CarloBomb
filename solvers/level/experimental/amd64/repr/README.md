@@ -10,6 +10,14 @@ byte-identical to what `benchmarks/ASM_RESULTS.md` measured (machine code
 SHA-256 beginning `813d603827156ce1`); it remains engine `amd64-asm` and the
 default assembly kernel.
 
+**Decision (review of 2026-11-12):** `amd64-auto` is the project's preferred
+experimental AMD64 engine. `amd64-asm` is preserved as it is, the C solver
+stays the default engine, and all the experimental kernels stay in the
+registry for future comparisons. The follow-up measurements the review asked
+for are in `benchmarks/WORKLOAD_RESULTS.md`; two of them (hardware counters,
+a second processor family) are still to be made, with
+`benchmarks/measure_machine.sh`.
+
 ## Outcome
 
 Speedup over the reference assembly kernel, kernel time only, geometric mean
@@ -45,8 +53,9 @@ In short:
 - **The largest single gain came from what bitmaps make possible**, not from
   where the bits live: skipping the certain failures of a link loop
   arithmetically.
-- **All of it together is about 20%**, because most of the kernel's time is
-  not graph access at all (see "Why the gains are bounded").
+- **All of it together is about 20%**, because most of the kernel's time
+  appears not to be graph access at all (see "Why the gains are bounded";
+  that explanation is a hypothesis until hardware counters confirm it).
 
 ## How the experiments are built
 
@@ -84,6 +93,7 @@ selection is valid for every budget.
 | `n8x` | `n8s-bmi2` plus bulk accounting | ≤ 8 | BMI2 |
 | `hybx` | `hyb` plus bulk accounting | any | BMI2 |
 | `auto` | `n8x` up to 8 nodes and `hybx` above; without BMI2, `n8s` for 4 to 8 and `hyb` otherwise | any | — |
+| `n8x-count`, `hybx-count` | benchmark only: `n8x` / `hybx` with search-accounting counters | ≤ 8 / any | BMI2 |
 
 ```bash
 ./build/carlobomb engines                                   # this list, with availability
@@ -195,7 +205,10 @@ and the search continues exactly as before.
 
 This is the same search: the same steps are counted, in the same order
 relative to every success, and nothing is skipped that the per-node code
-would have explored. Where doing it arithmetically could be observed (fewer
+would have explored. Measured with the counting kernels (`n8x-count`,
+`hybx-count`; benchmark only), 7–14% of the logical steps are accounted for
+this way and the rest executed one at a time
+(`benchmarks/WORKLOAD_RESULTS.md`). Where doing it arithmetically could be observed (fewer
 than 256 steps left before the step limit, the stack full, or an existing
 node without a color) the kernel uses the per-node code instead.
 
@@ -241,12 +254,21 @@ gain is a few percent. Beyond 8 nodes the links no longer fit one register;
 
 The same searches run at 1.3–1.8 ticks per step when the workload is small
 enough for the branch predictor to memorize, and at 3.7–4.6 ticks per step
-on a realistic workload (section 5 of the results file). Roughly 55–70% of
-the kernel's time is therefore branch misprediction: at each bit the search
-asks whether a node has the target color, the answer is close to a coin
-flip, and the two outcomes lead to different code.
+on a realistic workload (section 5 of the results file). The working
+hypothesis is that roughly 55–70% of the kernel's time is branch
+misprediction: at each bit the search asks whether a node has the target
+color, the answer is close to a coin flip, and the two outcomes lead to
+different code.
 
-A representation can only do two things about that:
+This is an inference from timing, not a hardware measurement. Memorizing a
+small workload changes more than branch prediction (the same few targets
+also stay in every cache), and no branch-miss counter has been read: the
+machine used has none. `benchmarks/characterize` reports cycles,
+instructions, branches and branch misses per step on machines that do.
+Until that has been run, what follows is the best available explanation,
+not an established fact.
+
+If it holds, a representation can only do two things about that:
 
 1. Let the mispredicted branch resolve sooner, by shortening the chain of
    operations that feeds it. That is what the register layouts do, and it is
@@ -272,8 +294,20 @@ operations per step.
 The no-BMI2 column uses kernels that were measured here, but on a CPU that
 has BMI2; it has not been run on one that lacks it.
 
-`auto` is an engine beside `asm`, not a replacement for it. On searches of a
-few hundred steps or less it is 4–10% slower than `asm` through the API.
+`auto` is an engine beside `asm`, not a replacement for it.
+
+Short searches: an earlier version of this file said `auto` is 4–10% slower
+than `asm` on searches of a few hundred steps. That was measured on three
+single targets, each repeated many thousands of times, which the branch
+predictor learns by heart. On thousands of different short searches `auto`
+is the faster one at every budget from 3 to 8, completed or cut off
+(`benchmarks/WORKLOAD_RESULTS.md`). The earlier figure describes one tiny
+search repeated, nothing more.
+
+How a CPU without BMI2 is handled can be checked on one that has it:
+`cb_amd64_isa_limit` masks instruction sets off, the test suite runs the
+baseline selection that way, and `carlobomb engines` prints the instruction
+sets found and the kernel `auto` runs for each budget.
 
 ## Correctness
 
@@ -291,6 +325,12 @@ normal test suite. Beyond that, run by hand:
 
 The reference kernel's own tests and results are unchanged.
 
+Added after the review: the two counting kernels (the full suite plus
+300,000 random cases each, no differences), a test of the counters
+themselves, and a test that masks BMI2 and AVX-512 off and checks that
+`auto` then selects the baseline kernels and that they still agree with the
+C solver.
+
 ## Limits of this evidence
 
 - One processor (Intel Emerald Rapids) in a shared VM. Branch predictors and
@@ -298,8 +338,8 @@ The reference kernel's own tests and results are unchanged.
   families; the ordering of the close results (`n8g` against `hyb`, BMI2
   against baseline shifts) could change elsewhere. The large results (A and
   C slower, `n8x` fastest for 4 to 8) have wide margins.
-- No hardware counters. The misprediction share comes from the memorization
-  experiment, not from a counter.
+- No hardware counters. The misprediction share is a hypothesis drawn from
+  the memorization experiment, not a counter reading.
 - Workloads are pseudo-random targets with a step cap. The ten fixed
   workloads of the earlier benchmark agree with them.
 - The bulk option and the fastest kernels need BMI1/BMI2. A baseline
@@ -315,7 +355,8 @@ The reference kernel's own tests and results are unchanged.
   the one thing no single-search kernel can do; the memorization experiment
   shows what is at stake (the scalar kernel runs about 2.5 times faster when
   its branches are predicted). It is a different kernel, not a variant of
-  this one, and nothing here measures it.
+  this one, and nothing here measures it. A design note is in
+  `bombs/fixed-run/MULTI_SEARCH_SIMD.md`.
 - **Deciding several bits ahead without branching.** Evaluating the next two
   or three bits of a deterministic stretch with conditional moves and
   branching once on the outcome was worked through on paper and not built:

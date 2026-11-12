@@ -42,7 +42,7 @@
 #define CARLOBOMB_REVISION "unknown"
 #endif
 
-#define MAX_KERNELS 16
+#define MAX_KERNELS 32
 #define MAX_LIST 16
 #define MAX_TARGETS 8192
 #define MAX_ROUNDS 64
@@ -134,6 +134,10 @@ int main(int argc, char **argv) {
             for (; p; p = strstr(p + 1, name))
                 if ((p == klist || p[-1] == ',') && (p[len] == ',' || p[len] == '\0')) hit = 1;
             if (!hit) continue;
+        } else {
+            /* the "-count" kernels are benchmark-only twins; compare them only on request */
+            size_t len = strlen(name);
+            if (len > 6 && strcmp(name + len - 6, "-count") == 0) continue;
         }
         if (!cb_amd64_kernel_available(k)) {
             fprintf(stderr, "kernel %s not available on this CPU, skipped\n", name);

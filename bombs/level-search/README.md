@@ -14,4 +14,4 @@ N+1 nodes (or more) from an N-node frontier is complete only if every branch
 that was cut off by the budget can be reopened. An artifact holding only the
 matching partial graphs would silently lose solutions.
 
-Not part of Milestone 0.
+Not part of Milestones 0 to 2.

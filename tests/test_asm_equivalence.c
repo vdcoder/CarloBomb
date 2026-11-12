@@ -241,7 +241,9 @@ static void run_direct(CbAsmState *s, const char *t, size_t len, int max, uint64
     RevLevelOptions opt = {max_steps};
     RevSolveResult want = rev_level_solve_amd64_cap(t, len, max, &opt, cap, &ref, &rs);
 
+    static CbAsmCounters direct_counters; /* for the counting kernels */
     memset(s, 0x5A, sizeof *s); /* the kernel must not depend on old contents */
+    s->scratch[1] = (uint64_t)(uintptr_t)&direct_counters;
     s->target = t;
     s->target_len = len;
     s->step_limit = max_steps ? max_steps : UINT64_MAX;
@@ -413,6 +415,128 @@ static void test_fuzz(long n) {
     (void)capped;
 }
 
+/*
+ * Kernel selection by instruction set.  The limit lets the choice a CPU
+ * without BMI2 or AVX-512 would get be exercised here: kernels that need the
+ * masked sets must report unavailable, "auto" must fall back to baseline
+ * kernels, and those must still agree with the C solver.
+ */
+static void test_isa_selection(void) {
+    unsigned detected = cb_amd64_isa();
+    int auto_k = cb_amd64_kernel_find("auto");
+    CHECK(auto_k >= 0 && cb_amd64_kernel_select(auto_k) == 0);
+
+    for (int pass = 0; pass < 2; pass++) {
+        unsigned isa = pass == 0 ? detected : 0;
+        cb_amd64_isa_limit(isa);
+        CHECK(cb_amd64_isa() == isa);
+        CHECK(cb_amd64_kernel_select(auto_k) == 0);
+        for (int n = 1; n <= REV_LEVEL_MAX_NODES; n++) {
+            const CbAmd64Kernel *k = cb_amd64_kernel_info(cb_amd64_kernel_used(n));
+            const char *want = (isa & CB_ISA_BMI2) ? (n <= 8 ? "n8x" : "hybx")
+                                                   : (n >= 4 && n <= 8 ? "n8s" : "hyb");
+            CHECK_MSG(k && strcmp(k->name, want) == 0, "isa %u budget %d: auto uses %s, expected %s",
+                      isa, n, k ? k->name : "?", want);
+            CHECK(k && (k->isa & isa) == k->isa && k->max_nodes >= n);
+        }
+        for (int k = 0; k < cb_amd64_kernel_count(); k++) {
+            /* available exactly when every kernel on its fallback chain is allowed */
+            int ok = 1;
+            for (int i = k; i >= 0; i = cb_amd64_kernel_info(i)->fallback) {
+                const CbAmd64Kernel *info = cb_amd64_kernel_info(i);
+                if ((info->isa & isa) != info->isa) ok = 0;
+                if (info->max_nodes >= REV_LEVEL_MAX_NODES) break;
+            }
+            CHECK_MSG(cb_amd64_kernel_available(k) == ok, "isa %u kernel %s", isa,
+                      cb_amd64_kernel_info(k)->name);
+            if (!ok) CHECK(cb_amd64_kernel_select(k) != 0);
+        }
+        if (pass == 1) {
+            /* the baseline selection, end to end */
+            CHECK(cb_amd64_kernel_select(auto_k) == 0);
+            test_corpus();
+            test_benchmark_targets();
+            /* limiting while a now-unavailable kernel is selected falls back to kernel 0 */
+            cb_amd64_isa_limit(detected);
+            int bmi = cb_amd64_kernel_find("n8x");
+            if (cb_amd64_kernel_select(bmi) == 0) {
+                cb_amd64_isa_limit(0);
+                CHECK(cb_amd64_kernel_selected() == 0);
+            }
+        }
+    }
+    cb_amd64_isa_limit(~0u);
+    CHECK(cb_amd64_isa() == detected);
+    cb_amd64_kernel_select(0);
+}
+
+/*
+ * Search-accounting counters of the "-count" kernels: they never change a
+ * result, bulk steps are whole attempts (3 steps each) and never exceed the
+ * logical steps, they are zero when the step limit keeps the kernel in
+ * per-node mode, and they are substantial on a search-heavy target.
+ */
+static void test_counters(void) {
+    int kc = cb_amd64_kernel_find("n8x-count");
+    if (kc < 0 || cb_amd64_kernel_select(kc) != 0) {
+        printf("counting kernels skipped: this CPU lacks an instruction set they need\n");
+        return;
+    }
+    const CbAsmCounters *c = cb_amd64_counters();
+    struct { const char *t; int max; } in[] = {
+        {"0110100110010110", 6}, {"001011011101111011111", 7}, {"0001101100101110100111", 6},
+        {"010010001", 3}, {"0110100110010110", 12},
+    };
+    for (size_t i = 0; i < sizeof in / sizeof *in; i++) {
+        RevGraph g, gc;
+        RevLevelStats st, sc;
+        size_t len = strlen(in[i].t);
+        RevSolveResult want = rev_level_solve_ex(in[i].t, len, in[i].max, NULL, &gc, &sc);
+
+        cb_amd64_counters_reset();
+        CHECK(c->bulk_steps == 0 && c->bulk_scans == 0 && c->bulk_loops == 0);
+        RevSolveResult r = rev_level_solve_amd64_ex(in[i].t, len, in[i].max, NULL, &g, &st);
+        CHECK(r == want && st.steps == sc.steps && st.peak_stack == sc.peak_stack);
+        CHECK(c->bulk_steps % 3 == 0 && c->bulk_steps < st.steps);
+        CHECK(c->bulk_scans >= c->bulk_loops);
+        CHECK(c->fallback_steps == 0 && c->fallback_stack == 0 && c->fallback_uncolored == 0);
+        if (st.steps > 100000)
+            CHECK_MSG(c->bulk_steps * 20 > st.steps, "%s: only %llu of %llu steps in bulk", in[i].t,
+                      (unsigned long long)c->bulk_steps, (unsigned long long)st.steps);
+
+        /* counters accumulate until reset */
+        uint64_t once = c->bulk_steps;
+        CHECK(rev_level_solve_amd64_ex(in[i].t, len, in[i].max, NULL, &g, &st) == want);
+        CHECK(c->bulk_steps == 2 * once);
+
+        /* fewer steps allowed than the bulk margin: nothing may be done in bulk */
+        RevLevelOptions opt = {200};
+        cb_amd64_counters_reset();
+        RevSolveResult rl = rev_level_solve_amd64_ex(in[i].t, len, in[i].max, &opt, &g, &st);
+        RevSolveResult cl = rev_level_solve_ex(in[i].t, len, in[i].max, &opt, &gc, &sc);
+        CHECK(rl == cl && st.steps == sc.steps);
+        CHECK(c->bulk_steps == 0 && c->bulk_scans == 0);
+        if (sc.steps == 200) CHECK(c->fallback_steps > 0 || c->bulk_loops == 0);
+    }
+
+    /* A full stack sends a link loop to the per-node code.  Which capacity
+     * makes a CTRL link loop start exactly at the top is not known in
+     * advance, so try them all; the results themselves are compared with
+     * the C solver in test_stack_capacity. */
+    RevGraph g;
+    RevLevelStats st;
+    uint64_t stack_fallbacks = 0;
+    for (int cap = 1; cap <= 57; cap++) {
+        cb_amd64_counters_reset();
+        rev_level_solve_amd64_cap("001011011101111011111", 21, 7, NULL, cap, &g, &st);
+        stack_fallbacks += c->fallback_stack;
+        CHECK(c->bulk_steps % 3 == 0 && c->bulk_steps < st.steps + 3);
+    }
+    CHECK(stack_fallbacks > 0);
+    cb_amd64_counters_reset();
+    cb_amd64_kernel_select(0);
+}
+
 /* Everything above, for the selected kernel. */
 static void test_selected_kernel(long fuzz_cases) {
     long cases0 = cases, solved0 = solved;
@@ -452,5 +576,9 @@ int main(int argc, char **argv) {
     }
     CHECK(ran > 0);
     cb_amd64_kernel_select(0);
+    if (!only) {
+        test_isa_selection();
+        test_counters();
+    }
     return t_report("test_asm_equivalence");
 }

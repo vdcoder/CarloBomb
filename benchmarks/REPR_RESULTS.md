@@ -146,6 +146,10 @@ C time / assembly time, medians.
 - On the search-heavy rows `auto` takes 79–92% of the time `asm` takes in the
   GCC build's runs and 76–86% in the Clang build's (the kernels are the same
   machine code in both builds; the two builds were run minutes apart).
+- *(Note added 2026-11-12: the next point holds for one tiny search repeated
+  many times, as measured here, and not for short searches in general; see
+  `WORKLOAD_RESULTS.md`, where `auto` is faster on thousands of distinct
+  short searches.)*
 - On the three tiny rows (19 to 709 steps) `auto` is 4–10% slower than `asm`
   through the API. These runs take well under a microsecond, are dominated
   by the wrapper, and at this size the branch predictor has memorized the
@@ -155,6 +159,12 @@ C time / assembly time, medians.
   recorded in `ASM_RESULTS.md` (3.29–3.40, 2.67–2.84 there).
 
 ## 5. How much of the time is branch misprediction
+
+*(Note added 2026-11-12: the conclusion of this section is a hypothesis. It
+rests on a timing experiment, not on hardware counters, and a memorized
+workload differs from a realistic one in more than branch prediction.
+`characterize` measures branch misses directly where a machine provides
+counters; that measurement has not been made yet.)*
 
 The same kind of search on the reference kernel (`asm`), measured once with
 a workload small enough for the branch predictor to learn by heart (about

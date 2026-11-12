@@ -35,8 +35,13 @@ DIR/level-NN.txt         report of level NN: distribution, maximum, cost
 3. Memory: the coordinating process needs about 2 GB at level 24; each
    worker a few MB.
 4. Keep Windows awake: Settings, System, Power, Sleep: Never. A sleeping
-   host stops WSL. (If it happens anyway, nothing is lost; see "If it
-   stops".)
+   host stops WSL.
+5. Keep the WSL terminal window open for the night. When the last WSL
+   window is closed, Windows shuts the distribution down after a short idle
+   time, background processes included, `nohup` or not.
+
+If either happens anyway, or Windows restarts for an update, nothing is
+lost: see "If it stops".
 
 ## Build and test
 
@@ -66,10 +71,17 @@ build/ladder_pilot --bits 20,22,24 --samples 4000 --workers 6
 build/ladder_pilot --bits 20,22,24 --samples 4000 --workers 10
 ```
 
+```bash
+build/ladder_pilot --bits 20,22,24 --samples 4000 --workers 16
+```
+
 The last lines of each run project the whole ladder at this machine's
-measured throughput. Use the faster of the two. Workers take jobs from a
-shared counter, so a slow efficiency core does fewer jobs and holds nothing
-up; 10 should not be slower than 6. If in doubt: 10.
+measured throughput for that many processes. Use the fastest. The
+i5-14400F has 6 performance cores with two threads each and 4 efficiency
+cores: 6, 10 and 16 are one process per performance core, per core, and per
+hardware thread. Workers take jobs from a shared counter, in the pilot as
+in the construction, so a slow core or a second thread does fewer jobs and
+holds nothing up; more workers should not be slower. If in doubt: 10.
 
 ## The run
 

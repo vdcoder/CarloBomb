@@ -781,6 +781,91 @@ static void test_other_witnesses(const RevFixedBomb *b, const FrbTable *t) {
            differ);
 }
 
+#ifdef CARLOBOMB_HAVE_BOMB_BUILD
+/*
+ * A Bomb of more than 16 bits: format version 2 and an index of 32-bit
+ * numbers.  The 17-bit table is built here from the 16-bit one (one rung of
+ * the ladder), and everything it says about strings of up to 16 bits must
+ * be what the 16-bit Bomb says.
+ */
+static void test_longer_bomb(const RevFixedBomb *b16, const char *file16) {
+    static const uint32_t atlas17[9] = {0, 2, 6, 64, 966, 15740, 102914, 11378, 2};
+    const char *dir = in_scratch("ladder");
+    char file17[1400], target[FRB_MAX_BITS + 2], err[FRB_ERR_TEXT] = "";
+    uint32_t hist[FRB_MAX_NODES + 1];
+    unsigned long long wrong = 0, strings = 0;
+    FrbRunOptions opt;
+    FrbLadderResult res;
+    FrbConfig settings;
+    RevFixedBomb *b = NULL;
+    RevFixedBombInfo info;
+    FrbTable t;
+    RevGraph g;
+    FrbError e;
+
+    remove_tree(dir);
+    frb_config_default(&settings, 1);
+    settings.workers = 4;
+    settings.format = 0;
+    settings.max_nodes = 0;
+    snprintf(settings.engine, sizeof settings.engine, "%s", engine_name);
+    frb_run_options_default(&opt);
+    opt.solve = engine;
+    opt.progress_seconds = 0;
+    e = frb_ladder_run(dir, file16, 17, &settings, &opt, &res, err, sizeof err);
+    CHECK_MSG(e == FRB_OK && res.complete, "one rung up from the 16-bit Bomb: %s (%s)", frb_error_str(e), err);
+    snprintf(file17, sizeof file17, "%s/fixed-run-17.frb", dir);
+    CHECK(frb_file_read(file17, &t, NULL, NULL) == FRB_OK && t.format->version == 2);
+    CHECK(rev_fixed_bomb_open(file17, &b, NULL) == FRB_OK);
+    if (!b || !t.entries) return;
+    CHECK(rev_fixed_bomb_bits(b) == 17 && rev_fixed_bomb_max_nodes(b) == 8);
+
+    for (int len = 1; len <= 17; len++) {
+        for (uint32_t v = 0; v < (1u << len); v++) {
+            int want = 99, ok;
+            uint32_t want_index = 0, first = v << (17 - len), span = 1u << (17 - len);
+            for (uint32_t i = first; i < first + span; i++) /* direct scan of the table */
+                if (frb_table_nodes(&t, i) < want) {
+                    want = frb_table_nodes(&t, i);
+                    want_index = i;
+                }
+            frb_target_format(v, len, target);
+            ok = rev_fixed_bomb_solve(b, target, (size_t)len, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL;
+            ok = ok && info.min_nodes == want && info.extension == want_index && info.bomb_bits == 17;
+            ok = ok && g.node_count == want && rev_verify_prefix(&g, target, (size_t)len, NULL) == REV_OK;
+            ok = ok && rev_fixed_bomb_min_nodes(b, len, v) == want;
+            ok = ok && rev_fixed_bomb_extension(b, len, v) == want_index;
+            /* what the 16-bit Bomb says about the same string */
+            if (len <= 16) ok = ok && rev_fixed_bomb_min_nodes(b16, len, v) == want;
+            else /* not fewer nodes than its first 16 bits; at most one fewer than its last 16 */
+                ok = ok && want >= rev_fixed_bomb_min_nodes(b16, 16, v >> 1) &&
+                     want + 1 >= rev_fixed_bomb_min_nodes(b16, 16, v & 0xFFFFu) && info.extension == v;
+            if (len == 9) ok = ok && rev_fixed_bomb_solve(b, target, 9, want - 1, &g, &info) ==
+                                         (want > 1 ? REV_FIXED_BOMB_PROVEN_UNSAT : REV_FIXED_BOMB_MINIMAL);
+            strings++;
+            if (!ok && wrong++ < 5) CHECK_MSG(ok, "17-bit Bomb: wrong answer for %s", target);
+        }
+        rev_fixed_bomb_histogram(b, len, hist);
+        for (int n = 0; n <= FRB_MAX_NODES; n++) {
+            uint32_t expect = len == 17 ? (n <= 8 ? atlas17[n] : 0) : (n < 8 ? atlas[len][n] : 0);
+            CHECK_MSG(hist[n] == expect, "17-bit Bomb, %d-bit strings needing %d nodes: %u", len, n,
+                      (unsigned)hist[n]);
+        }
+    }
+    CHECK(strings == 262142 && wrong == 0);
+    /* One bit more than it holds.  Its last 17 bits need 8 nodes, so it needs 7 at least. */
+    CHECK(rev_fixed_bomb_solve(b, "000000000000000001", 18, 0, &g, &info) == REV_FIXED_BOMB_UNSUPPORTED);
+    CHECK(info.bomb_bits == 17 && info.lower_bound == 7 && g.node_count == 0);
+    CHECK(rev_fixed_bomb_lower_bound(b, "000000000000000001", 18) == 7);
+    CHECK(rev_fixed_bomb_lower_bound(b, "000000000000000010", 18) == 8); /* its first 17 need 8 */
+    rev_fixed_bomb_close(b);
+    frb_table_destroy(&t);
+    printf("longer Bomb: a 17-bit Bomb (format 2, 32-bit index) answers all %llu strings of 1 to 17 bits;\n"
+           "             for 1 to 16 bits exactly as the 16-bit Bomb does\n",
+           strings);
+}
+#endif
+
 int main(int argc, char **argv) {
     const char *bomb_file = NULL;
     char built[1300];
@@ -836,6 +921,9 @@ int main(int argc, char **argv) {
         test_suffix_lemma(b, &t);
         test_longer(b);
         if (cross_bits > 0) test_cross_check(b, cross_bits);
+#ifdef CARLOBOMB_HAVE_BOMB_BUILD
+        if (cross_bits == 16) test_longer_bomb(b, bomb_file); /* 32,768 searches: not for a slow build */
+#endif
     }
     rev_fixed_bomb_close(b);
     frb_table_destroy(&t);

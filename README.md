@@ -7,9 +7,10 @@ REV that emits a given string.
 **Status: Milestone 1 in progress.** Milestone 0 delivered the REV execution
 model, the preserved historical C solver, a reusable C LevelSolver, a
 MinimalSolver, independent verification and baseline benchmarks. Milestone 1
-adds an experimental hand-written AMD64 assembly search kernel that performs
-the same search about 3x faster on the machine measured. The C solver is
-still the default. No neural guidance, parallelism or Bombs yet.
+adds experimental hand-written AMD64 assembly search kernels that perform
+the same search 3 to 4 times faster on the machine measured, and a study of
+how the kernel should store the graph. The C solver is still the default. No
+neural guidance, parallelism or Bombs yet.
 
 ## Build and test
 
@@ -60,14 +61,16 @@ Node   Color   Link0   Link1
 Verification: PASS
 ```
 
-`solve`, `level` and `bench` accept `--engine c` (default) or
-`--engine amd64-asm` (experimental, Linux x86-64 builds only):
+`solve`, `level` and `bench` accept `--engine c` (default) or, in Linux
+x86-64 builds, an experimental assembly engine:
 
 ```bash
-./build/carlobomb level --target 010010001 --nodes 4 --engine amd64-asm
+./build/carlobomb engines                                              # list them
+./build/carlobomb level --target 010010001 --nodes 4 --engine amd64-asm   # reference assembly kernel
+./build/carlobomb solve --target 010010001 --engine amd64-auto            # fastest kernel for the budget
 ```
 
-Both engines give the same answers, graphs and step counts.
+All engines give the same answers, graphs and step counts.
 
 `--max-steps K` caps search effort per node budget. Exit status: 0 success;
 1 no solution within the budget, or verification failed; 2 bad usage or
@@ -97,12 +100,14 @@ solvers/level/fastest/c/     legacy_original.c (historical, unmodified) and the
                              parameterized level_solver built from it
 solvers/level/experimental/  challengers
   amd64/asm/                 AMD64 assembly search kernel (Linux, System V ABI)
+  amd64/repr/                graph-representation experiments built on it
 solvers/minimal/             MinimalSolver: LevelSolver at budgets 1, 2, 3, ...
 solvers/fixed/               FixedSolver (planned)
 bombs/                       FixedRunBomb, LevelSearchBomb (planned)
 tests/                       unit tests, exhaustive oracle, legacy and assembly
                              equivalence, CLI check
-benchmarks/                  baseline.c (BASELINE.md), asm_comparison.c (ASM_RESULTS.md)
+benchmarks/                  baseline.c (BASELINE.md), asm_comparison.c (ASM_RESULTS.md),
+                             repr_comparison.c (REPR_RESULTS.md)
 tools/carlobomb.c            command-line tool
 ```
 
@@ -129,11 +134,11 @@ tests and wins a reproducible benchmark.
    unmodified legacy kernel and LevelSolver side by side and requires the
    same verdict and the same graph.
 5. **Assembly equivalence** (`tests/test_asm_equivalence.c`, Linux x86-64).
-   Requires the assembly engine to match the C LevelSolver on status, graph,
-   step count, peak stack depth and limit behavior, and checks the kernel's
-   memory use with guard bytes, guard pages and a register-preservation
-   check. The oracle is also run against the assembly engine
-   (`test_oracle_amd64`).
+   Requires every assembly kernel to match the C LevelSolver on status,
+   graph, step count, peak stack depth and limit behavior, and checks each
+   kernel's memory use with guard bytes, guard pages and a
+   register-preservation check. The oracle is also run against every
+   assembly kernel (`test_oracle_amd64`).
 
 ## Limits
 
@@ -164,3 +169,11 @@ Method in `benchmarks/README.md`, recorded results in
 Compares the C LevelSolver with the AMD64 assembly engine (Linux x86-64).
 Recorded results in `benchmarks/ASM_RESULTS.md`; design and optimization log
 in `solvers/level/experimental/amd64/asm/README.md`.
+
+```bash
+./build/repr_comparison
+```
+
+Compares the assembly kernels with each other by node budget and target
+length. Recorded results in `benchmarks/REPR_RESULTS.md`; the experiments
+and what they showed in `solvers/level/experimental/amd64/repr/README.md`.

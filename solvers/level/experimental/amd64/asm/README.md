@@ -12,6 +12,13 @@ engine.
 | `asm_solver.c/.h` | C wrapper: validation, graph export and completion, independent verification, public API. |
 | `asm_layout.h` | State layout shared by C and assembly, checked with `_Static_assert`. |
 
+This kernel is the **reference** for the later graph-representation
+experiments in `../repr`, which are faster at most node budgets (engine
+`amd64-auto`). It is kept unchanged: it is the simplest of the assembly
+kernels, needs only baseline x86-64, and every other kernel is measured
+against it. `asm_solver.c` holds the registry through which the kernels are
+selected; this one is kernel 0 and the default.
+
 Built only for Linux x86-64 (`CARLOBOMB_AMD64_ASM`, default ON there). On any
 other platform it is not compiled and `--engine amd64-asm` is rejected.
 

@@ -43,3 +43,28 @@ not evidence that either implementation is faster in general.
   with Clang; the assembly object is the same in both.
 
 Recorded results are in `ASM_RESULTS.md`.
+
+## Kernel comparison by budget and length
+
+`repr_comparison.c` compares the assembly kernels with one another.
+
+    ./build/repr_comparison                         # all kernels, budgets 3-8
+    ./build/repr_comparison -k hyb,n8x -n 4,8,12 -l 16,32
+
+- A cell is one node budget and one target length. Its workload is a fixed
+  set of pseudo-random targets, each searched with a step cap (200,000), so
+  every kernel performs the same steps; result codes and step counts are
+  checked to agree.
+- The set is grown until one pass is at least 1.5 million steps. A short
+  workload repeated many times is memorized by the branch predictor and runs
+  two to three times faster than the same searches would in real use; `-s`
+  sets the size, and a small value reproduces that effect on purpose.
+- Only the kernel is timed (no validation, export or verification).
+- Timing is round-robin with rotating order; a kernel's speedup is the
+  median over rounds of (reference time / kernel time) within the same
+  round, which cancels slow drift of the machine. The reference is kernel 0,
+  the unmodified kernel of `search_sysv.S`.
+- `asm_comparison -k NAME` runs the C-versus-assembly benchmark above with
+  another kernel, for example `-k auto`.
+
+Recorded results are in `REPR_RESULTS.md`.

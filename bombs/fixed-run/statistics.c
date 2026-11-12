@@ -274,7 +274,8 @@ static void print_effort(FILE *out, const FrbState *s) {
     fprintf(out, "  sessions      %u, %.2f s of wall-clock time", (unsigned)s->sessions,
             secs(s->session_ns));
     if (s->sessions_unfinished)
-        fprintf(out, " (not counting %u that did not end normally)", (unsigned)s->sessions_unfinished);
+        fprintf(out, " (not counting %u that has not ended: running now, or killed)",
+                (unsigned)s->sessions_unfinished);
     fprintf(out, "\n");
     fprintf(out, "  journal       %s bytes in %u segment(s), %s records\n", commas(s->journal.bytes),
             (unsigned)s->journal.segments, commas(s->journal.records));

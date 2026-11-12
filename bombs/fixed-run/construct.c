@@ -791,6 +791,24 @@ static int lock_dir(const char *dir, char *err, size_t errlen, FrbError *e) {
     return fd;
 }
 
+/*
+ * A number that changes whenever a round has achieved anything: a part
+ * enumerated, a witness found, a budget excluded, a limit recorded at a new
+ * budget or with a new size.  A round that leaves it unchanged would be
+ * planned again unchanged, so the session stops instead of looping.
+ */
+static uint64_t progress_mark(const FrbState *s) {
+    uint64_t mark = 0;
+    for (int n = 1; n <= FRB_NODE_CAPACITY; n++) mark += s->parts_done[n];
+    for (uint32_t i = 0; i < s->count; i++) {
+        const FrbTargetState *ts = &s->targets[i];
+        mark = mark * 0x100000001B3ull + ts->lower_bound + ((uint64_t)ts->nodes << 8) +
+               ((uint64_t)ts->limit_budget << 16) + ((uint64_t)ts->limit_kind << 24) +
+               (ts->limit_max_steps << 32) + (ts->limit_max_steps >> 32);
+    }
+    return mark;
+}
+
 static FrbError first_conflict(const FrbState *s, char *err, size_t errlen) {
     char target[FRB_MAX_BITS + 1];
     if (!s->conflicts) return FRB_OK;
@@ -868,6 +886,7 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
     sample_left = opt->sample;
 
     while (e == FRB_OK && !should_stop()) {
+        uint64_t mark = progress_mark(state);
         Progress total;
         Job *jobs = NULL;
         size_t count = 0;
@@ -940,9 +959,10 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
         state = NULL;
         e = frb_state_load(dir, cfg, &state, err, errlen);
         if (e != FRB_OK) break;
-        if (total.jobs == 0 && !should_stop()) {
-            set_err(err, errlen, "a round finished without completing a job");
-            e = FRB_ERR_IO;
+        if (!should_stop() && (total.jobs == 0 || progress_mark(state) == mark)) {
+            set_err(err, errlen, "a round of %llu jobs changed nothing; stopping rather than repeat it",
+                    (unsigned long long)total.jobs);
+            e = FRB_ERR_EVIDENCE;
         }
     }
     if (e == FRB_OK && state) e = first_conflict(state, err, errlen);

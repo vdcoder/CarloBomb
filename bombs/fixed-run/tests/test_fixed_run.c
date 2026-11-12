@@ -801,6 +801,32 @@ static void test_resume_job_caps(void) {
     CHECK(start(ref, &cfg) == FRB_OK && run(ref, &cfg, &opt, &res) == FRB_OK && res.complete);
     finalize_ok(ref, ref_file);
 
+    /* A node count is enumerated when all of its parts are, not before:
+     * stopped after 3 of the 9 parts of three-node graphs, nothing may yet
+     * be said to need four nodes. */
+    {
+        const char *half = in_base("caps-half");
+        int max_lower = 0;
+        CHECK(start(half, &cfg) == FRB_OK);
+        opt.limit_jobs = 8;
+        CHECK(run(half, &cfg, &opt, &res) == FRB_OK && !res.complete && res.jobs == 8);
+        check_sound(half, &cfg);
+        s = load(half, &cfg);
+        if (s) {
+            for (uint32_t i = 0; i < s->count; i++)
+                if (s->targets[i].lower_bound > max_lower) max_lower = s->targets[i].lower_bound;
+            CHECK(s->enum_complete == 2 && s->parts_done[3] == 3 && max_lower == 3);
+            CHECK(s->by_status[FRB_MINIMAL] > 8 && s->by_status[FRB_MINIMAL] < ref_count_upto(9, 3));
+            frb_state_free(s);
+        }
+        /* The remaining six parts, then the searches. */
+        opt.limit_jobs = 0;
+        CHECK(run(half, &cfg, &opt, &res) == FRB_OK && res.complete);
+        check_complete(half, &cfg);
+        Tally th = tally(half, &cfg);
+        CHECK(th.duplicates == 0);
+    }
+
     CHECK(start(dir, &cfg) == FRB_OK);
     opt.limit_jobs = 5; /* the 1 + 4 parts of one- and two-node graphs */
     CHECK(run(dir, &cfg, &opt, &res) == FRB_OK);
@@ -1156,6 +1182,28 @@ static void test_forged_evidence(void) {
         CHECK(s->by_status[FRB_EMPTY] == 62 && s->by_status[FRB_UNRESOLVED] == 2 && s->conflicts == 0);
         frb_state_free(s);
     }
+    /* Without symmetry there is no complement to give a wrong graph away:
+     * the graph itself must be run. */
+    memset(&rec, 0, sizeof rec);
+    rec.type = FRB_REC_SEARCH;
+    rec.result = REV_SOLVE_SOLVED;
+    rec.budget = 6;
+    rec.target = 23;
+    rec.nodes = 6;
+    frb_ring_witness(22, 6, &g);
+    CHECK(frb_graph_pack(&g, rec.graph) == FRB_OK);
+    append_record(dir, &cfg, 3, &rec);
+    s = NULL;
+    CHECK(frb_state_load(dir, &cfg, &s, last_err, sizeof last_err) == FRB_ERR_JOURNAL && s == NULL);
+    CHECK(strstr(last_err, "does not emit the target it is recorded for") != NULL);
+    CHECK(unlink(segment_file(dir, 3)) == 0);
+    rec.type = FRB_REC_ENUM_WITNESS; /* the same from "enumeration" */
+    rec.result = 0;
+    rec.aux = 0;
+    append_record(dir, &cfg, 3, &rec);
+    CHECK(frb_state_load(dir, &cfg, &s, last_err, sizeof last_err) == FRB_ERR_JOURNAL && s == NULL);
+    CHECK(unlink(segment_file(dir, 3)) == 0);
+
     cfg.fallback_ring = 1; /* the same journal, with the ring standing in */
     s = load(dir, &cfg);
     if (s) {

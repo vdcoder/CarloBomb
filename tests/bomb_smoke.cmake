@@ -135,7 +135,7 @@ if(MODE STREQUAL "small")
     # Without the assembly solver the default is C, and asking for an
     # assembly engine falls back to C with a notice.
     run(0 "engine c.*COMPLETE" bomb build --bits 9 --work-dir ${W}/f --enumerate-max 2 --progress 0)
-    run(0 "note: engine amd64-auto is not available here.*engine c" bomb resume --work-dir ${W}/f --engine amd64-auto --progress 0)
+    run(0 "with engine c,.*note: engine amd64-auto is not available here" bomb resume --work-dir ${W}/f --engine amd64-auto --progress 0)
   endif()
 
   # A table checked against the journal of some other construction.

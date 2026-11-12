@@ -102,7 +102,7 @@ static void put_bits(uint8_t *buf, unsigned pos, unsigned width, unsigned value)
 static unsigned get_bits(const uint8_t *buf, unsigned pos, unsigned width) {
     unsigned v = 0;
     for (unsigned k = 0; k < width; k++)
-        v |= (unsigned)((buf[(pos + k) >> 3] >> ((pos + k) & 7u)) & 1u) << k;
+        v |= (((unsigned)buf[(pos + k) >> 3] >> ((pos + k) & 7u)) & 1u) << k;
     return v;
 }
 

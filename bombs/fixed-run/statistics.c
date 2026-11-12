@@ -379,10 +379,9 @@ FrbError frb_report_target(FILE *out, const char *dir, const FrbConfig *cfg, con
     if (ts->lower_bound == 1) {
         fprintf(out, "no node budget is excluded\n");
     } else {
-        int by_search = ts->unsat_max, by_enum = ts->lower_bound - 1;
-        if (by_search >= ts->lower_bound - 1) by_enum = s->enum_complete < by_search ? s->enum_complete : by_search;
+        /* The same two sources derive() uses, shown separately. */
+        int by_search = ts->unsat_max, by_enum = s->enum_complete;
         if (ts->nodes && ts->nodes - 1 < by_enum) by_enum = ts->nodes - 1;
-        if (by_enum > s->enum_complete) by_enum = s->enum_complete;
         fprintf(out, "node budgets 1..%d are excluded\n", ts->lower_bound - 1);
         if (by_enum >= 1)
             fprintf(out, "                 1..%d by exhaustive enumeration: no graph of that size emits it\n",

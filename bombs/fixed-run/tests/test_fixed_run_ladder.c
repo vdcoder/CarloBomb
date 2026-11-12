@@ -398,6 +398,30 @@ static void test_chain(void) {
         CHECK(frb_table_check_chain(&t[11], &forged, &bad) == FRB_ERR_EVIDENCE);
     }
     frb_table_destroy(&forged);
+    /* Two tables that agree with each other and are both wrong: an 8-bit
+     * string q said to need 8 nodes, and its two 9-bit extensions said to
+     * need 8 and 9.  Every string and its first bits are consistent.  What
+     * gives it away is a 9-bit string that ends in q and needs few nodes. */
+    {
+        FrbTable long9;
+        RevGraph ring8, ring9;
+        uint32_t q = 0x35, ext; /* 00110101 */
+        CHECK(ref_min[8][q] <= 5 && ref_min[9][q] <= 5); /* 0 q: q is its last 8 bits */
+        reference_table(&forged, 8, f1);
+        reference_table(&long9, 9, f1);
+        frb_ring_witness(q, 8, &ring8);
+        CHECK(frb_table_put(&forged, q, FRB_MINIMAL, &ring8) == FRB_OK);
+        ext = frb_graph_output(&ring8, 9); /* the ring goes round: q and its first bit again */
+        CHECK((ext >> 1) == q);
+        CHECK(frb_table_put(&long9, ext, FRB_MINIMAL, &ring8) == FRB_OK);
+        frb_ring_witness(ext ^ 1u, 9, &ring9);
+        CHECK(frb_table_put(&long9, ext ^ 1u, FRB_MINIMAL, &ring9) == FRB_OK);
+        CHECK(frb_table_validate(&forged, NULL, NULL) == FRB_OK && frb_table_validate(&long9, NULL, NULL) == FRB_OK);
+        CHECK(frb_table_check_chain(&long9, &forged, &bad) == FRB_ERR_EVIDENCE);
+        CHECK((bad & 0xFFu) == q && frb_table_nodes(&long9, bad) + 1 < 8); /* found at a string that ends in q */
+        frb_table_destroy(&long9);
+        frb_table_destroy(&forged);
+    }
     for (int bits = 5; bits <= REF_MAX; bits++) frb_table_destroy(&t[bits]);
     printf("chain: reference tables of 5 to %d bits agree pairwise; forged minima are found\n", REF_MAX);
 }
@@ -579,6 +603,9 @@ static void test_ladder_basic(void) {
     CHECK_MSG(frb_ladder_run(dir, base6, REF_MAX, &settings, &opt, &res, last_err, sizeof last_err) == FRB_OK,
               "%s", last_err);
     CHECK(res.complete && res.top_bits == REF_MAX && res.levels_done == REF_MAX - 6);
+    if (!res.complete) return; /* nothing below means anything without the ladder */
+    /* One round does a level: every job is handed out once and to one worker. */
+    CHECK(res.last.rounds == 1 && res.last.jobs > 0 && res.last.searches >= res.last.jobs);
     CHECK(same_file(level_file(dir, 6), base6));
     for (int bits = 7; bits <= REF_MAX; bits++) {
         FrbConfig cfg;
@@ -606,11 +633,14 @@ static void test_ladder_basic(void) {
                 if (ts->source == FRB_SRC_BASE) wrong += ts->searches != 0;
             }
             CHECK_MSG(wrong == 0, "level %d: %d wrong target states", bits, wrong);
+            memset(&longer, 0, sizeof longer);
+            memset(&shorter, 0, sizeof shorter);
             CHECK(frb_file_read(level_file(dir, bits), &longer, NULL, NULL) == FRB_OK);
             CHECK(frb_verify_evidence(&longer, s, NULL, last_err, sizeof last_err) == FRB_OK);
             CHECK(frb_file_read(level_file(dir, bits - 1), &shorter, NULL, NULL) == FRB_OK);
             CHECK(frb_table_check_chain(&longer, &shorter, NULL) == FRB_OK);
             frb_table_destroy(&shorter);
+            memset(&shorter, 0, sizeof shorter);
             CHECK(frb_file_read(base6, &shorter, NULL, NULL) == FRB_OK);
             CHECK(frb_table_check_chain(&longer, &shorter, NULL) == FRB_OK);
             frb_table_destroy(&shorter);
@@ -686,6 +716,7 @@ static void test_ladder_v2(void) {
     CHECK_MSG(frb_ladder_run(dir, base6, 10, &settings, &opt, &res, last_err, sizeof last_err) == FRB_OK, "%s",
               last_err);
     CHECK(res.complete && res.top_bits == 10);
+    if (!res.complete) return;
     check_bomb(level_file(dir, 6), 6, 1); /* the starting Bomb is copied as it is */
     for (int bits = 7; bits <= 10; bits++) {
         FrbTable a, b;
@@ -698,9 +729,11 @@ static void test_ladder_v2(void) {
         t = tally_level(dir, bits, 80); /* 33-byte graphs: records of 80 bytes */
         CHECK(t.duplicates == 0);
         /* Entry for entry the graphs of the version-1 ladder. */
+        memset(&a, 0, sizeof a);
+        memset(&b, 0, sizeof b);
         CHECK(frb_file_read(level_file(dir, bits), &a, NULL, NULL) == FRB_OK);
         CHECK(frb_file_read(level_file(v1, bits), &b, NULL, NULL) == FRB_OK);
-        for (uint32_t i = 0; i < a.count; i++) {
+        for (uint32_t i = 0; a.entries && b.entries && i < a.count; i++) {
             RevGraph ga, gb;
             FrbStatus sa = FRB_EMPTY, sb = FRB_UNRESOLVED;
             CHECK(frb_table_get(&a, i, &sa, &ga) == FRB_OK);
@@ -788,6 +821,10 @@ static void test_base_refusals(void) {
     /* A construction on base7, half done. */
     image = slurp(base7, &size);
     CHECK(image != NULL && size == 64 + 128 * 19);
+    if (!image || size != 64 + 128 * 19) {
+        free(image);
+        return;
+    }
     write_file(moved, image, size);
     remove_tree(work);
     frb_config_default(&cfg, 8);
@@ -1060,13 +1097,15 @@ int main(int argc, char **argv) {
     }
     build_direct(6, 1, 3, base6);
     check_bomb(base6, 6, 1);
-    test_config_layouts();
-    test_ladder_basic();
-    test_ladder_resume();
-    test_ladder_v2();
-    test_base_refusals();
-    test_base_evidence();
-    test_disk_watch();
+    /* Each of these builds on files the one before left: stop at the first
+     * that fails rather than report its consequences. */
+    if (!t_failures) test_config_layouts();
+    if (!t_failures) test_ladder_basic();
+    if (!t_failures) test_ladder_resume();
+    if (!t_failures) test_ladder_v2();
+    if (!t_failures) test_base_refusals();
+    if (!t_failures) test_base_evidence();
+    if (!t_failures) test_disk_watch();
     if (!t_failures) remove_tree(base_dir); /* keep the evidence of a failure */
 #else
     (void)argc;

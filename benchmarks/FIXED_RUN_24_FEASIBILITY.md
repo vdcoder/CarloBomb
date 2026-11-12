@@ -124,7 +124,7 @@ level by level, long before level 24 starts.
 | Journal, level 24: 80 bytes per search, about 1.5 searches per job | 0.5 GB |
 | Journals of all levels | 0.8 GB |
 | Disk in all | about 2.5 GB |
-| Memory, coordinating process at level 24 | about 2 GB |
+| Memory, coordinating process at level 24 | about 2 GB (measured afterwards on 2^24 entries: 1.3 GB while building, 1.7 GB while writing the table) |
 | Memory, each worker | a few MB |
 | Journal overhead | below 1% of a job at 5 ms per job (it was 5% at 45 µs per job in the 16-bit build) |
 
@@ -166,3 +166,56 @@ build/ladder_pilot --bits 20,22,24 --samples 4000 --workers 16
 The last lines of each run project the ladder at that machine's measured
 throughput for that number of processes; the fastest of the three is the
 worker count to use.
+
+## 7. The projection against the construction
+
+Added once the construction existed (`carlobomb bomb ladder`,
+`bombs/fixed-run/OVERNIGHT.md`). The ladder was run in the development
+container from the verified 16-bit table up to 22 bits, 4 processes,
+`amd64-auto`:
+
+| Level | Searches | Search steps | Pilot projection | Wall clock | Journal | Largest minimum | Strings that need it |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 17 | 44,810 | 4.78·10^9 | | 1.4 s | 3.6 MB | 8 | 2 |
+| 18 | 96,250 | 1.69·10^10 | | 5.0 s | 7.7 MB | 8 | 6 |
+| 19 | 199,403 | 4.74·10^10 | | 14 s | 16 MB | 8 | 118 |
+| 20 | 378,045 | 1.428·10^11 | 1.43·10^11 (1.38 – 1.50) | 40 s | 30 MB | 8 | 3,048 |
+| 21 | 699,890 | 5.68·10^11 | | 160 s | 56 MB | 9 | 2 |
+| 22 | 1,408,471 | 2.356·10^12 | 2.35·10^12 (2.28 – 2.45) | 717 s | 113 MB | 9 | 6 |
+
+Both levels the pilot had projected came out inside its range, within half
+a percent of its expected value. The per-search figures agree as well: at
+level 20 the construction measured a median of 413,505 steps per string, a
+90th percentile of 1.09·10^6, a 99th of 3.14·10^6 and a maximum of
+1.81·10^7, against 415,000, 1.08·10^6, 3.2·10^6 and 1.8·10^7 in the sample.
+Level 22 was run next to test suites and was slowed by them; alone, 4
+processes do it in about 11 minutes.
+
+Levels 17 to 22 are 3.0·10^12 steps, a tenth of the ladder. The 24-bit
+projection of section 3 stands: 2.11·10^13 steps for level 24 and
+3.17·10^13 for the whole ladder, of which 2.9·10^13 remain above 22 bits.
+
+What else was measured on the way:
+
+- **Journal.** 80 bytes per search and 1.34 searches per string searched at
+  level 22. At that ratio level 24 writes about 0.5 GB, as estimated.
+- **Replaying it.** 2.5 s and 0.4 GB of memory for level 22, table of the
+  level below included. Level 24 has four times the strings: about 10 s.
+- **Verifying a table** against its journal and against the 16-bit table,
+  every REV run: 8 s and 0.5 GB at 22 bits.
+- **24 bits in full size, without the search.** A construction of 2^24
+  entries was started and stopped after 3,000 strings; its partial table was
+  written (570,425,408 bytes), read back and verified with all 16,777,216
+  REVs run: 24 s to write, 29 s to verify, 1.7 GB of memory at the peak.
+- **Interruption.** Level 19 above was interrupted by a signal, then killed
+  outright, then finished; its file is byte for byte the one an
+  uninterrupted run with the C engine and 3 processes produced. So are
+  those of levels 17, 18 and 20.
+- **A second method.** The 17-bit table was also built directly (complete
+  enumeration to 5 nodes, then search from 6): the same minimum for every
+  string. The minima of all strings of 1 to 16 bits read out of the 22-bit
+  table are those of the verified 16-bit table.
+
+The exact results so far: the largest minimum is 8 nodes for 17 to 20 bits
+and 9 for 21 and 22, which is ⌈2√L⌉ − 1 each time, and `0…01` is among the
+strings that need it at every length.

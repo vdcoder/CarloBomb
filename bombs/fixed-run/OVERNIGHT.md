@@ -113,9 +113,10 @@ minimum, how many are open, and the minimum-node distribution of those
 settled so far. After each level it prints the level's report and an
 estimate for the levels that remain.
 
-**After the first minute**, compare with the checksums below. Levels 17 to
-20 take about a minute in all, and their files are the same bytes on every
-machine, with every engine and any number of workers:
+**After the first minutes**, compare with the checksums below. Levels 17 to
+20 take about a minute in all, 21 and 22 a few minutes more, and their
+files are the same bytes on every machine, with every engine and any number
+of workers:
 
 ```bash
 sha256sum ~/frb24/fixed-run-*.frb
@@ -128,10 +129,20 @@ sha256sum ~/frb24/fixed-run-*.frb
 | 18 | `e67fb5a7c813d5c6c2d18532e2eb8a12dbf16f5fe2cf10f89ad9c02578a011b1` | 8 | 6 |
 | 19 | `86e5000f3b81abb57de2d318e5ebad7454e1d6db4395187d10310853682efa25` | 8 | 118 |
 | 20 | `5f5025bc00a26cad5153364a3bb3528c51d1d9cc9a7db16cf63df36b7393ca14` | 8 | 3,048 |
+| 21 | `1581fb018ee718e77fd77311eaba41a7304219b54cba4235c551dcdc920ed8cb` | 9 | 2 |
+| 22 | `189e6ea0cf71cbcadb1765a017bf0e611027c64684f7b53ce34165d5811dcb98` | 9 | 6 |
 
-(Built twice in the development container: with `amd64-auto` and 4 workers,
-interrupted by Ctrl-C and by `kill -9` and resumed; and with the C engine
-and 3 workers, uninterrupted. Byte-identical at every level.)
+(Levels 17 to 20 were built twice in the development container: with
+`amd64-auto` and 4 workers, interrupted by Ctrl-C and by `kill -9` and
+resumed; and with the C engine and 3 workers, uninterrupted. Byte-identical
+at every level. Levels 21 and 22 were built once, with `amd64-auto`, and
+verified in full.)
+
+The time left that a progress line shows for its level is a straight
+extrapolation from the jobs done. Strings early in the table are cheaper
+than the rest, so early in a level it runs 10 to 20% low. The estimate
+printed after each level, for the levels still to come, does not have that
+bias.
 
 ## Looking in on it
 
@@ -168,7 +179,7 @@ nohup build/carlobomb bomb ladder --dir ~/frb24 --to 24 --workers 10 >> ~/frb24.
 ```
 
 The same command, without `--from`. It finds the longest complete Bomb,
-replays the journal of the level above it (0.6 s at level 20; expect about
+replays the journal of the level above it (2.5 s at level 22; expect about
 ten seconds at level 24) and searches only what is still open. The worker count and the engine may
 be different each time.
 
@@ -189,8 +200,8 @@ whenever the estimate is too long: the files are there.
 ## Afterwards: checking the result
 
 Everything in the table, the journal behind it, and its agreement with the
-16-bit table (2 s at 20 bits; expect about a minute and 2.5 GB of memory at
-24):
+16-bit table (8 s and 0.5 GB of memory at 22 bits; expect about 40 s and
+2 GB at 24):
 
 ```bash
 build/carlobomb bomb verify --file ~/frb24/fixed-run-24.frb --work-dir ~/frb24/work-24 --against ~/frb24/fixed-run-16.frb

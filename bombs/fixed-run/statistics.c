@@ -221,8 +221,10 @@ static void print_histogram(FILE *out, const FrbState *s) {
 
 static void print_effort(FILE *out, const FrbState *s) {
     FrbBudgetEffort total;
+    enum { TOP = 10 };
     uint64_t *steps, searched = 0, max_steps = 0, enum_graphs = 0, enum_ns = 0;
-    uint32_t max_index = 0;
+    uint32_t max_index = 0, top[TOP];
+    int top_count = 0;
     char target[FRB_MAX_BITS + 1];
     memset(&total, 0, sizeof total);
 
@@ -257,6 +259,15 @@ static void print_effort(FILE *out, const FrbState *s) {
                 max_steps = ts->steps;
             }
             steps[searched++] = ts->steps;
+            /* The costliest few, most steps first; among equals, table order. */
+            if (top_count < TOP || ts->steps > s->targets[top[TOP - 1]].steps) {
+                int at = top_count < TOP ? top_count++ : TOP - 1;
+                while (at > 0 && s->targets[top[at - 1]].steps < ts->steps) {
+                    top[at] = top[at - 1];
+                    at--;
+                }
+                top[at] = i;
+            }
         }
         if (searched) {
             qsort(steps, (size_t)searched, sizeof *steps, cmp_u64);
@@ -270,6 +281,16 @@ static void print_effort(FILE *out, const FrbState *s) {
                 fprintf(out, "  %.3g steps per second of solver time, %.1f microseconds per target\n",
                         (double)total.steps / secs(total.ns),
                         1e6 * secs(total.ns) / (double)searched);
+            fprintf(out, "  the costliest:\n");
+            for (int k = 0; k < top_count; k++) {
+                const FrbTargetState *ts = &s->targets[top[k]];
+                frb_target_format(top[k], s->bits, target);
+                fprintf(out, "    %s  %15s steps  %9.3f ms  %u search%s", target, commas(ts->steps),
+                        (double)ts->search_ns * 1e-6, (unsigned)ts->searches,
+                        ts->searches == 1 ? "" : "es");
+                if (ts->status == FRB_MINIMAL) fprintf(out, "  minimum %d nodes\n", ts->nodes);
+                else fprintf(out, "  open\n");
+            }
         }
         free(steps);
     }

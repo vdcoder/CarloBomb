@@ -1493,7 +1493,7 @@ static int formula_nodes(int bits) {
 
 typedef struct {
     uint64_t searches, steps, solver_ns, session_ns, journal_bytes, journal_records;
-    uint32_t sessions, base_settled;
+    uint32_t sessions, killed, base_settled;
 } LevelCost;
 
 static void level_report(FILE *out, int bits, const char *file, const FrbSummary *sum,
@@ -1513,7 +1513,11 @@ static void level_report(FILE *out, int bits, const char *file, const FrbSummary
             commas(cost->searches), commas(cost->steps));
     fprintf(out, "  solver time, all workers                %.1f s\n", (double)cost->solver_ns * 1e-9);
     fprintf(out, "  wall-clock time                         %.1f s in %u session(s)\n",
-            (double)cost->session_ns * 1e-9, (unsigned)cost->sessions);
+            (double)cost->session_ns * 1e-9, (unsigned)(cost->sessions - cost->killed));
+    if (cost->killed)
+        fprintf(out, "                                          and %u session(s) that did not end in order\n"
+                     "                                          (killed), whose time is not known\n",
+                (unsigned)cost->killed);
     fprintf(out, "  journal                                 %s bytes, %s records\n",
             commas(cost->journal_bytes), commas(cost->journal_records));
     fprintf(out, "  table checksum (CRC-32 in the header)   %08x\n", (unsigned)table_crc);
@@ -1604,8 +1608,11 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
         cost->steps += state->budget[b].steps;
         cost->solver_ns += state->budget[b].ns;
     }
-    cost->sessions = state->sessions;
-    /* The session that just ended is in the state as begun, not as ended. */
+    /* The session that just ended is in the state as begun and not ended if
+     * it ran a round (the journal was replayed after it), and not at all if
+     * it found nothing to do.  Any other session that never ended was killed. */
+    cost->sessions = state->sessions + (run->rounds > 0 ? 0u : 1u);
+    cost->killed = state->sessions_unfinished - (run->rounds > 0 && state->sessions_unfinished ? 1u : 0u);
     cost->session_ns = state->session_ns + (uint64_t)(run->seconds * 1e9);
     cost->journal_bytes = state->journal.bytes;
     cost->journal_records = state->journal.records;

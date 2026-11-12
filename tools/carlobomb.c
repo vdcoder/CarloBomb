@@ -302,6 +302,21 @@ static int cmd_engines(void) {
         printf("amd64-%-10s %s%s\n", info->name, info->what,
                cb_amd64_kernel_available(k) ? "" : "  [not available on this CPU]");
     }
+    unsigned isa = cb_amd64_isa();
+    printf("\nInstruction sets found: BMI1/BMI2 %s, AVX-512 F/BW/VL %s\n",
+           (isa & CB_ISA_BMI2) ? "yes" : "no", (isa & CB_ISA_AVX512) ? "yes" : "no");
+    if (cb_amd64_kernel_select(cb_amd64_kernel_find("auto")) == 0) {
+        printf("amd64-auto runs:");
+        for (int n = 1, from = 1; n <= REV_LEVEL_MAX_NODES; n++) {
+            int k = cb_amd64_kernel_used(n);
+            if (n == REV_LEVEL_MAX_NODES || cb_amd64_kernel_used(n + 1) != k) {
+                printf(" %s for node budgets %d-%d%s", cb_amd64_kernel_info(k)->name, from, n,
+                       n == REV_LEVEL_MAX_NODES ? "\n" : ",");
+                from = n + 1;
+            }
+        }
+        cb_amd64_kernel_select(0);
+    }
 #endif
     return EXIT_OK;
 }

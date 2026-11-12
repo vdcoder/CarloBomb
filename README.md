@@ -9,8 +9,9 @@ model, the preserved historical C solver, a reusable C LevelSolver, a
 MinimalSolver, independent verification and baseline benchmarks. Milestone 1
 adds experimental hand-written AMD64 assembly search kernels that perform
 the same search 3 to 4 times faster on the machine measured, and a study of
-how the kernel should store the graph. The C solver is still the default. No
-neural guidance, parallelism or Bombs yet.
+how the kernel should store the graph. `amd64-auto` is the preferred
+experimental AMD64 engine; the C solver is still the default. No neural
+guidance, parallelism or Bombs yet.
 
 ## Build and test
 
@@ -107,7 +108,8 @@ bombs/                       FixedRunBomb, LevelSearchBomb (planned)
 tests/                       unit tests, exhaustive oracle, legacy and assembly
                              equivalence, CLI check
 benchmarks/                  baseline.c (BASELINE.md), asm_comparison.c (ASM_RESULTS.md),
-                             repr_comparison.c (REPR_RESULTS.md)
+                             repr_comparison.c (REPR_RESULTS.md),
+                             characterize.c (WORKLOAD_RESULTS.md), measure_machine.sh
 tools/carlobomb.c            command-line tool
 ```
 
@@ -177,3 +179,14 @@ in `solvers/level/experimental/amd64/asm/README.md`.
 Compares the assembly kernels with each other by node budget and target
 length. Recorded results in `benchmarks/REPR_RESULTS.md`; the experiments
 and what they showed in `solvers/level/experimental/amd64/repr/README.md`.
+
+```bash
+./build/characterize
+sh benchmarks/measure_machine.sh
+```
+
+`characterize` measures completed and cut-off searches, short and long,
+separately, reports how many search steps were executed and how many were
+accounted for in bulk, and reads hardware counters where the machine has
+them (`benchmarks/WORKLOAD_RESULTS.md`). `measure_machine.sh` runs
+everything on a new machine and writes one report.

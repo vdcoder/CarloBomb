@@ -68,3 +68,46 @@ Recorded results are in `ASM_RESULTS.md`.
   another kernel, for example `-k auto`.
 
 Recorded results are in `REPR_RESULTS.md`.
+
+## Workload characterization
+
+`characterize.c` separates the kinds of search and measures each on its own.
+
+    ./build/characterize                 # budgets 3-8
+    ./build/characterize -n 6,8 -r 21
+    ./build/characterize --perf-selftest
+
+- For each node budget, pseudo-random targets are sorted into six classes:
+  searches that complete (SOLVED or PROVEN_UNSAT) in up to 2,000 steps, in
+  2,001 to 100,000, and in more; and searches cut off by a step limit of
+  2,000, of 100,000 and of 2,000,000. Each class is a set of distinct
+  targets of at least 1.5 million steps per pass.
+- Per class it reports the C solver's time per step, the speedup of the
+  reference assembly kernel (`asm`) and of `auto` over it through the API,
+  and `auto` against `asm` through the API and kernel only.
+- **Search accounting.** The kernels `n8x-count` and `hybx-count` are `n8x`
+  and `hybx` with counters at the bulk-accounting sites; they are for
+  benchmarks only, and the ordinary kernels contain no counting code. The
+  tool reports the share of logical steps executed one at a time and the
+  share accounted for in bulk, and how often a link loop fell back to the
+  per-node code. The logical step count itself is unchanged and exact.
+- **Hardware counters.** Where `perf_event_open` allows hardware events, the
+  tool adds cycles, instructions, branches and branch misses per step for
+  the two kernels. Most virtual machines, containers and WSL2 do not allow
+  them; the tool says so and carries on. `--perf-selftest` runs the same
+  counter code on software events and is part of the test suite.
+
+Recorded results are in `WORKLOAD_RESULTS.md`.
+
+## Measuring another machine
+
+    sh benchmarks/measure_machine.sh
+
+builds, runs the tests, prints the processor, the instruction sets found and
+the kernel `auto` selects for each budget, runs the three assembly
+benchmarks, and writes everything to one report file. It is the intended way
+to check a second processor family (AMD Zen, for example) or to collect
+hardware counter readings. For counters use bare-metal Linux with
+`/proc/sys/kernel/perf_event_paranoid` at 2 or lower; under WSL2 or in a
+virtual machine the report will normally contain timings and instruction-set
+selection but no counters.

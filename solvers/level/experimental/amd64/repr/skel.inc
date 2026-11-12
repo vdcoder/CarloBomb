@@ -164,6 +164,29 @@
 
 #endif
 
+/* Benchmark-only event counters (CB_COUNT): CbAsmCounters, whose address the
+ * caller left in state->scratch[1].  Expand to nothing otherwise, so the
+ * ordinary kernels are byte for byte what they are without this. */
+#ifdef CB_COUNT
+.macro COUNT_INC off, tmp
+    mov     \tmp, L_STATE
+    mov     \tmp, qword ptr [\tmp + CB_ST_COUNTERS]
+    add     qword ptr [\tmp + \off], 1
+.endm
+.macro COUNT_ADD off, val, tmp
+    mov     \tmp, L_STATE
+    mov     \tmp, qword ptr [\tmp + CB_ST_COUNTERS]
+    add     qword ptr [\tmp + \off], \val
+.endm
+#define CTRL_BULK_UNCOLORED .Lctrl_bulk_uncolored
+#else
+.macro COUNT_INC off, tmp
+.endm
+.macro COUNT_ADD off, val, tmp
+.endm
+#define CTRL_BULK_UNCOLORED .Lctrl_link_next
+#endif
+
 .macro TARGET_BIT
     movzx   ebp, byte ptr [r9]
     and     ebp, 1
@@ -301,20 +324,23 @@ KERNEL:
     xor     eax, eax                            /* it = 0 */
     TARGET_BIT                                  /* same bit for every attempt */
     STEP                                        /* LOOP_L */
-    G_BULK_ANY_UNCOLORED .Lctrl_link_next
+    G_BULK_ANY_UNCOLORED CTRL_BULK_UNCOLORED
+    COUNT_INC CB_CNT_BULK_LOOPS, rdi
 .Lctrl_bulk:                                    /* eax = it, its LOOP_L step counted, r8 = nodes of the right color */
     cmp     eax, r11d
     jae     .Lctrl_bulk_exhausted
     cmp     r10, CB_BULK_MARGIN
-    jb      .Lctrl_bulk_slow
+    jb      .Lctrl_bulk_slow_steps
     cmp     r12, L_LIMIT
-    je      .Lctrl_bulk_slow
+    je      .Lctrl_bulk_slow_stack
     shrx    rdi, r8, rax
     tzcnt   rcx, rdi                            /* nodes of the wrong color before the next right one */
     jc      .Lctrl_bulk_none
     lea     rdi, [rcx + rcx*2]                  /* each: child INIT, LOOP_L_R, LOOP_L */
     sub     r10, rdi
     add     eax, ecx                            /* it = the next node of the right color */
+    COUNT_ADD CB_CNT_BULK_STEPS, rdi, rcx
+    COUNT_INC CB_CNT_BULK_SCANS, rcx
     RESTORE cx
     G_LINK_SET_IT
     PUSHCHK                                     /* push(CTRL, fp, cp); the skipped ones pushed to the same depth */
@@ -331,10 +357,25 @@ KERNEL:
     sub     ecx, eax
     lea     rdi, [rcx + rcx*2]
     sub     r10, rdi
+    COUNT_ADD CB_CNT_BULK_STEPS, rdi, rcx
+    COUNT_INC CB_CNT_BULK_SCANS, rcx
     PUSHCHK
 .Lctrl_bulk_exhausted:
     RESTORE cx
     jmp     .Lctrl_try_n
+#ifdef CB_COUNT
+.Lctrl_bulk_uncolored:
+    COUNT_INC CB_CNT_FALLBACK_UNCOLORED, rdi
+    jmp     .Lctrl_link_next
+.Lctrl_bulk_slow_steps:
+    COUNT_INC CB_CNT_FALLBACK_STEPS, rdi
+    jmp     .Lctrl_bulk_slow
+.Lctrl_bulk_slow_stack:
+    COUNT_INC CB_CNT_FALLBACK_STACK, rdi
+#else
+.Lctrl_bulk_slow_steps:
+.Lctrl_bulk_slow_stack:
+#endif
 .Lctrl_bulk_slow:
     RESTORE cx
 #else

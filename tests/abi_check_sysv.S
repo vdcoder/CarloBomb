@@ -1,10 +1,11 @@
 /*
  * ABI check for the AMD64 search kernel (System V).
  *
- *     int cb_abi_check(CbAsmState *state, int max_nodes, int *kernel_result);
+ *     int cb_abi_check(CbAsmState *state, int max_nodes, int *kernel_result,
+ *                      int (*kernel)(CbAsmState *, int));
  *
- * Loads every callee-saved register with a distinct sentinel, calls
- * cb_amd64_search, and returns a bit mask of what was not preserved:
+ * Loads every callee-saved register with a distinct sentinel, calls the
+ * kernel, and returns a bit mask of what was not preserved:
  *   1 rbx   2 rbp   4 r12   8 r13   16 r14   32 r15   64 rsp
  * 0 means the kernel honored the calling convention on this call.
  */
@@ -19,7 +20,8 @@ cb_abi_check:
     push    r13
     push    r14
     push    r15
-    push    rdx                         /* result pointer; also aligns the stack */
+    push    rdx                         /* result pointer */
+    push    rcx                         /* kernel; also aligns the stack */
     mov     qword ptr [rip + .Lsaved_rsp], rsp
     movabs  rbx, 0x1111111111111111
     movabs  rbp, 0x2222222222222222
@@ -27,7 +29,7 @@ cb_abi_check:
     movabs  r13, 0x4444444444444444
     movabs  r14, 0x5555555555555555
     movabs  r15, 0x6666666666666666
-    call    cb_amd64_search@PLT
+    call    qword ptr [rsp]
     xor     ecx, ecx
     movabs  rdx, 0x1111111111111111
     cmp     rbx, rdx
@@ -57,7 +59,8 @@ cb_abi_check:
     je      1f
     or      ecx, 64
     mov     rsp, qword ptr [rip + .Lsaved_rsp]
-1:  pop     rdx
+1:  pop     rdx                         /* (the kernel pointer) */
+    pop     rdx
     mov     dword ptr [rdx], eax
     mov     eax, ecx
     pop     r15

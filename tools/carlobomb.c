@@ -7,8 +7,9 @@
  *   carlobomb run    --graph FILE --bits L
  *   carlobomb bench  --target S [--max-nodes N] [--reps R]
  *
- * solve, level and bench accept --engine c (default) or --engine amd64-asm
- * (experimental; only in builds for Linux x86-64).
+ * solve, level and bench accept --engine c (default) or, in builds for Linux
+ * x86-64, --engine amd64-NAME for an assembly kernel.  amd64-asm is the
+ * reference assembly kernel; `carlobomb engines` lists the others.
  *
  * Exit status: 0 success, 1 no solution / verification failed,
  *              2 usage or invalid input, 3 resource limit (result unknown).
@@ -46,13 +47,15 @@ static int usage(void) {
             "      print the first L output bits of the REV in FILE\n"
             "  carlobomb bench  --target S [--max-nodes N] [--reps R]\n"
             "      time the minimal solve of S\n"
+            "  carlobomb engines\n"
+            "      list the search engines in this build\n"
             "S is a string of 0 and 1.  --max-steps limits search effort per budget.\n"
             "solve, level and bench take --engine c (default)%s.\n",
             REV_LEVEL_MAX_NODES,
 #ifdef CARLOBOMB_HAVE_AMD64_ASM
-            " or amd64-asm (experimental)"
+            " or amd64-NAME (experimental; `carlobomb engines` lists them)"
 #else
-            "; amd64-asm is not part of this build"
+            "; the amd64 engines are not part of this build"
 #endif
     );
     return EXIT_USAGE;
@@ -82,14 +85,18 @@ static int parse_args(int argc, char **argv, Args *a) {
         else if (!strcmp(k, "--engine")) {
             if (!strcmp(v, "c")) { a->engine = rev_level_solve_ex; a->engine_name = "c"; }
 #ifdef CARLOBOMB_HAVE_AMD64_ASM
-            else if (!strcmp(v, "amd64-asm")) {
+            else if (!strncmp(v, "amd64-", 6) && cb_amd64_kernel_find(v + 6) >= 0) {
+                if (cb_amd64_kernel_select(cb_amd64_kernel_find(v + 6)) != 0) {
+                    fprintf(stderr, "engine %s needs an instruction set this CPU lacks\n", v);
+                    return 0;
+                }
                 a->engine = rev_level_solve_amd64_ex;
-                a->engine_name = "amd64-asm";
+                a->engine_name = v;
             }
 #else
-            else if (!strcmp(v, "amd64-asm")) {
-                fprintf(stderr, "engine amd64-asm is not available in this build "
-                                "(Linux x86-64 only)\n");
+            else if (!strncmp(v, "amd64-", 6)) {
+                fprintf(stderr, "engine %s is not available in this build "
+                                "(Linux x86-64 only)\n", v);
                 return 0;
             }
 #endif
@@ -287,9 +294,22 @@ static int cmd_bench(const Args *a) {
     return st == REV_MIN_MINIMAL ? EXIT_OK : st == REV_MIN_UNKNOWN ? EXIT_LIMIT : EXIT_NO;
 }
 
+static int cmd_engines(void) {
+    printf("c                portable C LevelSolver (default)\n");
+#ifdef CARLOBOMB_HAVE_AMD64_ASM
+    for (int k = 0; k < cb_amd64_kernel_count(); k++) {
+        const CbAmd64Kernel *info = cb_amd64_kernel_info(k);
+        printf("amd64-%-10s %s%s\n", info->name, info->what,
+               cb_amd64_kernel_available(k) ? "" : "  [not available on this CPU]");
+    }
+#endif
+    return EXIT_OK;
+}
+
 int main(int argc, char **argv) {
     Args a;
     if (argc < 2) return usage();
+    if (!strcmp(argv[1], "engines")) return cmd_engines();
     if (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h")) {
         usage();
         return EXIT_OK;

@@ -15,8 +15,9 @@
  *   - a register-preservation check through a small assembly caller
  *     (abi_check_sysv.S) on every kind of exit.
  *
- * Usage: test_asm_equivalence [random_cases]
+ * Usage: test_asm_equivalence [random_cases [kernel]]
  *   With a number, that many extra randomized cases are run (see test_fuzz).
+ *   All kernels in the registry are tested unless one is named.
  */
 #define _DEFAULT_SOURCE /* MAP_ANONYMOUS */
 
@@ -27,7 +28,7 @@
 #include "asm_solver.h"
 #include "test_util.h"
 
-int cb_abi_check(CbAsmState *state, int max_nodes, int *kernel_result);
+int cb_abi_check(CbAsmState *state, int max_nodes, int *kernel_result, CbAmd64KernelFn kernel);
 
 static long cases, solved;
 
@@ -88,7 +89,6 @@ static void test_corpus(void) {
             if (compare(t, max) == REV_SOLVE_SOLVED) break;
     }
     for (int max = 2; max <= 10; max++) compare("010010001", max);
-    printf("corpus: %ld cases\n", cases - before);
     CHECK(cases - before == 11327);
 }
 
@@ -248,7 +248,7 @@ static void run_direct(CbAsmState *s, const char *t, size_t len, int max, uint64
     s->max_stack = (uint32_t)cap;
 
     int result = -1;
-    int clobbered = cb_abi_check(s, max, &result);
+    int clobbered = cb_abi_check(s, max, &result, cb_amd64_kernel_resolve(max));
     CHECK_MSG(clobbered == 0, "callee-saved register mask %d, target %.30s max %d", clobbered, t,
               max);
     CHECK_MSG(result == (int)want, "direct %d wrapper %d", result, (int)want);
@@ -321,7 +321,6 @@ static void test_many_nodes(void) {
             g.node_count > most)
             most = g.node_count;
     }
-    printf("largest graph returned at budget 64: %d nodes\n", most);
     CHECK(most >= 10);
 
     /*
@@ -346,7 +345,6 @@ static void test_many_nodes(void) {
             if ((int)s->node_count > fullest) fullest = (int)s->node_count;
         }
     }
-    printf("most nodes in use when a budget-64 search was cut off: %d\n", fullest);
     CHECK(fullest == CB_ASM_MAX_NODES);
 }
 
@@ -412,10 +410,13 @@ static void test_fuzz(long n) {
         }
     }
 #undef NEXT
-    printf("fuzz: %ld random cases, %ld of them also with capped stacks\n", n, capped);
+    (void)capped;
 }
 
-int main(int argc, char **argv) {
+/* Everything above, for the selected kernel. */
+static void test_selected_kernel(long fuzz_cases) {
+    long cases0 = cases, solved0 = solved;
+    int checks0 = t_checks, failures0 = t_failures;
     test_corpus();
     test_benchmark_targets();
     test_step_limits();
@@ -424,8 +425,32 @@ int main(int argc, char **argv) {
     test_invalid_input();
     test_direct_and_abi();
     test_many_nodes();
-    if (argc > 1) test_fuzz(atol(argv[1]));
+    if (fuzz_cases > 0) test_fuzz(fuzz_cases);
     CHECK(cb_amd64_guards_intact());
-    printf("%ld differential cases, %ld solved\n", cases, solved);
+    printf("kernel %-10s %ld differential cases, %ld solved, %d checks, %d failures\n",
+           cb_amd64_kernel_info(cb_amd64_kernel_selected())->name, cases - cases0,
+           solved - solved0, t_checks - checks0, t_failures - failures0);
+}
+
+/*
+ * Usage: test_asm_equivalence [random_cases [kernel]]
+ * Runs every kernel this CPU supports, or only the named one.
+ */
+int main(int argc, char **argv) {
+    long fuzz_cases = argc > 1 ? atol(argv[1]) : 0;
+    const char *only = argc > 2 ? argv[2] : NULL;
+    int ran = 0;
+    for (int k = 0; k < cb_amd64_kernel_count(); k++) {
+        const CbAmd64Kernel *info = cb_amd64_kernel_info(k);
+        if (only && strcmp(only, info->name) != 0) continue;
+        if (cb_amd64_kernel_select(k) != 0) {
+            printf("kernel %-10s skipped: this CPU lacks an instruction set it needs\n", info->name);
+            continue;
+        }
+        test_selected_kernel(fuzz_cases);
+        ran++;
+    }
+    CHECK(ran > 0);
+    cb_amd64_kernel_select(0);
     return t_report("test_asm_equivalence");
 }

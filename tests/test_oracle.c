@@ -75,31 +75,8 @@ static void to_string(unsigned v, int len, char *out) {
     out[len] = '\0';
 }
 
-int main(int argc, char **argv) {
-    int max_n = argc > 1 ? atoi(argv[1]) : 4;
-    if (max_n < 1 || max_n > ORACLE_MAX_N) {
-        fprintf(stderr, "max_nodes must be 1..%d\n", ORACLE_MAX_N);
-        return 2;
-    }
-
-    for (int n = 1; n <= max_n; n++) {
-        unsigned long long count = enumerate(n);
-        unsigned long long expect = 1ull << n;
-        for (int i = 0; i < 2 * n; i++) expect *= (unsigned long long)n;
-        CHECK(count == expect);
-        printf("N=%d: %llu graphs enumerated\n", n, count);
-    }
-
-    /* Sanity of the oracle itself. */
-    for (int len = 1; len <= MAX_LEN; len++) {
-        int ones = 0;
-        for (unsigned v = 0; v < (1u << len); v++) ones += reach[1][len][v];
-        CHECK(ones == 2); /* one node emits only 00..0 or 11..1 */
-        for (int n = 2; n <= max_n; n++)
-            for (unsigned v = 0; v < (1u << len); v++)
-                if (reach[n - 1][len][v]) CHECK(reach[n][len][v]);
-    }
-
+/* The engine under test must agree with the oracle's tables. */
+static void check_engine(int max_n) {
     /* LevelSolver: SOLVED exactly on the oracle's set. */
     char t[MAX_LEN + 1];
     for (int n = 1; n <= max_n; n++) {
@@ -148,6 +125,42 @@ int main(int argc, char **argv) {
             }
         }
     }
+}
 
+int main(int argc, char **argv) {
+    int max_n = argc > 1 ? atoi(argv[1]) : 4;
+    if (max_n < 1 || max_n > ORACLE_MAX_N) {
+        fprintf(stderr, "max_nodes must be 1..%d\n", ORACLE_MAX_N);
+        return 2;
+    }
+
+    for (int n = 1; n <= max_n; n++) {
+        unsigned long long count = enumerate(n);
+        unsigned long long expect = 1ull << n;
+        for (int i = 0; i < 2 * n; i++) expect *= (unsigned long long)n;
+        CHECK(count == expect);
+        printf("N=%d: %llu graphs enumerated\n", n, count);
+    }
+
+    /* Sanity of the oracle itself. */
+    for (int len = 1; len <= MAX_LEN; len++) {
+        int ones = 0;
+        for (unsigned v = 0; v < (1u << len); v++) ones += reach[1][len][v];
+        CHECK(ones == 2); /* one node emits only 00..0 or 11..1 */
+        for (int n = 2; n <= max_n; n++)
+            for (unsigned v = 0; v < (1u << len); v++)
+                if (reach[n - 1][len][v]) CHECK(reach[n][len][v]);
+    }
+
+#ifdef CARLOBOMB_ORACLE_AMD64
+    for (int k = 0; k < cb_amd64_kernel_count(); k++) {
+        if (cb_amd64_kernel_select(k) != 0) continue;
+        printf("kernel %s\n", cb_amd64_kernel_info(k)->name);
+        check_engine(max_n);
+    }
+    cb_amd64_kernel_select(0);
+#else
+    check_engine(max_n);
+#endif
     return t_report(ENGINE_NAME);
 }

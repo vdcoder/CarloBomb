@@ -60,7 +60,7 @@ static int run_asm(const char *t, size_t len) {
 
 static int run_kernel(const char *t, size_t len) {
     for (int n = BUDGET_FIRST; n <= BUDGET_LAST; n++)
-        if (cb_amd64_kernel_only(t, len, n, NULL) == CB_RES_SOLVED) return n;
+        if (cb_amd64_kernel_only(t, len, n, 0, NULL) == CB_RES_SOLVED) return n;
     return 0;
 }
 

@@ -52,12 +52,22 @@ extern "C" {
 
 typedef struct {
     /* Fixed when the work directory is created. */
-    int bits;          /* target length, 1..16 */
+    int bits;          /* target length, 1..31 */
+    int format;        /* table format version: 1 (up to 16 bits), 2 (up to 24) or 3 (up to 31) */
     int symmetry;      /* 1: work on one string of each complement pair and derive the other */
     int enumerate_max; /* exhaustive enumeration for node counts 1..enumerate_max; 0 = none */
+    /*
+     * The ladder: a complete, certified Bomb for a shorter length that this
+     * construction builds on.  0 = none.  A string cannot need fewer nodes
+     * than its first base_bits bits, and the REV stored for those bits goes
+     * on to emit one string of this length, which it thereby settles.
+     */
+    int base_bits;
+    uint32_t base_crc;    /* table checksum of the base Bomb, from its header */
+    char base_file[1024]; /* where it is */
 
     /* May be changed when a construction is resumed. */
-    int max_nodes;     /* largest node budget searched, 1..16 */
+    int max_nodes;     /* largest node budget searched, 1..node capacity of the format */
     int fallback_ring; /* 1: the ring stands in as a witness until a better one is known */
     int workers;       /* worker processes, 1..FRB_MAX_WORKERS */
     int passes;        /* number of entries of max_steps in use, 1..FRB_MAX_PASSES */
@@ -67,11 +77,25 @@ typedef struct {
 } FrbConfig;
 
 void frb_config_default(FrbConfig *cfg, int bits);
+
+/* Make `file`, a complete Bomb for fewer bits, the base of the construction
+ * described by cfg: reads its header, records its length, checksum and
+ * absolute path, and turns enumeration off (the base supplies the bounds). */
+FrbError frb_config_set_base(FrbConfig *cfg, const char *file, char *err, size_t errlen);
 /* "1000000,100000000,0" -> max_steps and passes.  1 if the text is valid. */
 int frb_parse_step_limits(const char *text, FrbConfig *cfg);
 FrbError frb_config_check(const FrbConfig *cfg, char *err, size_t errlen);
 FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errlen);
 FrbError frb_config_write(const char *dir, const FrbConfig *cfg);
+
+/*
+ * The state of a construction is held in memory while a round is planned
+ * and while its table is written (frb_state_bytes).  FRB_ERR_MEMORY, with
+ * the numbers in err, if this machine has less: said before anything is
+ * started rather than found out hours into a run.  With a log, a
+ * construction of a gigabyte or more is announced there.
+ */
+FrbError frb_check_memory(const FrbConfig *cfg, FILE *log, char *err, size_t errlen);
 
 /* Create the directory (if needed) and an empty construction in it. */
 FrbError frb_work_create(const char *dir, const FrbConfig *cfg, char *err, size_t errlen);
@@ -99,7 +123,7 @@ typedef struct {
     uint32_t time;       /* when the record was written: Unix time in seconds, low 32 bits */
     uint32_t aux;        /* SEARCH: peak stack.  ENUM_*: part number.  SESSION_BEGIN: workers */
     uint8_t nodes;       /* node count of the graph below, 0 = no graph */
-    uint8_t graph[FRB_GRAPH_BYTES];
+    uint8_t graph[FRB_MAX_GRAPH_BYTES]; /* packed in the construction's table format */
 } FrbRecord;
 
 typedef struct {
@@ -145,7 +169,8 @@ typedef enum {
     FRB_SRC_NONE = 0,
     FRB_SRC_ENUM = 1,   /* exhaustive enumeration */
     FRB_SRC_SEARCH = 2, /* LevelSolver */
-    FRB_SRC_RING = 3    /* the ring construction (no search) */
+    FRB_SRC_RING = 3,   /* the ring construction (no search); its graph is not stored */
+    FRB_SRC_BASE = 4    /* the REV the base Bomb stores for the first bits, run on */
 } FrbSource;
 
 typedef struct {
@@ -154,12 +179,11 @@ typedef struct {
     uint8_t mirrored;     /* 1: it is the complement of a witness found for the complement string */
     uint8_t enum_nodes;   /* smallest node count at which enumeration found the string, 0 = never */
     uint8_t unsat_max;    /* largest node budget a search proved to have no solution, 0 = none */
-    uint8_t lower_bound;  /* derived: every node budget below this is excluded, 1..17 */
+    uint8_t lower_bound;  /* derived: every node budget below this is excluded */
     uint8_t status;       /* derived: FrbStatus */
     uint8_t conflict;     /* derived: the recorded results contradict each other */
     uint8_t limit_budget; /* node budget of the search a resource limit stopped, 0 = none */
     uint8_t limit_kind;   /* its RevLevelLimit */
-    uint8_t graph[FRB_GRAPH_BYTES];
     uint16_t part;            /* enumeration part of the witness, if it came from enumeration */
     uint32_t searches;        /* LevelSolver calls made for this string itself */
     uint64_t limit_max_steps; /* step limit in force when that search stopped, 0 = none */
@@ -168,14 +192,17 @@ typedef struct {
 } FrbTargetState;
 
 typedef struct {
-    uint32_t searches, solved, unsat, limited;
+    uint64_t searches, solved, unsat, limited; /* a long construction makes over 2^32 of them */
     uint64_t steps, ns;
 } FrbBudgetEffort;
 
 typedef struct {
-    int bits, symmetry, enumerate_max;
-    uint32_t count; /* 2^bits */
+    int bits, symmetry, enumerate_max, base_bits;
+    const FrbFormat *format; /* of the table this construction produces */
+    uint32_t count;          /* 2^bits */
     FrbTargetState *targets;
+    uint8_t *graphs;         /* count * format->graph_bytes: the packed witness of each target
+                                (zero where there is none, or where it is the ring) */
 
     /* Stage A: enumeration, by node count. */
     uint8_t part_done[FRB_NODE_CAPACITY + 1][(FRB_NODE_CAPACITY * FRB_NODE_CAPACITY + 7) / 8];
@@ -184,8 +211,11 @@ typedef struct {
     uint64_t enum_ns[FRB_NODE_CAPACITY + 1];
     int enum_complete; /* derived: all graphs of 1..enum_complete nodes have been run */
 
+    /* The base Bomb: how many targets its stored REVs settled. */
+    uint32_t base_settled;
+
     /* Stage B: LevelSolver calls, by node budget. */
-    FrbBudgetEffort budget[FRB_NODE_CAPACITY + 1];
+    FrbBudgetEffort budget[FRB_MAX_NODES + 1];
 
     /* Sessions and files. */
     uint32_t sessions, sessions_unfinished;
@@ -198,6 +228,14 @@ typedef struct {
     uint32_t by_status[5];
     uint32_t conflicts;
 } FrbState;
+
+/* Bytes of one journal record for a table format (64, 80, 96), and of the
+ * state of a construction in memory: what a session needs at its peak. */
+int frb_journal_record_bytes(const FrbFormat *format);
+uint64_t frb_state_bytes(int bits, const FrbFormat *format);
+
+/* The packed witness of a target in the state (format->graph_bytes bytes). */
+const uint8_t *frb_state_graph(const FrbState *state, uint32_t index);
 
 /* Replay the journal.  cfg supplies the settings segments must match and the
  * two that shape the derived state (fallback_ring, max_nodes). */
@@ -220,6 +258,8 @@ typedef struct {
     double time_limit;       /* seconds; 0 = none.  Checked between jobs */
     double progress_seconds; /* interval between progress lines; 0 = none */
     double sync_seconds;     /* interval between forced writes of the journal to disk */
+    uint64_t min_free_bytes; /* stop cleanly when the file system of the work directory has
+                                less free space than this; 0 = do not watch */
     FILE *log;               /* progress and notices; NULL = silent */
 } FrbRunOptions;
 
@@ -227,6 +267,7 @@ typedef struct {
     int complete;      /* every target has a certified minimum */
     int interrupted;   /* a signal ended the session */
     int stopped_early; /* the job cap, the sample or the time limit ended it */
+    int disk_low;      /* free disk space fell below min_free_bytes */
     int rounds;
     uint64_t jobs, searches, steps, graphs;
     double seconds;
@@ -278,10 +319,54 @@ typedef struct {
     uint64_t undecided;  /* the step limit stopped the recomputation */
     uint64_t steps;
     uint32_t first_bad;  /* index of the first disagreement */
+    uint64_t hardest;    /* frb_recertify_hardest: entries certified at the largest minimum */
+    int nodes;           /* frb_recertify_hardest: that largest minimum */
 } FrbRecertify;
 
 FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
                        uint64_t sample, uint64_t seed, FrbRecertify *out);
+
+/*
+ * The sample frb_recertify takes: `todo` different indices below `count`,
+ * the first places of a Fisher-Yates shuffle of 0 .. count-1 driven by the
+ * seed, found without the array of count numbers.  The caller frees the
+ * result; NULL if todo is 0 or more than count, or memory ran out.
+ */
+uint32_t *frb_choose_sample(uint32_t count, uint32_t todo, uint64_t seed);
+
+/*
+ * The same for exactly the entries that decide the table's headline number:
+ * those certified at the largest minimum in it.  All of them in table order,
+ * or the first `limit` (0 = all).  That no string needs more is shown by the
+ * table's own witnesses, each of which a reader runs; that these strings
+ * need as much is what is recomputed here.
+ */
+FrbError frb_recertify_hardest(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
+                               uint64_t limit, FrbRecertify *out);
+
+/* ---- the ladder ---------------------------------------------------------
+ *
+ * Build complete Bombs for lengths start + 1, start + 2, ..., to_bits, each
+ * from the one before, in one directory:
+ *
+ *     DIR/fixed-run-NN.frb   the complete Bomb for NN bits
+ *     DIR/work-NN/           the construction of level NN (journal: evidence)
+ *
+ * The starting Bomb is the longest fixed-run-NN.frb in DIR, or, if there is
+ * none, `from_file`, which is copied in.  Each level is finalized and read
+ * back before the next begins, so the longest complete Bomb is always on
+ * disk.  Calling it again continues wherever it stopped.
+ */
+typedef struct {
+    int to_bits;
+    int levels_done;    /* levels completed by this call */
+    int top_bits;       /* longest complete Bomb in the directory when it returned */
+    int complete;       /* top_bits == to_bits */
+    FrbRunResult last;  /* of the last session run */
+} FrbLadderResult;
+
+FrbError frb_ladder_run(const char *dir, const char *from_file, int to_bits, const FrbConfig *settings,
+                        const FrbRunOptions *opt, FrbLadderResult *result, char *err, size_t errlen);
 
 /* ---- reports (statistics.c) --------------------------------------------- */
 

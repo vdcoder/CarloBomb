@@ -1,9 +1,11 @@
 # FixedRunBomb
 
 A FixedRunBomb is a table with one entry for every binary string of one fixed
-length L (1 to 16 bits). Each entry holds a REV that emits the string, packed
-into 19 bytes, and says whether its node count is certified to be the
-minimum. The entry of a string is found by arithmetic on the string alone.
+length L (1 to 31 bits). Each entry holds a REV that emits the string, packed
+into 19 bytes (up to 16 bits), 34 bytes (17 to 24 bits) or 44 bytes (25 to
+31 bits), and says whether
+its node count is certified to be the minimum. The entry of a string is
+found by arithmetic on the string alone.
 
 This directory holds the file format, the software that builds a table, and
 the checks. `carlobomb bomb` is the command-line front end.
@@ -12,6 +14,12 @@ For L = 16 the table has 65,536 entries and is 1,245,248 bytes. Built here,
 every one of its entries is a certified minimum, and the largest is 7 nodes.
 The measurements, and the commands to reproduce the table, are in
 [`benchmarks/FIXED_RUN_16.md`](../../benchmarks/FIXED_RUN_16.md).
+
+Tables for 17 bits and more are built as a **ladder**, each from the complete
+table for one bit fewer ([below](#longer-tables-the-ladder)). How to run the
+ladder to 24 bits, and how to check the result, is in
+[`OVERNIGHT.md`](OVERNIGHT.md); what it costs, in
+[`benchmarks/FIXED_RUN_24_FEASIBILITY.md`](../../benchmarks/FIXED_RUN_24_FEASIBILITY.md).
 
 | File | Content |
 |---|---|
@@ -23,6 +31,9 @@ The measurements, and the commands to reproduce the table, are in
 | `construct.c` | Work directory, job planning, worker processes, resume, finalize, recomputation |
 | `statistics.c` | The reports of `bomb status` |
 | `tests/test_fixed_run.c` | Tests of all of the above |
+| `tests/test_fixed_run_ladder.c` | Tests of format version 2 and of the ladder |
+| [`OVERNIGHT.md`](OVERNIGHT.md) | Running the ladder to 24 bits unattended, and checking the result |
+| [`BEYOND_24.md`](BEYOND_24.md) | The next stage: 25 and 26 bits on a finished 24-bit Bomb, and what 27 to 31 would take |
 | `MULTI_SEARCH_SIMD.md` | Design note on a possible vectorized search. Not implemented |
 
 ## Building the 16-bit table
@@ -82,14 +93,19 @@ build/carlobomb bomb status --work-dir bomb-work
 | `bomb verify --file FILE` | Checks structure, checksums and header, runs every stored graph, checks complement symmetry |
 | `bomb verify ... --work-dir DIR` | Also checks every certified minimum against the journal |
 | `bomb verify ... --recertify` | Also recomputes every minimum from node budget 1 with the MinimalSolver (`--engine`, `--sample K`, `--max-steps K`) |
+| `bomb verify ... --hardest` | Recomputes exactly the strings certified at the largest minimum: the ones the table's headline number rests on (`--engine`, `--sample K` for the first K) |
+| `bomb verify ... --against SHORTER.frb` | Also checks the table against a complete table for fewer bits, and reports the hardest strings |
 | `bomb lookup --file FILE --target S` | Prints the stored REV after validating and running it; `--out GRAPH` writes it in the REV text format |
+| `bomb ladder --dir DIR --to L [--from FILE]` | Builds complete tables for every length up to L, each on the one before; run again to continue |
+| `bomb ladder --dir DIR --status` | The tables a ladder directory holds, and the level under construction |
 
 Settings of `build`:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--bits L` | required | Target length, 1..16 |
-| `--max-nodes N` | 16 | Largest node budget searched. Changeable on resume |
+| `--bits L` | required | Target length, 1..31 |
+| `--base FILE` | none | Build on this complete table for fewer bits; turns enumeration off |
+| `--max-nodes N` | 16, 24 or 31: all an entry of the table's format holds | Largest node budget searched. Changeable on resume |
 | `--engine E` | `amd64-auto`, else `c` | LevelSolver engine. Changeable on resume |
 | `--workers W` | 1 | Worker processes. Changeable on resume |
 | `--enumerate-max K` | 5 | Exhaustive enumeration for node counts 1..K; 0 = none, 6 is the most allowed |
@@ -101,7 +117,10 @@ Options of `build` and `resume` that affect one session only: `--sample K
 [--seed S]` searches only K randomly chosen open targets (a pilot run);
 `--limit-jobs K` stops after K jobs; `--time-limit SECONDS` stops at the
 first job boundary after that time; `--progress SECONDS` sets the interval
-of progress lines (0 = one line per round); `--quiet` prints nothing.
+of progress lines (0 = one line per round); `--min-free MIB` stops the
+session cleanly when the file system has less free space than that;
+`--quiet` prints nothing. `bomb ladder` takes the same, and `--workers`,
+`--engine`, `--max-steps` and `--max-nodes` for the levels it builds.
 
 Exit status: 0 success and, where the question arises, a complete certified
 table; 1 a check failed or the construction broke; 2 usage, invalid input or
@@ -226,6 +245,52 @@ Work directories are not for version control: `bomb-work/` holds 8 MB for
 the default 16-bit build. The table file is reproducible from the source in
 seconds, bit for bit.
 
+## Longer tables: the ladder
+
+Searching every 24-bit string from one node up would cost about 8·10^13
+search steps. The ladder needs 3·10^13, and every intermediate result is a
+complete table.
+
+The table for L bits is built on the complete table for L − 1 bits
+(`bomb build --base FILE`, or `bomb ladder` for the whole climb):
+
+- A REV that emits an L-bit string emits its first L − 1 bits. The string
+  cannot need fewer nodes than they do, and their minimum is certified in
+  the table below.
+- The REV stored there for those L − 1 bits goes on to emit one more bit.
+  That is a REV for one of the two extensions, with as many nodes as the
+  bound just given: a certified minimum, without a search. Half the table
+  is settled this way.
+- The other extension is searched from that bound upward. Usually the first
+  or the second budget tried has a REV.
+
+The base table is evidence, not an assumption: each time a journal is
+replayed, every REV of the base is run again, and the base must be the one
+the construction was started on (it is identified by its checksum).
+`FORMAT.md` section 9.5 has the rules.
+
+```bash
+build/carlobomb bomb ladder --dir ladder --from fixed-run-16.frb --to 20 --workers 4
+```
+
+leaves `ladder/fixed-run-17.frb` … `ladder/fixed-run-20.frb`, the work
+directory of each level, and a report of each. Stop it whenever; the same
+command continues. In the development container, with 4 processes, the
+levels 17 to 20 take 1.4, 5, 14 and 39 seconds, and the files are the same
+bytes whichever engine builds them, with however many workers and
+interruptions (`OVERNIGHT.md` lists their checksums).
+
+Workers take jobs from a counter they share, a few at a time, so a slower
+processor core does fewer jobs and delays nothing. The state of a
+construction is held by the coordinating process while it plans and
+replays, and is released before the workers start; a worker holds the job
+list and little else. That state is 73 bytes per string up to 24 bits and
+83 above: 1.2 GB at 24 bits, 5.3 GB at 26, 21 GB at 28. A machine that has
+less is told so before anything is started. Tables themselves are not held
+in memory: one is written entry by entry and read back through a mapping of
+its file, so a table may be larger than memory
+([`BEYOND_24.md`](BEYOND_24.md) has the numbers for every length).
+
 ## Using a table
 
 `carlobomb bomb lookup` reads one entry: the REV for one string of exactly L
@@ -235,8 +300,13 @@ prefixes built when the table is opened.
 
 ## Limits
 
-- L is at most 16, the capacity of the entry format and of a directly
-  indexed table.
+- L is at most 31: an entry of format version 3 holds 31 nodes, which is
+  what the ring needs at 31 bits, and a table index and the number of
+  entries fit 32-bit fields. Versions 1 and 2, for up to 16 and 24 bits,
+  are unchanged (`FORMAT.md`). What the format allows and what a machine
+  can compute are different things: see [`BEYOND_24.md`](BEYOND_24.md).
+- `--recertify` runs in one process. For a table of more than about 18 bits
+  use `--sample`.
 - Building needs POSIX (fork, flock). Reading, validating and looking up
   work wherever C11 does.
 - Enumeration is capped at 6 nodes. Graphs of 7 nodes number 8.7·10^13.

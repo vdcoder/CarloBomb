@@ -23,6 +23,9 @@
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
 #endif
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE /* MAP_ANONYMOUS */
+#endif
 
 #include "fixed_run_build.h"
 
@@ -31,10 +34,13 @@
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -42,7 +48,11 @@
 
 #include "level_solver.h"
 
-#define CONFIG_MAGIC "carlobomb-fixed-run-work 1"
+/* First line of config.txt.  Layout 1 is what a construction of up to 16
+ * bits without a base Bomb has always written, and still does; layout 2 adds
+ * the table format and the base Bomb. */
+#define CONFIG_MAGIC_1 "carlobomb-fixed-run-work 1"
+#define CONFIG_MAGIC_2 "carlobomb-fixed-run-work 2"
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...) {
     va_list ap;
@@ -63,11 +73,13 @@ static uint64_t seconds_ns(double s) { return s <= 0 ? 0 : (uint64_t)(s * 1e9); 
 /* ---- configuration ------------------------------------------------------ */
 
 void frb_config_default(FrbConfig *cfg, int bits) {
+    const FrbFormat *format = frb_format_for_bits(bits);
     memset(cfg, 0, sizeof *cfg);
     cfg->bits = bits;
+    cfg->format = format ? format->version : FRB_FORMAT_VERSION;
     cfg->symmetry = 1;
     cfg->enumerate_max = 5;
-    cfg->max_nodes = FRB_NODE_CAPACITY;
+    cfg->max_nodes = format ? format->node_capacity : FRB_NODE_CAPACITY;
     cfg->fallback_ring = 1;
     cfg->workers = 1;
     cfg->passes = 1;
@@ -76,18 +88,34 @@ void frb_config_default(FrbConfig *cfg, int bits) {
 }
 
 FrbError frb_config_check(const FrbConfig *cfg, char *err, size_t errlen) {
+    const FrbFormat *format;
     if (!cfg) return FRB_ERR_ARG;
     if (cfg->bits < 1 || cfg->bits > FRB_MAX_BITS) {
         set_err(err, errlen, "bits must be 1..%d", FRB_MAX_BITS);
         return FRB_ERR_ARG;
     }
-    if (cfg->max_nodes < 1 || cfg->max_nodes > FRB_NODE_CAPACITY) {
+    format = frb_format(cfg->format);
+    if (!format || cfg->bits > format->max_bits) {
+        set_err(err, errlen, "table format %d cannot hold %d-bit targets", cfg->format, cfg->bits);
+        return FRB_ERR_ARG;
+    }
+    if (cfg->max_nodes < 1 || cfg->max_nodes > format->node_capacity) {
         set_err(err, errlen, "max-nodes must be 1..%d (the capacity of an entry)",
-                FRB_NODE_CAPACITY);
+                format->node_capacity);
         return FRB_ERR_ARG;
     }
     if (cfg->enumerate_max < 0 || cfg->enumerate_max > FRB_ENUMERATE_LIMIT) {
         set_err(err, errlen, "enumerate-max must be 0..%d", FRB_ENUMERATE_LIMIT);
+        return FRB_ERR_ARG;
+    }
+    if (cfg->base_bits < 0 || cfg->base_bits >= cfg->bits) {
+        set_err(err, errlen, "a base Bomb must be for fewer bits than the %d of the construction",
+                cfg->bits);
+        return FRB_ERR_ARG;
+    }
+    if (cfg->base_file[sizeof cfg->base_file - 1] != '\0' || strpbrk(cfg->base_file, "\r\n") ||
+        (cfg->base_bits != 0) != (cfg->base_file[0] != '\0')) {
+        set_err(err, errlen, "bad base Bomb file name");
         return FRB_ERR_ARG;
     }
     if (cfg->workers < 1 || cfg->workers > FRB_MAX_WORKERS) {
@@ -106,33 +134,87 @@ FrbError frb_config_check(const FrbConfig *cfg, char *err, size_t errlen) {
     return FRB_OK;
 }
 
+/* `file` as a path that does not depend on the current directory. */
+static int absolute_path(const char *file, char *out, size_t cap) {
+    char cwd[2048];
+    int n;
+    if (file[0] == '/') n = snprintf(out, cap, "%s", file);
+    else if (!getcwd(cwd, sizeof cwd)) return 0;
+    else n = snprintf(out, cap, "%s/%s", cwd, file);
+    return n > 0 && (size_t)n < cap && !strpbrk(out, "\r\n");
+}
+
+FrbError frb_config_set_base(FrbConfig *cfg, const char *file, char *err, size_t errlen) {
+    FrbFileInfo info;
+    FrbError e;
+    if (!cfg || !file) return FRB_ERR_ARG;
+    e = frb_file_info(file, &info);
+    if (e != FRB_OK) {
+        set_err(err, errlen, "cannot build on %s: %s", file, frb_error_str(e));
+        return e;
+    }
+    if (!info.complete) {
+        set_err(err, errlen, "%s is not a complete Bomb: nothing can be built on it", file);
+        return FRB_ERR_INCOMPLETE;
+    }
+    if (info.bits >= cfg->bits) {
+        set_err(err, errlen, "%s is a Bomb for %d-bit targets; a construction for %d bits needs a shorter one",
+                file, info.bits, cfg->bits);
+        return FRB_ERR_ARG;
+    }
+    if (!absolute_path(file, cfg->base_file, sizeof cfg->base_file)) {
+        cfg->base_file[0] = '\0';
+        set_err(err, errlen, "the file name of the base Bomb is too long");
+        return FRB_ERR_ARG;
+    }
+    cfg->base_bits = info.bits;
+    cfg->base_crc = info.table_crc;
+    cfg->enumerate_max = 0; /* the base supplies the lower bounds */
+    return FRB_OK;
+}
+
 static int config_path(char *buf, size_t cap, const char *dir, const char *name) {
     int n = snprintf(buf, cap, "%s/%s", dir, name);
     return n > 0 && (size_t)n < cap;
 }
 
 FrbError frb_config_write(const char *dir, const FrbConfig *cfg) {
-    char path[4096], text[1024];
-    int n;
+    char path[4096], text[4096];
+    int layout2, n;
     if (!dir || frb_config_check(cfg, NULL, 0) != FRB_OK) return FRB_ERR_ARG;
     if (!config_path(path, sizeof path, dir, "config.txt")) return FRB_ERR_ARG;
+    layout2 = cfg->format != FRB_FORMAT_VERSION || cfg->base_bits != 0;
     n = snprintf(text, sizeof text,
-                 CONFIG_MAGIC "\n"
-                              "# Settings of a FixedRunBomb construction.  The first five are fixed for\n"
-                              "# the life of this directory; the rest may be changed on resume.\n"
-                              "journal_version %d\n"
-                              "search_revision %d\n"
-                              "bits %d\n"
-                              "symmetry %d\n"
-                              "enumerate_max %d\n"
-                              "max_nodes %d\n"
-                              "fallback %s\n"
-                              "engine %s\n"
-                              "workers %d\n"
-                              "max_steps ",
-                 FRB_JOURNAL_VERSION, FRB_SEARCH_REVISION, cfg->bits, cfg->symmetry ? 1 : 0,
-                 cfg->enumerate_max, cfg->max_nodes, cfg->fallback_ring ? "ring" : "none",
-                 cfg->engine, cfg->workers);
+                 "%s\n"
+                 "# Settings of a FixedRunBomb construction.  The first five are fixed for\n"
+                 "# the life of this directory; the rest may be changed on resume.\n"
+                 "journal_version %d\n"
+                 "search_revision %d\n"
+                 "bits %d\n"
+                 "symmetry %d\n"
+                 "enumerate_max %d\n",
+                 layout2 ? CONFIG_MAGIC_2 : CONFIG_MAGIC_1, cfg->format, FRB_SEARCH_REVISION,
+                 cfg->bits, cfg->symmetry ? 1 : 0, cfg->enumerate_max);
+    if (layout2 && n > 0 && (size_t)n < sizeof text) {
+        n += snprintf(text + n, sizeof text - (size_t)n,
+                      "# Also fixed: the table format, and the complete Bomb for fewer bits this\n"
+                      "# construction builds on (0 = none), identified by its table checksum.\n"
+                      "# base_file says where that Bomb is and may be corrected if it moves.\n"
+                      "format %d\n"
+                      "base_bits %d\n",
+                      cfg->format, cfg->base_bits);
+        if (cfg->base_bits && n > 0 && (size_t)n < sizeof text)
+            n += snprintf(text + n, sizeof text - (size_t)n, "base_crc %08x\nbase_file %s\n",
+                          (unsigned)cfg->base_crc, cfg->base_file);
+    }
+    if (n > 0 && (size_t)n < sizeof text)
+        n += snprintf(text + n, sizeof text - (size_t)n,
+                      "max_nodes %d\n"
+                      "fallback %s\n"
+                      "engine %s\n"
+                      "workers %d\n"
+                      "max_steps ",
+                      cfg->max_nodes, cfg->fallback_ring ? "ring" : "none", cfg->engine, cfg->workers);
     for (int i = 0; i < cfg->passes && n > 0 && (size_t)n < sizeof text; i++)
         n += snprintf(text + n, sizeof text - (size_t)n, "%s%llu", i ? "," : "",
                       (unsigned long long)cfg->max_steps[i]);
@@ -169,9 +251,9 @@ int frb_parse_step_limits(const char *s, FrbConfig *cfg) {
 }
 
 FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errlen) {
-    char path[4096], line[512], key[64], value[256];
-    unsigned seen = 0;
-    int version = -1, revision = -1, lineno = 0;
+    char path[4096], line[2048], key[64], value[256];
+    unsigned seen = 0, want;
+    int version = -1, revision = -1, lineno = 0, layout = 0;
     FILE *f;
     if (!dir || !cfg) return FRB_ERR_ARG;
     memset(cfg, 0, sizeof *cfg);
@@ -186,14 +268,23 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
         while (n && (line[n - 1] == '\n' || line[n - 1] == '\r')) line[--n] = '\0';
         lineno++;
         if (lineno == 1) {
-            if (strcmp(line, CONFIG_MAGIC) != 0) {
+            if (strcmp(line, CONFIG_MAGIC_1) == 0) layout = 1;
+            else if (strcmp(line, CONFIG_MAGIC_2) == 0) layout = 2;
+            else {
                 fclose(f);
                 set_err(err, errlen, "%s: not a FixedRunBomb work directory of a known version", path);
                 return FRB_ERR_INCOMPATIBLE;
             }
+            cfg->format = FRB_FORMAT_VERSION; /* layout 1 has no other */
             continue;
         }
         if (line[0] == '#' || line[0] == '\0') continue;
+        if (layout == 2 && strncmp(line, "base_file ", 10) == 0) { /* may contain spaces */
+            if (n - 10 >= sizeof cfg->base_file || n == 10) goto bad;
+            memcpy(cfg->base_file, line + 10, n - 10 + 1);
+            seen |= 8192u;
+            continue;
+        }
         if (sscanf(line, "%63s %255s", key, value) != 2) goto bad;
         if (!strcmp(key, "journal_version")) { if (!parse_int(value, &version)) goto bad; seen |= 1u; }
         else if (!strcmp(key, "search_revision")) { if (!parse_int(value, &revision)) goto bad; seen |= 2u; }
@@ -214,16 +305,28 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
         }
         else if (!strcmp(key, "workers")) { if (!parse_int(value, &cfg->workers)) goto bad; seen |= 256u; }
         else if (!strcmp(key, "max_steps")) { if (!frb_parse_step_limits(value, cfg)) goto bad; seen |= 512u; }
+        else if (layout == 2 && !strcmp(key, "format")) { if (!parse_int(value, &cfg->format)) goto bad; seen |= 1024u; }
+        else if (layout == 2 && !strcmp(key, "base_bits")) { if (!parse_int(value, &cfg->base_bits)) goto bad; seen |= 2048u; }
+        else if (layout == 2 && !strcmp(key, "base_crc")) {
+            char *end;
+            unsigned long crc = strtoul(value, &end, 16);
+            if (end == value || *end != '\0' || strlen(value) != 8) goto bad;
+            cfg->base_crc = (uint32_t)crc;
+            seen |= 4096u;
+        }
         else goto bad;
     }
     fclose(f);
-    if (seen != 1023u) {
-        set_err(err, errlen, "%s: incomplete (a setting is missing)", path);
+    want = 1023u;
+    if (layout == 2) want |= 1024u | 2048u | (cfg->base_bits ? 4096u | 8192u : 0u);
+    if (seen != want) {
+        set_err(err, errlen, "%s: incomplete (a setting is missing, or one too many)", path);
         return FRB_ERR_INCOMPATIBLE;
     }
-    if (version != FRB_JOURNAL_VERSION) {
-        set_err(err, errlen, "%s: journal format version %d, this program reads version %d", path,
-                version, FRB_JOURNAL_VERSION);
+    if (!frb_format(cfg->format) || version != cfg->format) {
+        set_err(err, errlen, "%s: journal format version %d and table format %d; this program reads "
+                             "versions 1 to 3 of both, and they must agree",
+                path, version, cfg->format);
         return FRB_ERR_INCOMPATIBLE;
     }
     if (revision != FRB_SEARCH_REVISION) {
@@ -283,8 +386,9 @@ FrbError frb_work_create(const char *dir, const FrbConfig *cfg, char *err, size_
 
 /* ---- stop requests ------------------------------------------------------ */
 
-static volatile sig_atomic_t g_stop; /* 1: asked to stop.  2: the time limit passed */
-static uint64_t g_deadline_ns;       /* 0 = none */
+/* 1: asked to stop.  2: the time limit passed.  3: the disk is nearly full. */
+static volatile sig_atomic_t g_stop;
+static uint64_t g_deadline_ns; /* 0 = none */
 
 static void on_signal(int sig) {
     (void)sig;
@@ -331,10 +435,9 @@ static size_t plan_enum(const FrbState *s, int nodes, Job **jobs) {
 /* The targets a pass with this step limit still has something to do for. */
 static size_t plan_search(const FrbState *s, const FrbConfig *cfg, uint64_t max_steps, Job **jobs) {
     uint32_t top = (uint32_t)1 << (s->bits - 1);
-    size_t n = 0;
-    Job *list = calloc(s->count, sizeof *list);
-    *jobs = list;
-    if (!list) return 0;
+    size_t n = 0, cap = 0;
+    Job *list = NULL;
+    *jobs = NULL;
     for (uint32_t i = 0; i < s->count; i++) {
         const FrbTargetState *ts = &s->targets[i];
         int lo, hi;
@@ -348,12 +451,25 @@ static size_t plan_search(const FrbState *s, const FrbConfig *cfg, uint64_t max_
             if (ts->limit_kind == REV_LIMIT_STACK) continue; /* more steps will not help */
             if (effective_limit(ts->limit_max_steps) >= effective_limit(max_steps)) continue;
         }
+        if (n == cap) { /* grows with the work there is, not with the table */
+            size_t grown_cap = cap ? cap * 2 : 4096;
+            Job *grown = realloc(list, grown_cap * sizeof *list);
+            if (!grown) {
+                free(list);
+                return 0;
+            }
+            list = grown;
+            cap = grown_cap;
+        }
+        memset(&list[n], 0, sizeof list[n]);
         list[n].kind = JOB_SEARCH;
         list[n].lo = (uint8_t)lo;
         list[n].hi = (uint8_t)hi;
         list[n].target = i;
         n++;
     }
+    if (!list) list = calloc(1, sizeof *list); /* "nothing to do" is not "out of memory" */
+    *jobs = list;
     return n;
 }
 
@@ -387,7 +503,29 @@ typedef struct {
     uint32_t worker;
     uint32_t state; /* 0 running, 1 finished its list, 2 stopped early, 3 failed */
     uint64_t jobs, searches, steps, graphs;
+    uint64_t found_jobs;               /* search jobs that ended with a REV: a certified minimum */
+    uint32_t found[FRB_MAX_NODES + 1]; /* those, by node count */
 } Progress;
+
+static void progress_add(Progress *total, const Progress *p) {
+    total->jobs += p->jobs;
+    total->searches += p->searches;
+    total->steps += p->steps;
+    total->graphs += p->graphs;
+    total->found_jobs += p->found_jobs;
+    for (int n = 0; n <= FRB_MAX_NODES; n++) total->found[n] += p->found[n];
+}
+
+/*
+ * How the jobs of a round are shared out.  Every worker takes the next few
+ * jobs nobody has taken, from a counter in memory all of them share, until
+ * there are none left.  A slow processor core therefore does fewer jobs
+ * instead of holding the round up, and which worker ran which job has no
+ * bearing on the result: a job's records depend on the job alone.
+ */
+typedef struct {
+    atomic_uint_fast64_t next;
+} Cursor;
 
 typedef struct Session Session;
 
@@ -405,16 +543,45 @@ struct Session {
     const char *dir;
     const FrbConfig *cfg;
     const FrbRunOptions *opt;
+    const FrbFormat *format;
     FrbSegment *coord; /* the coordinator's own journal segment */
     uint32_t number;   /* session number */
     uint32_t next_segment;
     uint64_t start_ns;
+    uint64_t last_disk_ns;
     /* the round in progress, for progress lines */
     int round_kind;
     size_t round_jobs;
     uint64_t round_start_ns, last_progress_ns;
+    uint64_t certified_before; /* targets with a certified minimum when the round was planned */
+    uint64_t per_job;          /* targets one search job settles: 2 under symmetry */
     char round_label[96];
 };
+
+/* 1234567 -> "1,234,567", in one of a few static buffers used in turn. */
+static const char *commas(uint64_t v) {
+    static char bufs[8][32];
+    static int next;
+    char digits[24], *out = bufs[next];
+    int n, k = 0;
+    next = (next + 1) % 8;
+    n = snprintf(digits, sizeof digits, "%llu", (unsigned long long)v);
+    for (int i = 0; i < n; i++) {
+        out[k++] = digits[i];
+        if ((n - 1 - i) % 3 == 0 && i != n - 1) out[k++] = ',';
+    }
+    out[k] = '\0';
+    return out;
+}
+
+static const char *duration(double seconds) {
+    static char buf[64];
+    if (seconds < 120) snprintf(buf, sizeof buf, "%.0f s", seconds);
+    else
+        snprintf(buf, sizeof buf, "%.0f s (%d h %02d min)", seconds, (int)(seconds / 3600),
+                 (int)(seconds / 60) % 60);
+    return buf;
+}
 
 static void progress_line(Session *S, const Progress *p, int final) {
     FILE *log = S->opt->log;
@@ -439,10 +606,41 @@ static void progress_line(Session *S, const Progress *p, int final) {
     }
     if (final) fprintf(log, ", %.2f s\n", rt);
     else if (p->jobs > 0 && p->jobs < S->round_jobs)
-        fprintf(log, ", about %.0f s left\n",
-                rt * (double)(S->round_jobs - p->jobs) / (double)p->jobs);
+        fprintf(log, ", about %s left\n",
+                duration(rt * (double)(S->round_jobs - p->jobs) / (double)p->jobs));
     else fprintf(log, "\n");
+    if (S->round_kind == JOB_SEARCH && p->found_jobs) {
+        uint64_t all = (uint64_t)1 << S->cfg->bits;
+        uint64_t certified = S->certified_before + S->per_job * p->found_jobs;
+        fprintf(log, "             certified: %s of %s strings (%.2f%%), %s open.  Minimum nodes of those\n"
+                     "             settled in this round:",
+                commas(certified), commas(all), 100.0 * (double)certified / (double)all,
+                commas(all - certified));
+        for (int n = 1; n <= FRB_MAX_NODES; n++)
+            if (p->found[n]) fprintf(log, "  %d: %s", n, commas(S->per_job * p->found[n]));
+        fprintf(log, "\n");
+    }
     fflush(log);
+}
+
+/* Free space left for the journal, against the limit asked for. */
+static void watch_disk(Session *S) {
+    struct statvfs v;
+    uint64_t now = now_ns(), free_bytes;
+    if (!S->opt->min_free_bytes || g_stop) return;
+    if (S->last_disk_ns && now - S->last_disk_ns < 2000000000ull) return;
+    S->last_disk_ns = now;
+    if (statvfs(S->dir, &v) != 0) return;
+    free_bytes = (uint64_t)v.f_bavail * (uint64_t)v.f_frsize;
+    if (free_bytes >= S->opt->min_free_bytes) return;
+    g_stop = 3;
+    if (S->opt->log) {
+        fprintf(S->opt->log,
+                "Only %s bytes are free where %s is (the limit is %s): stopping cleanly.\n"
+                "Everything recorded so far is kept; free some space and run the same command again.\n",
+                commas(free_bytes), S->dir, commas(S->opt->min_free_bytes));
+        fflush(S->opt->log);
+    }
 }
 
 static FrbError append(Worker *w, const FrbRecord *rec) {
@@ -467,6 +665,7 @@ static FrbError housekeeping(Worker *w, int final) {
     if (final || now - w->last_report_ns >= 100000000ull) {
         w->last_report_ns = now;
         if (w->pipe_fd < 0) {
+            watch_disk(w->session);
             progress_line(w->session, &w->p, 0);
         } else if (write(w->pipe_fd, &w->p, sizeof w->p) != (ssize_t)sizeof w->p) {
             g_stop = 1; /* nobody is listening: the coordinator is gone */
@@ -492,7 +691,7 @@ static int enum_found(void *ctx, uint32_t index, const RevGraph *g) {
     rec.target = index;
     rec.time = (uint32_t)time(NULL);
     rec.nodes = (uint8_t)c->nodes;
-    c->error = frb_graph_pack(g, rec.graph);
+    c->error = frb_graph_pack_as(c->w->session->format, g, rec.graph);
     if (c->error == FRB_OK) c->error = append(c->w, &rec);
     if (c->error != FRB_OK) return 1;
     c->count++;
@@ -559,7 +758,7 @@ static FrbError do_search(Worker *w, const Job *job) {
              * the record is made. */
             if (g.node_count < 1 || g.node_count > b ||
                 rev_verify_prefix(&g, target, (size_t)cfg->bits, NULL) != REV_OK ||
-                frb_graph_pack(&g, rec.graph) != FRB_OK) {
+                frb_graph_pack_as(w->session->format, &g, rec.graph) != FRB_OK) {
                 set_err(w->err, sizeof w->err, "engine returned an invalid witness for %s at budget %d",
                         target, b);
                 return FRB_ERR_EVIDENCE;
@@ -585,29 +784,50 @@ static FrbError do_search(Worker *w, const Job *job) {
         if (e != FRB_OK) return e;
         w->p.searches++;
         w->p.steps += st.steps;
+        if (r == REV_SOLVE_SOLVED) {
+            /* Every smaller budget is excluded: by what was known when the
+             * job was planned, and by the searches just made. */
+            w->p.found_jobs++;
+            w->p.found[rec.nodes]++;
+        }
         if (r != REV_SOLVE_PROVEN_UNSAT) break;
     }
     return FRB_OK;
 }
 
-/* Jobs first, first + stride, ... of the round. */
-static FrbError run_jobs(Worker *w, const Job *jobs, size_t count, size_t first, size_t stride) {
+/* One job; 1 if the worker is to go on. */
+static int run_job(Worker *w, const Job *job, FrbError *e) {
+    if (should_stop()) {
+        w->p.state = 2;
+        return 0;
+    }
+    *e = job->kind == JOB_ENUM ? do_enum(w, job) : do_search(w, job);
+    if (*e == FRB_ERR_STOPPED) {
+        *e = FRB_OK;
+        w->p.state = 2;
+        return 0;
+    }
+    if (*e != FRB_OK) return 0;
+    w->p.jobs++;
+    *e = housekeeping(w, 0);
+    return *e == FRB_OK;
+}
+
+/* The worker's share of the round: `chunk` jobs at a time from the shared
+ * cursor, or, without one, jobs first, first + stride, ... */
+static FrbError run_jobs(Worker *w, const Job *jobs, size_t count, Cursor *cursor, size_t chunk,
+                         size_t first, size_t stride) {
     FrbError e = FRB_OK, e2;
-    for (size_t i = first; i < count; i += stride) {
-        if (should_stop()) {
-            w->p.state = 2;
-            break;
+    int go = 1;
+    if (cursor) {
+        while (go) {
+            uint64_t from = atomic_fetch_add(&cursor->next, (uint_fast64_t)chunk);
+            if (from >= count) break;
+            for (uint64_t i = from; go && i < from + chunk && i < count; i++)
+                go = run_job(w, &jobs[i], &e);
         }
-        e = jobs[i].kind == JOB_ENUM ? do_enum(w, &jobs[i]) : do_search(w, &jobs[i]);
-        if (e == FRB_ERR_STOPPED) {
-            e = FRB_OK;
-            w->p.state = 2;
-            break;
-        }
-        if (e != FRB_OK) break;
-        w->p.jobs++;
-        e = housekeeping(w, 0);
-        if (e != FRB_OK) break;
+    } else {
+        for (size_t i = first; go && i < count; i += stride) go = run_job(w, &jobs[i], &e);
     }
     if (e != FRB_OK) w->p.state = 3;
     else if (w->p.state == 0) w->p.state = 1;
@@ -628,7 +848,7 @@ static void worker_init(Worker *w, Session *S, FrbSegment *seg, uint64_t max_ste
 
 /* A forked worker.  Never returns. */
 static void child_main(Session *S, const Job *jobs, size_t count, uint64_t max_steps, int k,
-                       int workers, uint32_t segment, int fd) {
+                       int workers, Cursor *cursor, size_t chunk, uint32_t segment, int fd) {
     Worker w;
     FrbSegment *seg = NULL;
     FrbError e;
@@ -639,7 +859,7 @@ static void child_main(Session *S, const Job *jobs, size_t count, uint64_t max_s
         _exit(2);
     }
     worker_init(&w, S, seg, max_steps, fd, (uint32_t)k);
-    e = run_jobs(&w, jobs, count, (size_t)k, (size_t)workers);
+    e = run_jobs(&w, jobs, count, cursor, chunk, (size_t)k, (size_t)workers);
     if (frb_segment_close(seg) != FRB_OK && e == FRB_OK) {
         e = FRB_ERR_IO;
         set_err(w.err, sizeof w.err, "cannot write to the journal (disk full?)");
@@ -655,6 +875,8 @@ static FrbError run_round_forked(Session *S, const Job *jobs, size_t count, uint
                                  int workers, Progress *total, char *err, size_t errlen) {
     Progress *latest = calloc((size_t)workers, sizeof *latest);
     pid_t *pids = calloc((size_t)workers, sizeof *pids);
+    Cursor *cursor = NULL;
+    size_t chunk = 1;
     int fds[2], started = 0, forwarded = 0, failed = 0;
     FrbError e = FRB_OK;
     if (!latest || !pids || pipe(fds) != 0) {
@@ -662,6 +884,21 @@ static FrbError run_round_forked(Session *S, const Job *jobs, size_t count, uint
         free(pids);
         set_err(err, errlen, "cannot start worker processes");
         return FRB_ERR_IO;
+    }
+#if defined(MAP_ANONYMOUS) && ATOMIC_LLONG_LOCK_FREE == 2
+    {
+        void *shared = mmap(NULL, sizeof *cursor, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS,
+                            -1, 0);
+        if (shared != MAP_FAILED) {
+            cursor = shared;
+            atomic_init(&cursor->next, 0);
+        }
+    }
+#endif
+    if (S->round_kind == JOB_SEARCH) { /* small against the round, large against the hand-out */
+        chunk = count / ((size_t)workers * 64u);
+        if (chunk < 1) chunk = 1;
+        if (chunk > 32) chunk = 32;
     }
     frb_segment_flush(S->coord, 0);
     fflush(NULL); /* nothing buffered may be written twice */
@@ -671,7 +908,7 @@ static FrbError run_round_forked(Session *S, const Job *jobs, size_t count, uint
         if (pid < 0) break; /* go on with the workers there are; the rest is replanned */
         if (pid == 0) {
             close(fds[0]);
-            child_main(S, jobs, count, max_steps, k, workers, segment, fds[1]);
+            child_main(S, jobs, count, max_steps, k, workers, cursor, chunk, segment, fds[1]);
         }
         pids[started++] = pid;
     }
@@ -680,6 +917,7 @@ static FrbError run_round_forked(Session *S, const Job *jobs, size_t count, uint
         close(fds[0]);
         free(latest);
         free(pids);
+        if (cursor) munmap(cursor, sizeof *cursor);
         set_err(err, errlen, "cannot start worker processes");
         return FRB_ERR_IO;
     }
@@ -699,17 +937,13 @@ static FrbError run_round_forked(Session *S, const Job *jobs, size_t count, uint
         } else if (r < 0 && errno != EINTR) {
             break;
         }
-        if (should_stop() && !forwarded) { /* a signal sent to this process only */
+        watch_disk(S);
+        if (should_stop() && !forwarded) { /* a signal sent to this process only, or a limit */
             for (int k = 0; k < started; k++) kill(pids[k], SIGTERM);
             forwarded = 1;
         }
         memset(total, 0, sizeof *total);
-        for (int k = 0; k < workers; k++) {
-            total->jobs += latest[k].jobs;
-            total->searches += latest[k].searches;
-            total->steps += latest[k].steps;
-            total->graphs += latest[k].graphs;
-        }
+        for (int k = 0; k < workers; k++) progress_add(total, &latest[k]);
         progress_line(S, total, 0);
     }
     close(fds[0]);
@@ -720,17 +954,13 @@ static FrbError run_round_forked(Session *S, const Job *jobs, size_t count, uint
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) failed++;
     }
     memset(total, 0, sizeof *total);
-    for (int k = 0; k < workers; k++) {
-        total->jobs += latest[k].jobs;
-        total->searches += latest[k].searches;
-        total->steps += latest[k].steps;
-        total->graphs += latest[k].graphs;
-    }
+    for (int k = 0; k < workers; k++) progress_add(total, &latest[k]);
     if (failed) {
         set_err(err, errlen, "%d worker process%s failed; what they had recorded is kept", failed,
                 failed == 1 ? "" : "es");
         e = FRB_ERR_IO;
     }
+    if (cursor) munmap(cursor, sizeof *cursor);
     free(latest);
     free(pids);
     return e;
@@ -749,7 +979,7 @@ static FrbError run_round(Session *S, const Job *jobs, size_t count, uint64_t ma
     if (workers <= 1) {
         Worker w;
         worker_init(&w, S, S->coord, max_steps, -1, 0);
-        e = run_jobs(&w, jobs, count, 0, 1);
+        e = run_jobs(&w, jobs, count, NULL, 1, 0, 1);
         *total = w.p;
         if (e != FRB_OK) set_err(err, errlen, "%s", w.err[0] ? w.err : frb_error_str(e));
     } else {
@@ -826,8 +1056,44 @@ static FrbError first_conflict(const FrbState *s, char *err, size_t errlen) {
     return FRB_ERR_EVIDENCE;
 }
 
-FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions *opt,
-                      FrbRunResult *result, char *err, size_t errlen) {
+/* Memory this machine has, in bytes; 0 if it does not say. */
+static uint64_t physical_memory(void) {
+#if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+    long pages = sysconf(_SC_PHYS_PAGES), size = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && size > 0) return (uint64_t)pages * (uint64_t)size;
+#endif
+    return 0;
+}
+
+/*
+ * The state of a construction is held in memory while a round is planned
+ * and while its table is written: a number known in advance.  A machine
+ * that has less is told so before anything is started, rather than left to
+ * find out hours into a run.
+ */
+FrbError frb_check_memory(const FrbConfig *cfg, FILE *log, char *err, size_t errlen) {
+    uint64_t need = frb_state_bytes(cfg->bits, frb_format(cfg->format)), have = physical_memory();
+    const double gb = 1024.0 * 1024.0 * 1024.0;
+    if (log && need >= ((uint64_t)1 << 30)) {
+        fprintf(log, "The state of this %d-bit construction takes %.1f GB of memory", cfg->bits,
+                (double)need / gb);
+        if (have) fprintf(log, "; this machine has %.1f GB", (double)have / gb);
+        fprintf(log, ".\n");
+        fflush(log);
+    }
+    if (have && need > have - have / 8) { /* an eighth is left to the system and the workers */
+        set_err(err, errlen,
+                "the state of a %d-bit construction takes %.1f GB of memory and this machine has %.1f GB",
+                cfg->bits, (double)need / gb, (double)have / gb);
+        return FRB_ERR_MEMORY;
+    }
+    return FRB_OK;
+}
+
+/* frb_work_run.  If final_state is not NULL and the call succeeds, it
+ * receives the state as the last replay left it, for the caller to free. */
+static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions *opt,
+                         FrbRunResult *result, FrbState **final_state, char *err, size_t errlen) {
     struct sigaction action, old_int, old_term;
     FrbRunResult local;
     FrbState *state = NULL;
@@ -837,10 +1103,13 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
     int lock_fd, sampling;
     FrbError e, e2;
 
+    if (final_state) *final_state = NULL;
     if (!result) result = &local;
     memset(result, 0, sizeof *result);
     if (!dir || !cfg || !opt || !opt->solve) return FRB_ERR_ARG;
     e = frb_config_check(cfg, err, errlen);
+    if (e != FRB_OK) return e;
+    e = frb_check_memory(cfg, NULL, err, errlen); /* said aloud by whoever set the construction up */
     if (e != FRB_OK) return e;
     lock_fd = lock_dir(dir, err, errlen, &e);
     if (lock_fd < 0) return e;
@@ -854,6 +1123,8 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
     S.dir = dir;
     S.cfg = cfg;
     S.opt = opt;
+    S.format = frb_format(cfg->format);
+    S.per_job = cfg->symmetry ? 2 : 1;
     S.number = state->last_session + 1u;
     S.next_segment = state->journal.next_segment;
     S.start_ns = now_ns();
@@ -872,6 +1143,16 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
     rec.time = (uint32_t)time(NULL);
     e = frb_segment_append(S.coord, &rec);
     if (e == FRB_OK) e = frb_segment_flush(S.coord, 1);
+
+    if (opt->log && cfg->base_bits) {
+        fprintf(opt->log,
+                "FixedRunBomb(%d) on the complete %d-bit Bomb: %s of %s strings are settled by its REVs\n"
+                "without search; %s have a certified minimum now, %s are open.\n",
+                cfg->bits, cfg->base_bits, commas(state->base_settled), commas(state->count),
+                commas(state->by_status[FRB_MINIMAL]),
+                commas(state->count - state->by_status[FRB_MINIMAL]));
+        fflush(opt->log);
+    }
 
     g_stop = 0;
     g_deadline_ns = opt->time_limit > 0 ? S.start_ns + seconds_ns(opt->time_limit) : 0;
@@ -936,6 +1217,18 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
             count = keep;
         }
         if (count > jobs_left) count = (size_t)jobs_left;
+        watch_disk(&S);
+        if (should_stop()) {
+            free(jobs);
+            break;
+        }
+
+        /* The workers need the jobs and nothing else: the state, which is
+         * most of the memory of a large construction, goes before they are
+         * started and is replayed from the journal after they are done. */
+        S.certified_before = state->by_status[FRB_MINIMAL];
+        frb_state_free(state);
+        state = NULL;
 
         S.round_kind = kind;
         e = run_round(&S, jobs, count, limit, &total, err, errlen);
@@ -955,8 +1248,6 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
             e = FRB_ERR_IO;
             break;
         }
-        frb_state_free(state);
-        state = NULL;
         e = frb_state_load(dir, cfg, &state, err, errlen);
         if (e != FRB_OK) break;
         if (!should_stop() && (total.jobs == 0 || progress_mark(state) == mark)) {
@@ -969,6 +1260,7 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
 
     result->interrupted = g_stop == 1;
     if (g_stop == 2) result->stopped_early = 1;
+    if (g_stop == 3) result->disk_low = 1;
     result->seconds = (double)(now_ns() - S.start_ns) * 1e-9;
     result->complete = e == FRB_OK && state && state->by_status[FRB_MINIMAL] == state->count;
 
@@ -988,18 +1280,108 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
     sigaction(SIGINT, &old_int, NULL);
     sigaction(SIGTERM, &old_term, NULL);
     g_deadline_ns = 0;
-    frb_state_free(state);
+    if (e == FRB_OK && final_state) *final_state = state;
+    else frb_state_free(state);
     close(lock_fd); /* releases the lock, unless workers are still alive */
     return e;
 }
 
+FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions *opt,
+                      FrbRunResult *result, char *err, size_t errlen) {
+    return work_run(dir, cfg, opt, result, NULL, err, errlen);
+}
+
 /* ---- finalization and deep checks --------------------------------------- */
+
+/* What the table holds for one target of a state: its status and, if it has
+ * a witness, the graph (the ring is made here; nothing stored it). */
+static FrbError state_entry(const FrbState *state, uint32_t i, FrbStatus *status, RevGraph *g) {
+    const FrbTargetState *ts = &state->targets[i];
+    *status = (FrbStatus)ts->status;
+    g->node_count = 0;
+    if (!ts->nodes) return FRB_OK;
+    if (ts->source == FRB_SRC_RING) {
+        frb_ring_witness(i, state->bits, g);
+        return FRB_OK;
+    }
+    return frb_graph_unpack_as(state->format, frb_state_graph(state, i), ts->nodes, g);
+}
+
+/*
+ * The table a state amounts to, written, read back and compared.  Frees the
+ * state.  The table is never held in memory beside the state: it is written
+ * entry by entry (each witness run as it goes), then read back as a stranger
+ * would read it, through a mapping of the file, validated in full and
+ * compared entry for entry with what the state says.
+ */
+static FrbError finalize_state(FrbState *state, const char *output, int allow_partial,
+                               FrbSummary *summary, char *err, size_t errlen) {
+    uint8_t entry[FRB_MAX_ENTRY_BYTES];
+    FrbWriter *writer = NULL;
+    FrbFileInfo info;
+    FrbTable back;
+    uint32_t crc = 0, missing;
+    FrbError e = first_conflict(state, err, errlen);
+    if (e != FRB_OK) {
+        frb_state_free(state);
+        return e;
+    }
+    missing = state->count - state->by_status[FRB_MINIMAL];
+    if (missing && !allow_partial) { /* nothing is written, not even a temporary file */
+        memset(summary, 0, sizeof *summary);
+        summary->count = state->count;
+        for (int st = 0; st < 5; st++) summary->by_status[st] = state->by_status[st];
+        set_err(err, errlen,
+                "%u of %u targets have no certified minimum; a complete table cannot be written",
+                (unsigned)missing, (unsigned)state->count);
+        frb_state_free(state);
+        return FRB_ERR_INCOMPLETE;
+    }
+    e = frb_writer_open(output, state->bits, state->format, &writer);
+    for (uint32_t i = 0; e == FRB_OK && i < state->count; i++) {
+        FrbStatus status;
+        RevGraph g;
+        e = state_entry(state, i, &status, &g);
+        if (e == FRB_OK) e = frb_writer_put(writer, status, g.node_count ? &g : NULL); /* runs it */
+        if (e != FRB_OK && e != FRB_ERR_IO) {
+            set_err(err, errlen, "the journal does not amount to a valid table: %s", frb_error_str(e));
+            frb_writer_abort(writer);
+            frb_state_free(state);
+            return e;
+        }
+    }
+    if (e == FRB_OK) e = frb_writer_finish(writer, summary, &crc);
+    else frb_writer_abort(writer);
+    if (e != FRB_OK) {
+        set_err(err, errlen, "cannot write %s", output);
+        frb_state_free(state);
+        return e;
+    }
+    e = frb_file_read(output, &back, &info, NULL); /* every check a reader makes */
+    if (e == FRB_OK) {
+        size_t bytes = (size_t)state->format->entry_bytes;
+        if (back.count != state->count || back.format != state->format || info.table_crc != crc ||
+            info.complete != summary->complete)
+            e = FRB_ERR_IO;
+        for (uint32_t i = 0; e == FRB_OK && i < state->count; i++) {
+            FrbStatus status;
+            RevGraph g;
+            if (state_entry(state, i, &status, &g) != FRB_OK ||
+                frb_entry_encode_as(state->format, status, g.node_count ? &g : NULL, entry) != FRB_OK ||
+                memcmp(entry, frb_table_entry(&back, i), bytes) != 0)
+                e = FRB_ERR_IO;
+        }
+        frb_table_destroy(&back);
+    }
+    if (e != FRB_OK) set_err(err, errlen, "%s does not read back as written", output);
+    frb_state_free(state);
+    return e;
+}
 
 FrbError frb_work_finalize(const char *dir, const char *output, int allow_partial,
                            FrbSummary *summary, char *err, size_t errlen) {
     FrbConfig cfg;
     FrbState *state = NULL;
-    FrbTable table, back;
     FrbSummary local;
     FrbError e;
     if (!dir || !output) return FRB_ERR_ARG;
@@ -1009,41 +1391,7 @@ FrbError frb_work_finalize(const char *dir, const char *output, int allow_partia
     if (e != FRB_OK) return e;
     e = frb_state_load(dir, &cfg, &state, err, errlen);
     if (e != FRB_OK) return e;
-    e = first_conflict(state, err, errlen);
-    if (e != FRB_OK) {
-        frb_state_free(state);
-        return e;
-    }
-    e = frb_state_table(state, &table);
-    frb_state_free(state);
-    if (e != FRB_OK) {
-        set_err(err, errlen, "the journal does not amount to a valid table: %s", frb_error_str(e));
-        return e;
-    }
-    e = frb_table_validate(&table, summary, NULL);
-    if (e == FRB_OK && !summary->complete && !allow_partial) {
-        set_err(err, errlen,
-                "%u of %u targets have no certified minimum; a complete table cannot be written",
-                (unsigned)(summary->count - summary->by_status[FRB_MINIMAL]),
-                (unsigned)summary->count);
-        e = FRB_ERR_INCOMPLETE;
-    }
-    if (e == FRB_OK) {
-        e = frb_file_write(output, &table);
-        if (e != FRB_OK) set_err(err, errlen, "cannot write %s", output);
-    }
-    if (e == FRB_OK) { /* read it back as a stranger would */
-        e = frb_file_read(output, &back, NULL, NULL);
-        if (e == FRB_OK) {
-            if (back.count != table.count ||
-                memcmp(back.entries, table.entries, (size_t)table.count * FRB_ENTRY_BYTES) != 0)
-                e = FRB_ERR_IO;
-            frb_table_destroy(&back);
-        }
-        if (e != FRB_OK) set_err(err, errlen, "%s does not read back as written", output);
-    }
-    frb_table_destroy(&table);
-    return e;
+    return finalize_state(state, output, allow_partial, summary, err, errlen);
 }
 
 FrbError frb_verify_evidence(const FrbTable *table, const FrbState *state, uint32_t *bad_index,
@@ -1082,57 +1430,468 @@ FrbError frb_verify_evidence(const FrbTable *table, const FrbState *state, uint3
     return FRB_OK;
 }
 
+/* Solve one entry's target again from node budget 1 and compare. */
+static FrbError recertify_entry(const FrbTable *table, uint32_t i, RevLevelSolveFn solve,
+                                const RevLevelOptions *options, FrbRecertify *out) {
+    char target[FRB_MAX_BITS + 1];
+    RevMinimalInfo info;
+    RevGraph g, mine;
+    FrbStatus st;
+    RevMinimalStatus ms;
+    FrbError e = frb_table_get(table, i, &st, &g);
+    if (e != FRB_OK) {
+        out->first_bad = i;
+        return e;
+    }
+    frb_target_format(i, table->bits, target);
+    ms = rev_minimal_solve_with(solve, target, (size_t)table->bits, table->format->node_capacity,
+                                options, &mine, &info);
+    out->checked++;
+    out->steps += info.steps;
+    if (ms == REV_MIN_UNKNOWN) {
+        out->undecided++;
+    } else if (st == FRB_MINIMAL) {
+        if (ms == REV_MIN_MINIMAL && info.node_count == g.node_count) out->agree++;
+        else if (out->disagree++ == 0) out->first_bad = i;
+    } else if (st == FRB_WITNESS) {
+        if (ms != REV_MIN_MINIMAL || info.node_count > g.node_count) {
+            if (out->disagree++ == 0) out->first_bad = i; /* a witness below the minimum */
+        } else if (info.node_count < g.node_count) {
+            out->tightened++;
+        }
+    }
+    return FRB_OK;
+}
+
+/*
+ * The first `todo` places of a Fisher-Yates shuffle of 0 .. count-1, without
+ * the array of count numbers: a place that was never exchanged holds its own
+ * index, and only the others are kept, in a small hash table.  The choice is
+ * the one the shuffle of the whole array makes.
+ */
+typedef struct {
+    uint32_t place, value;
+    uint8_t used;
+} Moved;
+
+static uint32_t moved_get(const Moved *map, size_t mask, uint32_t place) {
+    for (size_t h = ((size_t)place * 2654435761u) & mask;; h = (h + 1) & mask) {
+        if (!map[h].used) return place;
+        if (map[h].place == place) return map[h].value;
+    }
+}
+
+static void moved_put(Moved *map, size_t mask, uint32_t place, uint32_t value) {
+    size_t h = ((size_t)place * 2654435761u) & mask;
+    while (map[h].used && map[h].place != place) h = (h + 1) & mask;
+    map[h].used = 1;
+    map[h].place = place;
+    map[h].value = value;
+}
+
+uint32_t *frb_choose_sample(uint32_t count, uint32_t todo, uint64_t seed) {
+    uint32_t *chosen = todo && todo <= count ? malloc((size_t)todo * sizeof *chosen) : NULL;
+    size_t cap = 16;
+    Moved *map;
+    while (cap < (size_t)todo * 4) cap *= 2; /* two places change per step: at most half full */
+    map = chosen ? calloc(cap, sizeof *map) : NULL;
+    if (!chosen || !map) {
+        free(chosen);
+        free(map);
+        return NULL;
+    }
+    for (uint32_t i = 0; i < todo; i++) {
+        uint32_t j = i + (uint32_t)(prng_next(&seed) % (uint64_t)(count - i));
+        uint32_t at_i = moved_get(map, cap - 1, i), at_j = moved_get(map, cap - 1, j);
+        moved_put(map, cap - 1, i, at_j);
+        moved_put(map, cap - 1, j, at_i);
+        chosen[i] = at_j; /* no later step touches place i */
+    }
+    free(map);
+    return chosen;
+}
+
 FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
                        uint64_t sample, uint64_t seed, FrbRecertify *out) {
     RevLevelOptions options = {max_steps};
-    char target[FRB_MAX_BITS + 1];
-    uint32_t *order;
-    uint64_t state = seed, todo;
+    uint32_t *chosen = NULL;
+    uint64_t todo;
+    FrbError e = FRB_OK;
     if (!table || !table->entries || !solve || !out) return FRB_ERR_ARG;
     memset(out, 0, sizeof *out);
-    order = malloc((size_t)table->count * sizeof *order);
-    if (!order) return FRB_ERR_MEMORY;
-    for (uint32_t i = 0; i < table->count; i++) order[i] = i;
     todo = table->count;
     if (sample && sample < todo) {
         todo = sample;
-        for (uint32_t i = 0; i < todo; i++) {
-            uint32_t j = i + (uint32_t)(prng_next(&state) % (uint64_t)(table->count - i));
-            uint32_t tmp = order[i];
-            order[i] = order[j];
-            order[j] = tmp;
-        }
+        chosen = frb_choose_sample(table->count, (uint32_t)todo, seed);
+        if (!chosen) return FRB_ERR_MEMORY;
     }
-    for (uint64_t k = 0; k < todo; k++) {
-        uint32_t i = order[k];
-        RevMinimalInfo info;
-        RevGraph g, mine;
-        FrbStatus st;
-        RevMinimalStatus ms;
-        FrbError e = frb_table_get(table, i, &st, &g);
+    for (uint64_t k = 0; k < todo && e == FRB_OK; k++)
+        e = recertify_entry(table, chosen ? chosen[k] : (uint32_t)k, solve, &options, out);
+    free(chosen);
+    if (e != FRB_OK) return e;
+    return out->disagree ? FRB_ERR_EVIDENCE : FRB_OK;
+}
+
+FrbError frb_recertify_hardest(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
+                               uint64_t limit, FrbRecertify *out) {
+    RevLevelOptions options = {max_steps};
+    int graph_bytes, max = 0;
+    if (!table || !table->entries || !table->format || !solve || !out) return FRB_ERR_ARG;
+    memset(out, 0, sizeof *out);
+    graph_bytes = table->format->graph_bytes;
+    for (uint32_t i = 0; i < table->count; i++) {
+        unsigned meta = frb_table_entry(table, i)[graph_bytes];
+        if ((meta >> 5) == (unsigned)FRB_MINIMAL && (int)(meta & 31u) > max) max = (int)(meta & 31u);
+    }
+    out->nodes = max;
+    for (uint32_t i = 0; i < table->count; i++) {
+        unsigned meta = frb_table_entry(table, i)[graph_bytes];
+        FrbError e;
+        if (max == 0 || (meta >> 5) != (unsigned)FRB_MINIMAL || (int)(meta & 31u) != max) continue;
+        out->hardest++;
+        if (limit && out->checked >= limit) continue; /* counted, not recomputed */
+        e = recertify_entry(table, i, solve, &options, out);
+        if (e != FRB_OK) return e;
+    }
+    return out->disagree ? FRB_ERR_EVIDENCE : FRB_OK;
+}
+
+/* ---- the ladder --------------------------------------------------------- */
+
+static int ladder_file(char *buf, size_t cap, const char *dir, int bits) {
+    int n = snprintf(buf, cap, "%s/fixed-run-%02d.frb", dir, bits);
+    return n > 0 && (size_t)n < cap;
+}
+
+static int ladder_work(char *buf, size_t cap, const char *dir, int bits) {
+    int n = snprintf(buf, cap, "%s/work-%02d", dir, bits);
+    return n > 0 && (size_t)n < cap;
+}
+
+/* The longest Bomb in the directory; 0 if there is none. */
+static FrbError ladder_top(const char *dir, int *top, char *err, size_t errlen) {
+    char path[4096];
+    *top = 0;
+    for (int bits = FRB_MAX_BITS; bits >= 1; bits--) {
+        FrbFileInfo info;
+        struct stat st;
+        FrbError e;
+        if (!ladder_file(path, sizeof path, dir, bits)) return FRB_ERR_ARG;
+        if (stat(path, &st) != 0) continue;
+        e = frb_file_info(path, &info);
+        if (e != FRB_OK || !info.complete || info.bits != bits) {
+            set_err(err, errlen,
+                    "%s is not a complete %d-bit Bomb (%s); move it out of the way and run again to "
+                    "rebuild that level",
+                    path, bits, e != FRB_OK ? frb_error_str(e) : "incomplete, or of another length");
+            return e != FRB_OK ? e : FRB_ERR_INCOMPATIBLE;
+        }
+        *top = bits;
+        return FRB_OK;
+    }
+    return FRB_OK;
+}
+
+/* Validate the starting Bomb in full and copy it into the directory. */
+static FrbError ladder_start(const char *dir, const char *from_file, int *top, FILE *log, char *err,
+                             size_t errlen) {
+    char path[4096];
+    FrbFileInfo info;
+    FrbTable table;
+    uint32_t bad = 0;
+    FrbError e;
+    if (!from_file) {
+        set_err(err, errlen, "%s holds no Bomb to climb from; name a complete one with --from", dir);
+        return FRB_ERR_ARG;
+    }
+    e = frb_file_read(from_file, &table, &info, &bad);
+    if (e != FRB_OK) {
+        set_err(err, errlen, "cannot start from %s: %s", from_file, frb_error_str(e));
+        return e;
+    }
+    if (!info.complete) {
+        frb_table_destroy(&table);
+        set_err(err, errlen, "%s is not a complete Bomb: nothing can be built on it", from_file);
+        return FRB_ERR_INCOMPLETE;
+    }
+    if (!ladder_file(path, sizeof path, dir, info.bits)) {
+        frb_table_destroy(&table);
+        return FRB_ERR_ARG;
+    }
+    e = frb_file_write(path, &table);
+    frb_table_destroy(&table);
+    if (e != FRB_OK) {
+        set_err(err, errlen, "cannot write %s", path);
+        return e;
+    }
+    if (log) {
+        fprintf(log, "Starting from %s: a complete %d-bit Bomb, every REV run again; copied to %s\n",
+                from_file, info.bits, path);
+        fflush(log);
+    }
+    *top = info.bits;
+    return FRB_OK;
+}
+
+/* ceil(2 * sqrt(L)) - 1, in integers. */
+static int formula_nodes(int bits) {
+    int k = 0;
+    while (k * k < 4 * bits) k++;
+    return k - 1;
+}
+
+typedef struct {
+    uint64_t searches, steps, solver_ns, session_ns, journal_bytes, journal_records;
+    uint32_t sessions, killed, base_settled;
+} LevelCost;
+
+static void level_report(FILE *out, int bits, const char *file, const FrbSummary *sum,
+                         const LevelCost *cost, int nodes_of_one, uint32_t table_crc) {
+    int max = sum->max_minimal_nodes, formula = formula_nodes(bits);
+    fprintf(out, "\n=== FixedRunBomb(%d) is complete: %s ===\n\n", bits, file);
+    frb_report_summary(out, sum, bits);
+    fprintf(out, "\nStrings that need the maximum of %d nodes: %s\n", max,
+            commas(sum->minimal_by_nodes[max]));
+    fprintf(out, "ceil(2*sqrt(%d)) - 1 = %d: the maximum %s\n", bits, formula,
+            max == formula ? "equals it" : "DOES NOT equal it");
+    fprintf(out, "0...01 needs %d nodes: %s\n", nodes_of_one,
+            nodes_of_one == max ? "it is among the hardest strings" : "it is NOT among the hardest strings");
+    fprintf(out, "\nConstruction of this level\n");
+    fprintf(out, "  settled by the REVs of the Bomb below   %s strings\n", commas(cost->base_settled));
+    fprintf(out, "  searches                                %s, %s logical steps\n",
+            commas(cost->searches), commas(cost->steps));
+    fprintf(out, "  solver time, all workers                %.1f s\n", (double)cost->solver_ns * 1e-9);
+    fprintf(out, "  wall-clock time                         %.1f s in %u session(s)\n",
+            (double)cost->session_ns * 1e-9, (unsigned)(cost->sessions - cost->killed));
+    if (cost->killed)
+        fprintf(out, "                                          and %u session(s) that did not end in order\n"
+                     "                                          (killed), whose time is not known\n",
+                (unsigned)cost->killed);
+    fprintf(out, "  journal                                 %s bytes, %s records\n",
+            commas(cost->journal_bytes), commas(cost->journal_records));
+    fprintf(out, "  table checksum (CRC-32 in the header)   %08x\n", (unsigned)table_crc);
+}
+
+/* One level.  *done is set if it is complete and its Bomb written. */
+static FrbError ladder_level(const char *dir, int level, const FrbConfig *settings,
+                             const FrbRunOptions *opt, FrbRunResult *run, LevelCost *cost, int *done,
+                             char *err, size_t errlen) {
+    char base[4096], work[4096], out[4096], path[4096];
+    const FrbFormat *format;
+    FrbConfig cfg;
+    FrbFileInfo info;
+    FrbState *state = NULL;
+    FrbSummary summary;
+    FrbStatus status;
+    RevGraph one;
+    struct stat st;
+    FrbError e;
+    int fresh;
+
+    *done = 0;
+    memset(cost, 0, sizeof *cost);
+    if (!ladder_file(base, sizeof base, dir, level - 1) || !ladder_file(out, sizeof out, dir, level) ||
+        !ladder_work(work, sizeof work, dir, level) || !config_path(path, sizeof path, work, "config.txt"))
+        return FRB_ERR_ARG;
+    fresh = stat(path, &st) != 0;
+    if (fresh) {
+        frb_config_default(&cfg, level);
+        format = frb_format(settings->format);
+        if (format && level <= format->max_bits) { /* a format asked for, where it can hold the level */
+            cfg.format = format->version;
+            cfg.max_nodes = format->node_capacity;
+        }
+        cfg.symmetry = settings->symmetry ? 1 : 0;
+        e = frb_config_set_base(&cfg, base, err, errlen);
+        if (e != FRB_OK) return e;
+    } else {
+        e = frb_config_read(work, &cfg, err, errlen);
+        if (e != FRB_OK) return e;
+        e = frb_file_info(base, &info);
         if (e != FRB_OK) {
-            free(order);
-            out->first_bad = i;
+            set_err(err, errlen, "cannot read %s: %s", base, frb_error_str(e));
             return e;
         }
-        frb_target_format(i, table->bits, target);
-        ms = rev_minimal_solve_with(solve, target, (size_t)table->bits, FRB_NODE_CAPACITY, &options,
-                                    &mine, &info);
-        out->checked++;
-        out->steps += info.steps;
-        if (ms == REV_MIN_UNKNOWN) {
-            out->undecided++;
-        } else if (st == FRB_MINIMAL) {
-            if (ms == REV_MIN_MINIMAL && info.node_count == g.node_count) out->agree++;
-            else if (out->disagree++ == 0) out->first_bad = i;
-        } else if (st == FRB_WITNESS) {
-            if (ms != REV_MIN_MINIMAL || info.node_count > g.node_count) {
-                if (out->disagree++ == 0) out->first_bad = i; /* a witness below the minimum */
-            } else if (info.node_count < g.node_count) {
-                out->tightened++;
+        if (cfg.bits != level || cfg.base_bits != level - 1 || cfg.base_crc != info.table_crc) {
+            set_err(err, errlen,
+                    "%s was not started on the Bomb that is now %s; move it out of the way to build "
+                    "level %d again from that one",
+                    work, base, level);
+            return FRB_ERR_INCOMPATIBLE;
+        }
+        if (!absolute_path(base, cfg.base_file, sizeof cfg.base_file)) return FRB_ERR_ARG;
+    }
+    format = frb_format(cfg.format);
+    /* What may differ from run to run. */
+    cfg.workers = settings->workers;
+    cfg.fallback_ring = settings->fallback_ring;
+    cfg.passes = settings->passes;
+    memcpy(cfg.max_steps, settings->max_steps, sizeof cfg.max_steps);
+    memcpy(cfg.engine, settings->engine, sizeof cfg.engine);
+    cfg.max_nodes = settings->max_nodes > 0 && settings->max_nodes < format->node_capacity
+                        ? settings->max_nodes
+                        : format->node_capacity;
+    e = frb_config_check(&cfg, err, errlen);
+    if (e == FRB_OK) e = frb_check_memory(&cfg, opt->log, err, errlen); /* before anything is made */
+    if (e != FRB_OK) return e;
+    if (fresh) {
+        e = frb_work_create(work, &cfg, err, errlen);
+    } else {
+        e = frb_config_write(work, &cfg);
+        if (e != FRB_OK) set_err(err, errlen, "cannot write %s", path);
+    }
+    if (e != FRB_OK) return e;
+
+    if (opt->log) {
+        fprintf(opt->log, "\n--- Level %d: %s strings, in %s%s ---\n", level,
+                commas((uint64_t)1 << level), work, fresh ? "" : " (continued)");
+        fflush(opt->log);
+    }
+    { /* What the level will put on disk, against what is free. */
+        uint64_t table = frb_file_bytes(format, level);
+        /* One search job for a quarter of the strings (half without symmetry),
+         * about one and a half records each: what levels 17 to 23 wrote. */
+        uint64_t journal = (((uint64_t)1 << level) / (cfg.symmetry ? 4u : 2u)) * 3u / 2u *
+                           (uint64_t)frb_journal_record_bytes(format);
+        struct statvfs v;
+        if (statvfs(dir, &v) == 0) {
+            uint64_t free_bytes = (uint64_t)v.f_bavail * (uint64_t)v.f_frsize;
+            const double gb = 1024.0 * 1024.0 * 1024.0;
+            if (opt->log && table >= ((uint64_t)1 << 26)) { /* worth a line from 21 bits on */
+                fprintf(opt->log, "Its table is %.2f GB and its journal will be about %.2f GB; %.1f GB are free.\n",
+                        (double)table / gb, (double)journal / gb, (double)free_bytes / gb);
+                fflush(opt->log);
+            }
+            if (fresh && opt->min_free_bytes && free_bytes - (free_bytes < table ? free_bytes : table) <
+                                                     opt->min_free_bytes) {
+                /* Not even its table could be written: a reason to stop, as
+                 * a disk that fills up later is, and not a failure. */
+                if (opt->log) {
+                    fprintf(opt->log,
+                            "Level %d needs %.2f GB for its table and about %.2f GB for its journal; %.1f GB\n"
+                            "are free in %s and %.1f GB of them are to stay free.  Not starting it.\n",
+                            level, (double)table / gb, (double)journal / gb, (double)free_bytes / gb, dir,
+                            (double)opt->min_free_bytes / gb);
+                    fflush(opt->log);
+                }
+                memset(run, 0, sizeof *run);
+                run->disk_low = 1;
+                return FRB_OK;
             }
         }
     }
-    free(order);
-    return out->disagree ? FRB_ERR_EVIDENCE : FRB_OK;
+    e = work_run(work, &cfg, opt, run, &state, err, errlen);
+    if (e != FRB_OK) return e;
+    if (!run->complete) {
+        frb_state_free(state);
+        return FRB_OK;
+    }
+    for (int b = 1; b <= FRB_MAX_NODES; b++) {
+        cost->searches += state->budget[b].searches;
+        cost->steps += state->budget[b].steps;
+        cost->solver_ns += state->budget[b].ns;
+    }
+    /* The session that just ended is in the state as begun and not ended if
+     * it ran a round (the journal was replayed after it), and not at all if
+     * it found nothing to do.  Any other session that never ended was killed. */
+    cost->sessions = state->sessions + (run->rounds > 0 ? 0u : 1u);
+    cost->killed = state->sessions_unfinished - (run->rounds > 0 && state->sessions_unfinished ? 1u : 0u);
+    cost->session_ns = state->session_ns + (uint64_t)(run->seconds * 1e9);
+    cost->journal_bytes = state->journal.bytes;
+    cost->journal_records = state->journal.records;
+    cost->base_settled = state->base_settled;
+
+    e = finalize_state(state, out, 0, &summary, err, errlen); /* frees the state */
+    if (e != FRB_OK) return e;
+    e = frb_file_lookup(out, 1, &info, &status, &one); /* the string 0...01 */
+    if (e != FRB_OK) {
+        set_err(err, errlen, "%s does not read back as written", out);
+        return e;
+    }
+    if (opt->log) {
+        level_report(opt->log, level, out, &summary, cost, one.node_count, info.table_crc);
+        fflush(opt->log);
+    }
+    if (snprintf(path, sizeof path, "%s/level-%02d.txt", dir, level) < (int)sizeof path) {
+        FILE *f = fopen(path, "w"); /* the same report, to keep */
+        if (f) {
+            level_report(f, level, out, &summary, cost, one.node_count, info.table_crc);
+            fclose(f);
+        }
+    }
+    *done = 1;
+    return FRB_OK;
+}
+
+FrbError frb_ladder_run(const char *dir, const char *from_file, int to_bits, const FrbConfig *settings,
+                        const FrbRunOptions *opt, FrbLadderResult *result, char *err, size_t errlen) {
+    FrbLadderResult local;
+    FrbRunOptions level_opt;
+    uint64_t start = now_ns(), prev_steps = 0;
+    int top = 0, lock_fd;
+    FrbError e;
+
+    if (!result) result = &local;
+    memset(result, 0, sizeof *result);
+    result->to_bits = to_bits;
+    if (!dir || !settings || !opt || !opt->solve) return FRB_ERR_ARG;
+    if (to_bits < 2 || to_bits > FRB_MAX_BITS) {
+        set_err(err, errlen, "the ladder climbs to 2..%d bits", FRB_MAX_BITS);
+        return FRB_ERR_ARG;
+    }
+    if (mkdir(dir, 0777) != 0 && errno != EEXIST) {
+        set_err(err, errlen, "cannot create directory %s", dir);
+        return FRB_ERR_IO;
+    }
+    lock_fd = lock_dir(dir, err, errlen, &e);
+    if (lock_fd < 0) return e;
+    e = ladder_top(dir, &top, err, errlen);
+    if (e == FRB_OK && top == 0) e = ladder_start(dir, from_file, &top, opt->log, err, errlen);
+    else if (e == FRB_OK && opt->log) {
+        fprintf(opt->log, "The longest complete Bomb in %s is for %d bits%s\n", dir, top,
+                top >= to_bits ? ": nothing to do." : "; continuing from it.");
+        fflush(opt->log);
+    }
+
+    level_opt = *opt;
+    for (int level = top + 1; e == FRB_OK && level <= to_bits; level++) {
+        LevelCost cost;
+        int done = 0;
+        if (opt->time_limit > 0) { /* one limit for the whole climb */
+            double left = opt->time_limit - (double)(now_ns() - start) * 1e-9;
+            if (left <= 0) {
+                result->last.stopped_early = 1;
+                break;
+            }
+            level_opt.time_limit = left;
+        }
+        e = ladder_level(dir, level, settings, &level_opt, &result->last, &cost, &done, err, errlen);
+        if (e != FRB_OK || !done) break;
+        top = level;
+        result->levels_done++;
+        if (opt->log && level < to_bits && cost.steps && cost.session_ns) {
+            /* What is left, from this level's cost and the growth from level
+             * to level: measured if two levels are known, else 3.5, the
+             * middle of what the pilot measured between 20 and 24 bits. */
+            double growth = prev_steps ? (double)cost.steps / (double)prev_steps : 3.5;
+            double level_s = (double)cost.session_ns * 1e-9, rest = 0, next;
+            if (growth < 2.0) growth = 2.0;
+            if (growth > 6.0) growth = 6.0;
+            next = level_s;
+            for (int l = level + 1; l <= to_bits; l++) {
+                next *= growth;
+                rest += next;
+            }
+            fprintf(opt->log,
+                    "\nLevels %d to %d are still to do.  If the cost goes on growing by %.1f per level,\n"
+                    "they take about %s.\n",
+                    level + 1, to_bits, growth, duration(rest));
+            fflush(opt->log);
+        }
+        prev_steps = cost.steps;
+    }
+    result->top_bits = top;
+    result->complete = e == FRB_OK && top >= to_bits;
+    close(lock_fd);
+    return e;
 }

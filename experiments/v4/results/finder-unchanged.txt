@@ -1,0 +1,45 @@
+Is the finder what it was?  13 November 2026, development container
+(Intel Xeon 2.1 GHz under KVM, 4 virtual CPUs, GCC 13.3 -O3).
+
+1. The sources.  Against the branch the owner's ladder runs:
+
+     git diff --stat origin/feature/fixed-run-31..HEAD -- solvers/level solvers/minimal core \
+         bombs/fixed-run/journal.c bombs/fixed-run/construct.c bombs/fixed-run/statistics.c \
+         bombs/fixed-run/enumerate.c bombs/fixed-run/fixed_run.c bombs/fixed-run/fixed_run.h \
+         bombs/fixed-run/fixed_run_build.h
+
+   prints nothing: the solvers, the core, the journal, the construction and the fixed-width table code are
+   the same files, byte for byte.  Everything of this experiment is under experiments/, plus the lines in
+   CMakeLists.txt that build it.
+
+2. The work.  The Bombs of 17 to 20 bits built again from the 16-bit Bomb with the build of this branch,
+
+     build/carlobomb bomb ladder --dir NEW --from fixed-run-16.frb --to 20 --workers 4 --progress 0
+
+   against the ladder recorded when the 24-bit Bomb was built:
+
+     level   searches    logical steps      table (SHA-256)     recorded        this build
+        17     44,810      4,778,891,950    e6d4cc43d3edc56f…   the same        the same
+        18     96,250     16,902,096,386    e67fb5a7c813d5c6…   the same        the same
+        19    199,403     47,431,541,189    86e5000f3b81abb5…   the same        the same
+        20    378,045    142,813,952,259    5f5025bc00a26cad…   the same        the same
+
+   Searches, steps and every byte of the four tables are identical.
+
+3. The speed.  The solver time of that run was a third above the recorded one (level 20: 213.9 s of all
+   workers against 156.1 s).  To tell the machine from the code, the branch the ladder runs
+   (origin/feature/fixed-run-31, 8d3110b) was built beside this one with the same flags, and the two builds
+   ran the ladder from 16 to 19 bits in turn, three times:
+
+     solver time of all workers, seconds     level 17   level 18   level 19
+     round 1   ladder's branch                    7.1       26.1       71.8
+               this branch                        6.8       25.5       69.1
+     round 2   ladder's branch                    6.8       25.6       73.0
+               this branch                        6.8       25.1       69.1
+     round 3   ladder's branch                    7.6       27.3       74.6
+               this branch                        7.8       26.2       72.9
+
+   Each of the six runs: 4,778,891,950, 16,902,096,386 and 47,431,541,189 steps, and the same 19-bit table.
+   The two builds are equally fast; the container is slower today than on the day of the recorded ladder
+   (54.2 s at level 19 then).  The same shows in the lookups: 343 ns then, 393 ns now, for a verified REV
+   from the fixed-width file.

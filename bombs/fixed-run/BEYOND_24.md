@@ -148,15 +148,19 @@ of the minima of its two extensions.
 The format holds tables up to 31 bits. What a length costs is another
 matter; this is where each resource stands (GB = 2^30 bytes):
 
-| Bits | Table | Journal, about | State in memory | Search steps, about | On the machine above |
+| Bits | Table | Journal, about | State in memory | Search steps, about | At 5 to 6.5·10^9 steps per second |
 |---:|---:|---:|---:|---:|---:|
-| 25 | 1.4 GB | 1.1 GB | 2.6 GB | 6.4·10^13 | 3 to 4 hours |
-| 26 | 2.8 GB | 2.3 GB | 5.2 GB | 2.6·10^14 | 12 to 15 hours |
-| 27 | 5.5 GB | 4.5 GB | 10.4 GB | see the report | days |
-| 28 | 11 GB | 9 GB | 20.8 GB | | a week or more |
-| 29 | 22 GB | 18 GB | 41.5 GB | | weeks |
-| 30 | 44 GB | 36 GB | 83 GB | | months |
-| 31 | 88 GB | 72 GB | 166 GB | | many months |
+| 25 | 1.4 GB | 1.1 GB | 2.6 GB | 6.4·10^13 | 3 to 3.5 hours |
+| 26 | 2.8 GB | 2.3 GB | 5.2 GB | 2.6·10^14 | 11 to 14 hours |
+| 27 | 5.5 GB | 4.5 GB | 10.4 GB | 1.1·10^15 | 2 to 2.5 days |
+| 28 | 11 GB | 9 GB | 20.8 GB | 3.8·10^15 | 7 to 9 days |
+| 29 | 22 GB | 18 GB | 41.5 GB | 1.0·10^16 | about 3 weeks |
+| 30 | 44 GB | 36 GB | 83 GB | 2.8·10^16 | about 2 months |
+| 31 | 88 GB | 72 GB | 166 GB | 7·10^16 | 4 to 5 months |
+
+The steps are from samples of 1,500 strings at 25 and 26 bits down to 160 at
+30; 31 is extrapolated. The rate is what the 16-bit run of the machine in
+question showed with 6 workers, and what 10 might give.
 
 Up to 28 bits the program as it is fits a machine with 32 GB of memory, and
 29 bits one with 64 GB; disk is no obstacle anywhere. From 30 bits the
@@ -164,3 +168,15 @@ state no longer fits, and a construction would have to keep it on disk
 instead of in memory. That is designed in the report and not built: at
 those lengths the search time is the larger problem by far, and it is the
 one to solve first.
+
+## A checksum to compare
+
+The 23-bit table was built in the development container too, with the
+program of the 24-bit run, interrupted once and resumed. Tables are the same
+bytes on every machine, so `fixed-run-23.frb` of the 24-bit ladder must have
+this SHA-256:
+
+    61ee0779edc76e83da984d6970607cc3f5e333bdec267ca88209467daf491088
+
+Largest minimum 9 nodes, needed by 44 strings; 7,720,456,914,039 search
+steps in 3,052,702 searches.

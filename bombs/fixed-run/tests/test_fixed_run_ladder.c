@@ -1239,6 +1239,57 @@ static void test_writer_and_mapping(void) {
         CHECK(frb_writer_open(in_base("no/such/dir/x.frb"), 9, f, &w) == FRB_ERR_IO && w == NULL);
         CHECK(frb_writer_put(NULL, FRB_EMPTY, NULL) == FRB_ERR_ARG);
     }
+    /* A file whose bytes changed after it was written, read both ways the
+     * library reads a whole file: with every entry validated, and raw, as
+     * the base of a construction is read.  The checksum is what tells. */
+    for (int version = 1; version <= 3; version++) {
+        const FrbFormat *f = frb_format(version);
+        const char *damaged = in_base("damaged.frb");
+        FrbTable t, back;
+        FrbFileInfo info;
+        uint8_t *bytes;
+        size_t size, at;
+        FILE *out;
+        reference_table(&t, 9, f);
+        CHECK(frb_file_write(whole, &t) == FRB_OK);
+        bytes = slurp(whole, &size);
+        CHECK(bytes != NULL && size == 64 + 512 * (size_t)f->entry_bytes);
+        if (bytes) {
+            /* one bit in the table: in a graph, in a metadata byte, in the last byte of the file */
+            static const int where[3] = {0, 1, 2};
+            for (int k = 0; k < 3; k++) {
+                at = where[k] == 0 ? 64 + 200 * (size_t)f->entry_bytes + 1
+                   : where[k] == 1 ? 64 + 77 * (size_t)f->entry_bytes + (size_t)f->graph_bytes : size - 1;
+                bytes[at] ^= 0x04;
+                out = fopen(damaged, "wb");
+                CHECK(out != NULL && fwrite(bytes, 1, size, out) == size && fclose(out) == 0);
+                CHECK(frb_file_read(damaged, &back, &info, NULL) == FRB_ERR_CHECKSUM && back.entries == NULL);
+                CHECK(frb_file_read_raw(damaged, &back, &info) == FRB_ERR_CHECKSUM && back.entries == NULL);
+                CHECK(frb_file_info(damaged, &info) == FRB_OK); /* the header is as it was */
+                bytes[at] ^= 0x04;
+            }
+            bytes[20] ^= 0x01; /* the complete flag, in the header */
+            out = fopen(damaged, "wb");
+            CHECK(out != NULL && fwrite(bytes, 1, size, out) == size && fclose(out) == 0);
+            CHECK(frb_file_read(damaged, &back, &info, NULL) == FRB_ERR_HEADER);
+            CHECK(frb_file_read_raw(damaged, &back, &info) == FRB_ERR_HEADER);
+            CHECK(frb_file_info(damaged, &info) == FRB_ERR_HEADER);
+            bytes[20] ^= 0x01;
+            out = fopen(damaged, "wb"); /* one entry short, one byte long */
+            CHECK(out != NULL && fwrite(bytes, 1, size - (size_t)f->entry_bytes, out) == size - (size_t)f->entry_bytes &&
+                  fclose(out) == 0);
+            CHECK(frb_file_read(damaged, &back, &info, NULL) == FRB_ERR_SIZE);
+            CHECK(frb_file_read_raw(damaged, &back, &info) == FRB_ERR_SIZE);
+            out = fopen(damaged, "wb");
+            CHECK(out != NULL && fwrite(bytes, 1, size, out) == size && fputc(0, out) == 0 && fclose(out) == 0);
+            CHECK(frb_file_read(damaged, &back, &info, NULL) == FRB_ERR_SIZE);
+            CHECK(frb_file_lookup(damaged, 3, &info, NULL, NULL) == FRB_ERR_SIZE);
+            free(bytes);
+        }
+        remove(damaged);
+        frb_table_destroy(&t);
+    }
+
     printf("writer: tables written entry by entry are the files written whole, in all three versions;\n"
            "        tables are read %s\n",
            getenv("CARLOBOMB_NO_MMAP") ? "into memory (CARLOBOMB_NO_MMAP)" : "through a private mapping of the file");

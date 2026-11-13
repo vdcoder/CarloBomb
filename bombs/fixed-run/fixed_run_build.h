@@ -88,6 +88,15 @@ FrbError frb_config_check(const FrbConfig *cfg, char *err, size_t errlen);
 FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errlen);
 FrbError frb_config_write(const char *dir, const FrbConfig *cfg);
 
+/*
+ * The state of a construction is held in memory while a round is planned
+ * and while its table is written (frb_state_bytes).  FRB_ERR_MEMORY, with
+ * the numbers in err, if this machine has less: said before anything is
+ * started rather than found out hours into a run.  With a log, a
+ * construction of a gigabyte or more is announced there.
+ */
+FrbError frb_check_memory(const FrbConfig *cfg, FILE *log, char *err, size_t errlen);
+
 /* Create the directory (if needed) and an empty construction in it. */
 FrbError frb_work_create(const char *dir, const FrbConfig *cfg, char *err, size_t errlen);
 
@@ -219,6 +228,11 @@ typedef struct {
     uint32_t by_status[5];
     uint32_t conflicts;
 } FrbState;
+
+/* Bytes of one journal record for a table format (64, 80, 96), and of the
+ * state of a construction in memory: what a session needs at its peak. */
+int frb_journal_record_bytes(const FrbFormat *format);
+uint64_t frb_state_bytes(int bits, const FrbFormat *format);
 
 /* The packed witness of a target in the state (format->graph_bytes bytes). */
 const uint8_t *frb_state_graph(const FrbState *state, uint32_t index);

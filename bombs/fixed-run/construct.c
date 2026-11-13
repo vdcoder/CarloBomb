@@ -1056,6 +1056,40 @@ static FrbError first_conflict(const FrbState *s, char *err, size_t errlen) {
     return FRB_ERR_EVIDENCE;
 }
 
+/* Memory this machine has, in bytes; 0 if it does not say. */
+static uint64_t physical_memory(void) {
+#if defined(_SC_PHYS_PAGES) && defined(_SC_PAGESIZE)
+    long pages = sysconf(_SC_PHYS_PAGES), size = sysconf(_SC_PAGESIZE);
+    if (pages > 0 && size > 0) return (uint64_t)pages * (uint64_t)size;
+#endif
+    return 0;
+}
+
+/*
+ * The state of a construction is held in memory while a round is planned
+ * and while its table is written: a number known in advance.  A machine
+ * that has less is told so before anything is started, rather than left to
+ * find out hours into a run.
+ */
+FrbError frb_check_memory(const FrbConfig *cfg, FILE *log, char *err, size_t errlen) {
+    uint64_t need = frb_state_bytes(cfg->bits, frb_format(cfg->format)), have = physical_memory();
+    const double gb = 1024.0 * 1024.0 * 1024.0;
+    if (log && need >= ((uint64_t)1 << 30)) {
+        fprintf(log, "The state of this %d-bit construction takes %.1f GB of memory", cfg->bits,
+                (double)need / gb);
+        if (have) fprintf(log, "; this machine has %.1f GB", (double)have / gb);
+        fprintf(log, ".\n");
+        fflush(log);
+    }
+    if (have && need > have - have / 8) { /* an eighth is left to the system and the workers */
+        set_err(err, errlen,
+                "the state of a %d-bit construction takes %.1f GB of memory and this machine has %.1f GB",
+                cfg->bits, (double)need / gb, (double)have / gb);
+        return FRB_ERR_MEMORY;
+    }
+    return FRB_OK;
+}
+
 /* frb_work_run.  If final_state is not NULL and the call succeeds, it
  * receives the state as the last replay left it, for the caller to free. */
 static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions *opt,
@@ -1074,6 +1108,8 @@ static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOpti
     memset(result, 0, sizeof *result);
     if (!dir || !cfg || !opt || !opt->solve) return FRB_ERR_ARG;
     e = frb_config_check(cfg, err, errlen);
+    if (e != FRB_OK) return e;
+    e = frb_check_memory(cfg, NULL, err, errlen); /* said aloud by whoever set the construction up */
     if (e != FRB_OK) return e;
     lock_fd = lock_dir(dir, err, errlen, &e);
     if (lock_fd < 0) return e;
@@ -1696,6 +1732,7 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
                         ? settings->max_nodes
                         : format->node_capacity;
     e = frb_config_check(&cfg, err, errlen);
+    if (e == FRB_OK) e = frb_check_memory(&cfg, opt->log, err, errlen); /* before anything is made */
     if (e != FRB_OK) return e;
     if (fresh) {
         e = frb_work_create(work, &cfg, err, errlen);
@@ -1709,6 +1746,39 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
         fprintf(opt->log, "\n--- Level %d: %s strings, in %s%s ---\n", level,
                 commas((uint64_t)1 << level), work, fresh ? "" : " (continued)");
         fflush(opt->log);
+    }
+    { /* What the level will put on disk, against what is free. */
+        uint64_t table = frb_file_bytes(format, level);
+        /* One search job for a quarter of the strings (half without symmetry),
+         * about one and a half records each: what levels 17 to 23 wrote. */
+        uint64_t journal = (((uint64_t)1 << level) / (cfg.symmetry ? 4u : 2u)) * 3u / 2u *
+                           (uint64_t)frb_journal_record_bytes(format);
+        struct statvfs v;
+        if (statvfs(dir, &v) == 0) {
+            uint64_t free_bytes = (uint64_t)v.f_bavail * (uint64_t)v.f_frsize;
+            const double gb = 1024.0 * 1024.0 * 1024.0;
+            if (opt->log && table >= ((uint64_t)1 << 26)) { /* worth a line from 21 bits on */
+                fprintf(opt->log, "Its table is %.2f GB and its journal will be about %.2f GB; %.1f GB are free.\n",
+                        (double)table / gb, (double)journal / gb, (double)free_bytes / gb);
+                fflush(opt->log);
+            }
+            if (fresh && opt->min_free_bytes && free_bytes - (free_bytes < table ? free_bytes : table) <
+                                                     opt->min_free_bytes) {
+                /* Not even its table could be written: a reason to stop, as
+                 * a disk that fills up later is, and not a failure. */
+                if (opt->log) {
+                    fprintf(opt->log,
+                            "Level %d needs %.2f GB for its table and about %.2f GB for its journal; %.1f GB\n"
+                            "are free in %s and %.1f GB of them are to stay free.  Not starting it.\n",
+                            level, (double)table / gb, (double)journal / gb, (double)free_bytes / gb, dir,
+                            (double)opt->min_free_bytes / gb);
+                    fflush(opt->log);
+                }
+                memset(run, 0, sizeof *run);
+                run->disk_low = 1;
+                return FRB_OK;
+            }
+        }
     }
     e = work_run(work, &cfg, opt, run, &state, err, errlen);
     if (e != FRB_OK) return e;

@@ -1159,6 +1159,91 @@ static void test_disk_watch(void) {
     printf("disk: a construction that finds too little free space stops cleanly and continues later\n");
 }
 
+/* A table written entry by entry is the file frb_file_write writes; a table
+ * read from a file behaves as a copy of it, mapped or not. */
+static void test_writer_and_mapping(void) {
+    const char *whole = in_base("whole.frb"), *streamed = in_base("streamed.frb");
+    char tmp[1400];
+    struct stat st;
+    snprintf(tmp, sizeof tmp, "%s.tmp", streamed);
+    for (int version = 1; version <= 3; version++) {
+        const FrbFormat *f = frb_format(version);
+        for (int partial = 0; partial <= 1; partial++) {
+            FrbTable t, back;
+            FrbWriter *w = NULL;
+            FrbSummary sum, sum2;
+            FrbFileInfo info;
+            RevGraph ring;
+            uint32_t crc = 0;
+            reference_table(&t, 9, f);
+            if (partial) { /* one of each kind of entry that is not a certified minimum */
+                frb_ring_witness(7, 9, &ring);
+                CHECK(frb_table_put(&t, 7, FRB_WITNESS, &ring) == FRB_OK);
+                CHECK(frb_table_put(&t, 8, FRB_EMPTY, NULL) == FRB_OK);
+                CHECK(frb_table_put(&t, 9, FRB_UNRESOLVED, NULL) == FRB_OK);
+            }
+            CHECK(frb_file_write(whole, &t) == FRB_OK);
+            remove(streamed);
+            CHECK(frb_writer_open(streamed, 9, f, &w) == FRB_OK);
+            for (uint32_t i = 0; w && i < t.count; i++) {
+                RevGraph g;
+                FrbStatus status;
+                CHECK(frb_table_get(&t, i, &status, &g) == FRB_OK);
+                CHECK(frb_writer_put(w, status, g.node_count ? &g : NULL) == FRB_OK);
+                if (i == 100) CHECK(stat(streamed, &st) != 0 && stat(tmp, &st) == 0); /* not under its name yet */
+            }
+            CHECK(frb_writer_put(w, FRB_EMPTY, NULL) == FRB_ERR_SIZE); /* one entry too many */
+            CHECK(frb_writer_finish(w, &sum, &crc) == FRB_OK);
+            CHECK(stat(tmp, &st) != 0 && same_file(whole, streamed));
+            CHECK(frb_table_validate(&t, &sum2, NULL) == FRB_OK && memcmp(&sum, &sum2, sizeof sum) == 0);
+            CHECK(sum.complete == !partial);
+            /* Read back: the same table, and a private one. */
+            CHECK(frb_file_read(streamed, &back, &info, NULL) == FRB_OK && info.table_crc == crc);
+            if (back.entries) {
+                uint8_t was = back.entries[5];
+                CHECK(back.count == t.count && back.format == f);
+                CHECK(memcmp(back.entries, t.entries, (size_t)t.count * (size_t)f->entry_bytes) == 0);
+                CHECK((back.mapping != NULL) == (getenv("CARLOBOMB_NO_MMAP") == NULL));
+                back.entries[5] ^= 0x55; /* stays in this process */
+                CHECK(back.entries[5] == (uint8_t)(was ^ 0x55) && same_file(whole, streamed));
+                frb_table_destroy(&back);
+                CHECK(back.entries == NULL && back.mapping == NULL);
+            }
+            frb_table_destroy(&t);
+        }
+    }
+    /* What a writer refuses, and what it leaves behind when it fails: nothing. */
+    {
+        const FrbFormat *f = frb_format(3);
+        FrbWriter *w = NULL;
+        RevGraph g = ref_graph[9][3];
+        /* `streamed` is the last table written above: it stays what it is
+         * until another is complete. */
+        CHECK(frb_writer_open(streamed, 9, f, &w) == FRB_OK);
+        CHECK(frb_writer_put(w, FRB_MINIMAL, &ref_graph[9][0]) == FRB_OK);
+        CHECK(frb_writer_put(w, FRB_MINIMAL, &g) == FRB_ERR_OUTPUT);   /* the REV of string 3 as entry 1 */
+        CHECK(frb_writer_put(w, FRB_MINIMAL, NULL) == FRB_ERR_ARG);
+        CHECK(frb_writer_put(w, FRB_MINIMAL, &ref_graph[9][1]) == FRB_OK); /* a refusal consumes no index */
+        CHECK(same_file(whole, streamed) && stat(tmp, &st) == 0);
+        CHECK(frb_writer_finish(w, NULL, NULL) == FRB_ERR_SIZE);         /* 2 of 512 entries */
+        CHECK(same_file(whole, streamed) && stat(tmp, &st) != 0);
+        CHECK(frb_writer_open(streamed, 9, f, &w) == FRB_OK);
+        frb_writer_abort(w);
+        CHECK(same_file(whole, streamed) && stat(tmp, &st) != 0);
+        remove(streamed);
+        CHECK(frb_writer_open(streamed, 9, f, &w) == FRB_OK);
+        frb_writer_abort(w);
+        CHECK(stat(streamed, &st) != 0 && stat(tmp, &st) != 0);
+        CHECK(frb_writer_open(streamed, 32, f, &w) == FRB_ERR_ARG && w == NULL);
+        CHECK(frb_writer_open(streamed, 17, frb_format(1), &w) == FRB_ERR_ARG);
+        CHECK(frb_writer_open(in_base("no/such/dir/x.frb"), 9, f, &w) == FRB_ERR_IO && w == NULL);
+        CHECK(frb_writer_put(NULL, FRB_EMPTY, NULL) == FRB_ERR_ARG);
+    }
+    printf("writer: tables written entry by entry are the files written whole, in all three versions;\n"
+           "        tables are read %s\n",
+           getenv("CARLOBOMB_NO_MMAP") ? "into memory (CARLOBOMB_NO_MMAP)" : "through a private mapping of the file");
+}
+
 /* The strings that decide a table's largest minimum, solved again. */
 static void test_recertify_hardest(void) {
     FrbTable t;
@@ -1297,6 +1382,7 @@ int main(int argc, char **argv) {
     /* Each of these builds on files the one before left: stop at the first
      * that fails rather than report its consequences. */
     test_recertify_hardest();
+    test_writer_and_mapping();
     if (!t_failures) test_config_layouts();
     if (!t_failures) test_ladder_basic();
     if (!t_failures) test_ladder_resume();

@@ -404,6 +404,8 @@ static int cmd_build(const BombArgs *a) {
     if (!apply_changeable(a, &cfg)) return X_USAGE;
     if (!select_engine(a->engine, cfg.engine, sizeof cfg.engine, &solve)) return X_USAGE;
     e = frb_config_check(&cfg, err, sizeof err);
+    if (e == FRB_OK) e = frb_check_memory(&cfg, a->quiet ? NULL : stdout, err, sizeof err);
+    if (e == FRB_ERR_MEMORY) return fail(FRB_ERR_ARG, err); /* nothing was created */
     if (e == FRB_OK) e = frb_work_create(a->work_dir, &cfg, err, sizeof err);
     if (e != FRB_OK) return fail(e, err);
     return run_session(a, &cfg, solve);

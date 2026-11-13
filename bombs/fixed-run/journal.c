@@ -81,6 +81,13 @@ enum {
 
 static int record_bytes(const FrbFormat *f) { return (R_GRAPH + f->graph_bytes + 1 + 4 + 7) / 8 * 8; }
 
+int frb_journal_record_bytes(const FrbFormat *format) { return format ? record_bytes(format) : 0; }
+
+uint64_t frb_state_bytes(int bits, const FrbFormat *format) {
+    if (!format || bits < 1 || bits > format->max_bits) return 0;
+    return ((uint64_t)sizeof(FrbTargetState) + (uint64_t)format->graph_bytes) << bits;
+}
+
 struct FrbSegment {
     FILE *f;
     const FrbFormat *format;

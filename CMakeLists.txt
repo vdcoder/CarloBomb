@@ -231,6 +231,11 @@ endif()
 add_test(NAME test_fixed_run_ladder
   COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_test_work)
 set_tests_properties(test_fixed_run_ladder PROPERTIES TIMEOUT 600)
+# The same with tables read into memory instead of mapped from their files.
+add_test(NAME test_fixed_run_ladder_unmapped
+  COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_unmapped_work)
+set_tests_properties(test_fixed_run_ladder_unmapped PROPERTIES TIMEOUT 600
+  ENVIRONMENT "CARLOBOMB_NO_MMAP=1")
 
 # Bomb-backed FixedSolver: every string of 1 to 16 bits against a direct scan
 # of the table and against the MinimalSolver.  The comparison with the search

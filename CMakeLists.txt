@@ -146,6 +146,10 @@ target_link_libraries(fixed_bomb_lookup PRIVATE carlobomb_fixed_bomb)
 # addressed and read (benchmarks/FIXED_RUN_31_FEASIBILITY.md).
 add_executable(big_table benchmarks/big_table.c)
 target_link_libraries(big_table PRIVATE carlobomb_fixed_run)
+# The fixed-width and the compact file of one Bomb through the solver that
+# reads both: sizes, opening, lookups, memory.
+add_executable(compact_bench benchmarks/compact_bench.c)
+target_link_libraries(compact_bench PRIVATE carlobomb_fixed_bomb)
 
 add_executable(fixed_bomb_longer benchmarks/fixed_bomb_longer.c)
 target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_fixed_bomb carlobomb_minimal m)

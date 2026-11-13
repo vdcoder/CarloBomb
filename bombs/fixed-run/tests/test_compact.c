@@ -325,7 +325,8 @@ static void scan(const FrbTable *t, int bits, uint32_t value, int *nodes, uint32
 /* A table made compact, opened, questioned for every string of every length,
  * and turned back into the bytes it came from. */
 static void check_conversion(const FrbTable *t, int index_bytes, const char *what) {
-    const char *path = file("c.frb");
+    char path[1200];
+    snprintf(path, sizeof path, "%s", file("c.frb")); /* a name of its own: file() reuses its buffers */
     FrbCompact *b = NULL;
     const FrbCompactInfo *info;
     FrbTable back;
@@ -401,7 +402,8 @@ static void check_conversion(const FrbTable *t, int index_bytes, const char *wha
     free(image2);
     frb_table_destroy(&back);
     {   /* The same without holding the table: its checksum, and the file itself. */
-        const char *out = file("x.frb");
+        char out[1200];
+        snprintf(out, sizeof out, "%s", file("x.frb")); /* a name of its own: file() reuses its buffers */
         uint32_t crc = 0, written = 1;
         uint32_t want = image ? (uint32_t)image[36] | (uint32_t)image[37] << 8 | (uint32_t)image[38] << 16 |
                                     (uint32_t)image[39] << 24
@@ -530,7 +532,8 @@ static void repair(uint8_t *image, const FrbCompactInfo *info) {
 }
 
 static FrbError open_image(const uint8_t *image, size_t size, uint32_t *bad) {
-    const char *path = file("damaged.frb");
+    char path[1200];
+    snprintf(path, sizeof path, "%s", file("damaged.frb")); /* a name of its own: file() reuses its buffers */
     FrbCompact *b = NULL;
     FrbError e;
     spit(path, image, size);
@@ -546,7 +549,8 @@ static FrbError open_image(const uint8_t *image, size_t size, uint32_t *bad) {
 }
 
 static void test_refusals(void) {
-    const char *path = file("r.frb");
+    char path[1200];
+    snprintf(path, sizeof path, "%s", file("r.frb")); /* a name of its own: file() reuses its buffers */
     FrbCompactInfo info;
     FrbCompact *b = NULL;
     FrbTable t, partial;

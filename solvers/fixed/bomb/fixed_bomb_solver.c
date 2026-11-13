@@ -297,23 +297,33 @@ RevFixedBombResult rev_fixed_bomb_solve(const RevFixedBomb *bomb, const char *ta
         return REV_FIXED_BOMB_UNSUPPORTED;
     }
     bits = (int)target_len;
-    if (bomb->compact) { /* the prefix index is in the file: one ordinal, one REV */
-        uint32_t value = leading_value(target, bits);
-        nodes = frb_compact_nodes(bomb->compact, bits, value);
-        info->min_nodes = nodes;
-        info->lower_bound = nodes;
-        if (max_nodes != 0 && nodes > max_nodes) {
-            info->extension = select_extension(bomb, bits, value);
-            return REV_FIXED_BOMB_PROVEN_UNSAT;
-        }
+    if (bomb->compact) {
+        /*
+         * The prefix index is in the file: one ordinal, one REV.  Running the
+         * REV for B bits gives the extension it stands for, and the string it
+         * emits is compared with the target as the caller wrote it, character
+         * by character.
+         */
+        int B = bomb_bits(bomb), ok;
+        uint32_t emitted = 0;
         if (!result) result = &local_graph;
         memset(result, 0, sizeof *result);
-        if (frb_compact_graph(bomb->compact, bits, value, result) != FRB_OK || result->node_count != nodes ||
-            rev_verify_prefix(result, target, target_len, NULL) != REV_OK) {
+        ok = frb_compact_graph(bomb->compact, bits, leading_value(target, bits), result) == FRB_OK &&
+             rev_graph_validate(result) == REV_OK;
+        if (ok) emitted = frb_graph_output(result, B);
+        for (int i = 0; ok && i < bits; i++) ok = target[i] == (char)('0' + ((emitted >> (B - 1 - i)) & 1u));
+        if (!ok) {
             result->node_count = 0;
             return REV_FIXED_BOMB_INTERNAL_ERROR;
         }
-        info->extension = frb_graph_output(result, bomb_bits(bomb));
+        nodes = result->node_count;
+        info->min_nodes = nodes;
+        info->lower_bound = nodes;
+        info->extension = emitted;
+        if (max_nodes != 0 && nodes > max_nodes) {
+            memset(result, 0, sizeof *result); /* no REV is returned with this answer */
+            return REV_FIXED_BOMB_PROVEN_UNSAT;
+        }
         return REV_FIXED_BOMB_MINIMAL;
     }
     extension = select_extension(bomb, bits, leading_value(target, bits));

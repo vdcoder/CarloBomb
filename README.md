@@ -246,6 +246,18 @@ tests and wins a reproducible benchmark.
    run against the target. A Bomb that is missing, damaged, partial or
    self-contradicting is refused. The lookup library links no search solver.
 
+8. **Compact format** (`bombs/fixed-run/tests/test_topology.c`,
+   `test_compact.c`, `test_compact_internal.c`, `tests/bomb_smoke.cmake`).
+   A compact file has to give back the table it was made from. Every table
+   of 1 to 11 bits is converted from each fixed-width version and expanded
+   again to the same bytes; every string of every length is compared with a
+   scan of the table; the graph of a REV goes to its rank and back, and its
+   colors are found again, against a second implementation; and a file that
+   is damaged in any bit, or wrong in a way its checksums do not show, is
+   refused. The checks that only a fault can trip are tripped by putting
+   the fault in. `benchmarks/COMPACT_FORMAT.md` has the same for the Bombs
+   of 16 to 24 bits, string for string.
+
 ## Limits
 
 - Node budget: 1 to 64.

@@ -111,3 +111,16 @@ hardware counter readings. For counters use bare-metal Linux with
 `/proc/sys/kernel/perf_event_paranoid` at 2 or lower; under WSL2 or in a
 virtual machine the report will normally contain timings and instruction-set
 selection but no counters.
+
+## The compact format
+
+`compact_bench.c` puts the fixed-width file of a Bomb and its compact file
+(format version 4) side by side through the solver that reads both: sizes,
+opening, lookups, the comparison of two extensions, memory, and that every
+string of every length gets the answer it has to get from both.
+
+    ./build/carlobomb bomb compact --file BOMB.frb --output COMPACT.frb
+    ./build/compact_bench --fixed BOMB.frb --compact COMPACT.frb
+
+How the format was chosen and the results on the real Bombs of 16 to 24 bits
+are in `COMPACT_FORMAT.md`.

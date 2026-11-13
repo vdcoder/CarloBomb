@@ -65,7 +65,8 @@ target_link_libraries(carlobomb_minimal PUBLIC carlobomb_level)
 
 # FixedRunBomb.  The file format and the enumerator are plain C11; building a
 # table (journal, worker processes) needs POSIX.
-add_library(carlobomb_fixed_run STATIC bombs/fixed-run/fixed_run.c bombs/fixed-run/enumerate.c)
+add_library(carlobomb_fixed_run STATIC bombs/fixed-run/fixed_run.c bombs/fixed-run/enumerate.c
+  bombs/fixed-run/topology.c bombs/fixed-run/compact.c)
 target_include_directories(carlobomb_fixed_run PUBLIC bombs/fixed-run)
 target_link_libraries(carlobomb_fixed_run PUBLIC carlobomb_rev)
 set(CARLOBOMB_HAVE_BOMB_BUILD OFF)
@@ -145,6 +146,13 @@ target_link_libraries(fixed_bomb_lookup PRIVATE carlobomb_fixed_bomb)
 # addressed and read (benchmarks/FIXED_RUN_31_FEASIBILITY.md).
 add_executable(big_table benchmarks/big_table.c)
 target_link_libraries(big_table PRIVATE carlobomb_fixed_run)
+# The fixed-width and the compact file of one Bomb through the solver that
+# reads both: sizes, opening, lookups, memory.
+add_executable(compact_bench benchmarks/compact_bench.c)
+target_link_libraries(compact_bench PRIVATE carlobomb_fixed_bomb)
+if(UNIX)
+  target_link_libraries(compact_bench PRIVATE m)
+endif()
 
 add_executable(fixed_bomb_longer benchmarks/fixed_bomb_longer.c)
 target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_fixed_bomb carlobomb_minimal m)
@@ -236,6 +244,30 @@ endif()
 add_test(NAME test_fixed_run_ladder
   COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_test_work)
 set_tests_properties(test_fixed_run_ladder PROPERTIES TIMEOUT 600)
+# The compact format (version 4): the graph of a REV as a rank and its colors
+# found again; packing, layout, conversion both ways, every answer against a
+# scan of the table, and damaged files.
+add_executable(test_topology bombs/fixed-run/tests/test_topology.c)
+target_include_directories(test_topology PRIVATE tests)
+target_link_libraries(test_topology PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_topology COMMAND test_topology)
+# The same with the product of two words taken the long way.
+add_executable(test_topology_portable bombs/fixed-run/tests/test_topology_portable.c)
+target_include_directories(test_topology_portable PRIVATE tests bombs/fixed-run bombs/fixed-run/tests)
+target_link_libraries(test_topology_portable PRIVATE carlobomb_minimal)
+add_test(NAME test_topology_portable COMMAND test_topology_portable)
+add_executable(test_compact bombs/fixed-run/tests/test_compact.c)
+target_include_directories(test_compact PRIVATE tests)
+target_link_libraries(test_compact PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_compact COMMAND test_compact ${CMAKE_CURRENT_BINARY_DIR}/compact_test)
+# compact.c compiled into the test, to change the bytes of an opened Bomb.
+add_executable(test_compact_internal bombs/fixed-run/tests/test_compact_internal.c)
+target_include_directories(test_compact_internal PRIVATE tests)
+target_link_libraries(test_compact_internal PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_compact_internal COMMAND test_compact_internal ${CMAKE_CURRENT_BINARY_DIR}/compact_internal)
+add_test(NAME test_compact_unmapped COMMAND test_compact ${CMAKE_CURRENT_BINARY_DIR}/compact_test_unmapped)
+set_tests_properties(test_compact_unmapped PROPERTIES ENVIRONMENT "CARLOBOMB_NO_MMAP=1")
+
 # The same with tables read into memory instead of mapped from their files.
 add_test(NAME test_fixed_run_ladder_unmapped
   COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_unmapped_work)
@@ -267,6 +299,13 @@ add_test(NAME test_fixed_bomb_solver
   COMMAND test_fixed_bomb_solver ${CMAKE_CURRENT_BINARY_DIR}/fixed_bomb_test_work
           --cross-bits ${CARLOBOMB_FIXED_CROSS_BITS})
 set_tests_properties(test_fixed_bomb_solver PROPERTIES TIMEOUT 900)
+# The solver and the compact reader compiled into the test, to change the
+# bytes of an opened compact Bomb.
+add_executable(test_fixed_bomb_internal solvers/fixed/bomb/tests/test_fixed_bomb_internal.c)
+target_include_directories(test_fixed_bomb_internal PRIVATE tests solvers/fixed/bomb bombs/fixed-run)
+target_link_libraries(test_fixed_bomb_internal PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_fixed_bomb_internal
+  COMMAND test_fixed_bomb_internal ${CMAKE_CURRENT_BINARY_DIR}/fixed_bomb_internal)
 
 if(CARLOBOMB_HAVE_BOMB_BUILD)
   # The bomb commands end to end.  bomb_16 builds the whole 16-bit table with
@@ -277,10 +316,13 @@ if(CARLOBOMB_HAVE_BOMB_BUILD)
   if(NOT CARLOBOMB_SANITIZE)
     list(APPEND CARLOBOMB_BOMB_MODES 16full)
   endif()
+  # A compact file that names a source it does not hold, for bomb_small.
+  add_executable(compact_fixture tests/compact_fixture.c)
+  target_link_libraries(compact_fixture PRIVATE carlobomb_fixed_run)
   foreach(mode ${CARLOBOMB_BOMB_MODES})
     add_test(NAME bomb_${mode}
       COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
-              -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM} -DMODE=${mode}
+              -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM} -DMODE=${mode} -DFIXTURE=$<TARGET_FILE:compact_fixture>
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/bomb_smoke.cmake)
     set_tests_properties(bomb_${mode} PROPERTIES TIMEOUT 900)
   endforeach()

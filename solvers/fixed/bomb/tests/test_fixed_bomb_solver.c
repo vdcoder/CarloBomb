@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#include "compact.h"
 #include "fixed_bomb_solver.h"
 #include "minimal_solver.h"
 #include "test_util.h"
@@ -441,9 +442,13 @@ static void test_rejections(void) {
     copy[30] ^= 0x01;
     CHECK(open_image(copy, size, NULL) == FRB_ERR_HEADER);        /* in the header */
     memcpy(copy, image, size);
-    copy[8] = 4;
+    copy[8] = 5;
     fix_crcs(copy, size);
     CHECK(open_image(copy, size, NULL) == FRB_ERR_VERSION);       /* a format this code does not read */
+    memcpy(copy, image, size);
+    copy[8] = 4;
+    fix_crcs(copy, size);
+    CHECK(open_image(copy, size, NULL) == FRB_ERR_HEADER);        /* nor is it a compact file */
     memcpy(copy, image, size);
     copy[8] = 3;
     fix_crcs(copy, size);
@@ -721,6 +726,147 @@ static void test_suffix_lemma(const RevFixedBomb *b, const FrbTable *t) {
            cases, needs_more, longer);
 }
 
+/*
+ * The same Bomb in the compact format (version 4), through the same solver:
+ * for every string of 1 to B bits and for longer targets the node counts and
+ * bounds the fixed-width Bomb gives, the same REV for a string of B bits,
+ * and the bytes of the fixed-width file back.
+ *
+ * A shorter string is answered by one of its B-bit extensions with the
+ * fewest nodes.  The fixed-width Bomb takes the lowest of them.  The compact
+ * one stores only the strings that start with 0 and answers a string that
+ * starts with 1 by the complement of its complement's answer: for those it
+ * takes the highest.
+ */
+static void test_compact_bomb(const RevFixedBomb *fixed, const char *fixed_file) {
+    const char *path = in_scratch("compact.frb");
+    char target[40];
+    FrbTable t, back;
+    FrbFileInfo info;
+    RevFixedBomb *b = NULL;
+    FrbCompact *c = NULL;
+    uint8_t *image = NULL, *image2 = NULL;
+    size_t size = 0, size2 = 0;
+    unsigned long long strings = 0, wrong = 0, moved = 0;
+    int bits;
+
+    CHECK(frb_file_read(fixed_file, &t, &info, NULL) == FRB_OK);
+    if (!t.entries) return;
+    bits = t.bits;
+    CHECK(frb_compact_write(path, &t, info.version, info.table_crc) == FRB_OK);
+    CHECK(rev_fixed_bomb_open(path, &b, NULL) == FRB_OK);
+    if (!b) {
+        frb_table_destroy(&t);
+        return;
+    }
+    CHECK(rev_fixed_bomb_bits(b) == bits && rev_fixed_bomb_max_nodes(b) == rev_fixed_bomb_max_nodes(fixed));
+    for (int len = 1; len <= bits; len++) {
+        uint32_t h1[FRB_MAX_NODES + 1], h2[FRB_MAX_NODES + 1];
+        for (uint32_t v = 0; v < (1u << len); v++) {
+            RevFixedBombInfo i1, i2;
+            RevGraph g1, g2;
+            int ok;
+            frb_target_format(v, len, target);
+            ok = rev_fixed_bomb_solve(fixed, target, (size_t)len, 0, &g1, &i1) == REV_FIXED_BOMB_MINIMAL;
+            ok = ok && rev_fixed_bomb_solve(b, target, (size_t)len, 0, &g2, &i2) == REV_FIXED_BOMB_MINIMAL;
+            ok = ok && i1.min_nodes == i2.min_nodes && i1.lower_bound == i2.lower_bound;
+            if (len < bits && (v >> (len - 1))) {
+                /* what the compact Bomb answers here: the complement of what the fixed-width Bomb
+                 * answers for the complement of the string */
+                char other[40];
+                RevFixedBombInfo ic;
+                RevGraph gc;
+                frb_target_format(v ^ ((1u << len) - 1u), len, other);
+                ok = ok && rev_fixed_bomb_solve(fixed, other, (size_t)len, 0, &gc, &ic) == REV_FIXED_BOMB_MINIMAL;
+                frb_graph_complement(&gc, &g1);
+                i1.extension = ic.extension ^ ((1u << bits) - 1u);
+                ok = ok && ic.min_nodes == i1.min_nodes && (i1.extension >> (bits - len)) == v;
+                ok = ok && rev_fixed_bomb_min_nodes(fixed, bits, i1.extension) == i1.min_nodes;
+                moved += i2.extension != rev_fixed_bomb_extension(fixed, len, v);
+            }
+            ok = ok && i1.extension == i2.extension && same_graph(&g1, &g2) && i2.bomb_bits == bits;
+            ok = ok && rev_fixed_bomb_min_nodes(b, len, v) == i1.min_nodes;
+            ok = ok && rev_fixed_bomb_extension(b, len, v) == i1.extension;
+            if ((v & 63u) == 5u) {
+                /* A budget one below the minimum is refused the same way, and no REV comes with
+                 * the refusal; a budget of exactly the minimum is enough. */
+                RevFixedBombResult r = rev_fixed_bomb_solve(b, target, (size_t)len, i1.min_nodes - 1, &g2, &i2);
+                if (i1.min_nodes > 1)
+                    ok = ok && r == REV_FIXED_BOMB_PROVEN_UNSAT && g2.node_count == 0 && i2.min_nodes == i1.min_nodes;
+                else ok = ok && r == REV_FIXED_BOMB_MINIMAL;
+                ok = ok && i2.extension == i1.extension;
+                ok = ok && rev_fixed_bomb_solve(b, target, (size_t)len, i1.min_nodes, &g2, &i2) ==
+                               REV_FIXED_BOMB_MINIMAL &&
+                     same_graph(&g1, &g2) && i2.extension == i1.extension;
+            }
+            strings++;
+            wrong += !ok;
+        }
+        rev_fixed_bomb_histogram(fixed, len, h1);
+        rev_fixed_bomb_histogram(b, len, h2);
+        CHECK(memcmp(h1, h2, sizeof h1) == 0);
+    }
+    CHECK_MSG(wrong == 0, "%llu strings answered differently by the compact Bomb", wrong);
+    /* Longer targets: the same refusal and the same bound. */
+    for (int r = 0; r < 2000; r++) {
+        RevFixedBombInfo i1, i2;
+        int len = bits + 1 + (int)rnd(20);
+        for (int i = 0; i < len; i++) target[i] = (char)('0' + (int)rnd(2));
+        target[len] = '\0';
+        if (len > 38) continue;
+        CHECK(rev_fixed_bomb_solve(fixed, target, (size_t)len, 0, NULL, &i1) == REV_FIXED_BOMB_UNSUPPORTED);
+        CHECK(rev_fixed_bomb_solve(b, target, (size_t)len, 0, NULL, &i2) == REV_FIXED_BOMB_UNSUPPORTED);
+        CHECK(i1.lower_bound == i2.lower_bound &&
+              rev_fixed_bomb_lower_bound(b, target, (size_t)len) == i1.lower_bound);
+    }
+    rev_fixed_bomb_reindex(b); /* nothing to rebuild; nothing changes */
+    CHECK(rev_fixed_bomb_min_nodes(b, 7, 93) == rev_fixed_bomb_min_nodes(fixed, 7, 93));
+    rev_fixed_bomb_close(b);
+
+    /* And the compact file gives the fixed-width file back, byte for byte. */
+    CHECK(frb_compact_open(path, &c, NULL) == FRB_OK);
+    if (c) {
+        CHECK(frb_compact_info(c)->source_version == info.version &&
+              frb_compact_info(c)->source_table_crc == info.table_crc);
+        CHECK(frb_compact_to_table(c, NULL, &back) == FRB_OK);
+        CHECK(frb_image_build(&t, &image, &size) == FRB_OK && frb_image_build(&back, &image2, &size2) == FRB_OK);
+        CHECK(size == size2 && image && image2 && memcmp(image, image2, size) == 0);
+        CHECK(frb_compact_info(c)->other_revs == 0 && moved > 0);
+        printf("compact: the %d-bit Bomb in the compact format is %llu bytes against %llu; the solver gives the\n"
+               "         same node count for all %llu strings and the same REV for all but %llu shorter ones that\n"
+               "         start with 1, which get the complement of their complement's; the fixed-width file comes\n"
+               "         back byte for byte\n",
+               bits, (unsigned long long)frb_compact_info(c)->file_bytes, (unsigned long long)size, strings, moved);
+        free(image);
+        free(image2);
+        frb_table_destroy(&back);
+        frb_compact_close(c);
+    }
+
+    /* A Bomb is more than REVs that emit their strings: a string and its complement need the same
+     * number of nodes.  The solver refuses a fixed-width file in which they do not; a compact file
+     * of such a table cannot be made at all, since it keeps one node count for the two. */
+    {
+        const char *odd = in_scratch("compact-odd.frb");
+        FrbStatus st;
+        RevGraph g;
+        uint32_t at = 5;
+        FILE *f;
+        CHECK(frb_table_get(&t, at, &st, &g) == FRB_OK && g.node_count < t.format->node_capacity);
+        g.nodes[g.node_count].color = 0; /* a node no link leads to */
+        g.nodes[g.node_count].links[0] = g.nodes[g.node_count].links[1] = 0;
+        g.node_count++;
+        CHECK(frb_table_put(&t, at, FRB_MINIMAL, &g) == FRB_OK);
+        remove(odd);
+        CHECK(frb_compact_write(odd, &t, 0, 0) == FRB_ERR_EVIDENCE);
+        f = fopen(odd, "rb");
+        CHECK(f == NULL);
+        if (f) fclose(f);
+        remove(odd);
+    }
+    frb_table_destroy(&t);
+}
+
 /* Longer targets: never solved, and the bound that is reported is a bound. */
 static void test_longer(const RevFixedBomb *b) {
     static const char *const regular[] = {
@@ -974,6 +1120,7 @@ int main(int argc, char **argv) {
         test_other_witnesses(b, &t);
         test_suffix_lemma(b, &t);
         test_longer(b);
+        test_compact_bomb(b, bomb_file);
         if (cross_bits > 0) test_cross_check(b, cross_bits);
 #ifdef CARLOBOMB_HAVE_BOMB_BUILD
         if (cross_bits == 16) test_longer_bomb(b, bomb_file); /* 32,768 searches: not for a slow build */

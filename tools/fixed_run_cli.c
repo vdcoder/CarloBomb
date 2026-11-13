@@ -7,6 +7,10 @@
  *   carlobomb bomb finalize --work-dir DIR --output FILE [--partial]
  *   carlobomb bomb verify   --file FILE [--work-dir DIR] [--recertify [--engine E] [--sample K]]
  *   carlobomb bomb lookup   --file FILE --target S [--out GRAPH]
+ *   carlobomb bomb compact  --file FILE --output COMPACT
+ *   carlobomb bomb expand   --file COMPACT --output FILE
+ *   carlobomb bomb compare  --file COMPACT --target S
+ *   carlobomb bomb migrate  --dir DIR --output DIR2
  *   carlobomb bomb ladder   --dir DIR --to L [--from FILE] [settings] [run options]
  *   carlobomb bomb ladder   --dir DIR --status
  *
@@ -23,7 +27,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
+
 #include "cli_engine.h"
+#include "compact.h"
 #include "fixed_run.h"
 #ifdef CARLOBOMB_HAVE_BOMB_BUILD
 #include "fixed_run_build.h"
@@ -63,6 +75,16 @@ void fixed_run_cli_usage(void) {
             "      and agreement with a complete Bomb for fewer bits\n"
             "  carlobomb bomb lookup   --file FILE --target S [--out GRAPH]\n"
             "      print the REV stored for S\n"
+            "  carlobomb bomb compact  --file FILE --output COMPACT\n"
+            "      write a complete Bomb in the compact format (version 4): a fifteenth of\n"
+            "      the size, and strings of every length up to L answered from the file\n"
+            "  carlobomb bomb expand   --file COMPACT --output FILE\n"
+            "      the fixed-width file a compact Bomb was made from, byte for byte\n"
+            "  carlobomb bomb compare  --file COMPACT --target S\n"
+            "      which of S0 and S1 needs fewer nodes, or neither\n"
+            "  carlobomb bomb migrate  --dir DIR --output DIR2\n"
+            "      the compact file of every complete Bomb fixed-run-L.frb in DIR, written\n"
+            "      to DIR2 as fixed-run-L.v4.frb and checked against it; DIR is only read\n"
             "  carlobomb bomb ladder   --dir DIR --to L [--from FILE] [--workers W] [--engine E]\n"
             "                          [--max-steps K[,K...]] [--max-nodes N]\n"
             "      build complete Bombs for every length up to L, each from the one before,\n"
@@ -174,6 +196,112 @@ static const char *status_text(FrbStatus s) {
 
 /* ---- lookup ------------------------------------------------------------- */
 
+/* A version-4 file of the layout the compact format had as a draft says so; 1 if it was one. */
+static int draft_notice(const char *path) {
+    if (!frb_compact_file_is_draft(path)) return 0;
+    printf("%s was written by a draft of the compact format, with another layout.\n"
+           "It cannot be read.  Make it again from its fixed-width file: carlobomb bomb compact.\n",
+           path);
+    return 1;
+}
+
+/* Header and directory of a compact file for a command that goes on to ask it something. */
+static int compact_head(const BombArgs *a, int bits, FrbCompactInfo *info) {
+    FrbError e = frb_compact_file_info(a->file, info);
+    if (e == FRB_ERR_IO) {
+        fprintf(stderr, "cannot read %s\n", a->file);
+        return X_USAGE;
+    }
+    if (e != FRB_OK) {
+        printf("File: %s\n", a->file);
+        draft_notice(a->file);
+        printf("Verification: FAIL (%s)\n", frb_error_str(e));
+        return X_FAIL;
+    }
+    if (bits > info->bits) {
+        fprintf(stderr, "%s holds targets of up to %d bits; %s has %d bits\n", a->file, info->bits, a->target,
+                bits);
+        return X_USAGE;
+    }
+    return X_OK;
+}
+
+/* A compact Bomb answers a string of any length up to its own from the file. */
+static int lookup_compact(const BombArgs *a, int bits, uint32_t index) {
+    char extension[FRB_MAX_BITS + 1];
+    FrbCompactInfo info;
+    RevGraph g;
+    uint32_t emitted = 0;
+    FrbError e;
+    int x = compact_head(a, bits, &info);
+    if (x != X_OK) return x;
+    e = frb_compact_file_lookup(a->file, bits, index, &info, &g, &emitted);
+    printf("Target: %s (%d bits; %s, compact, %d-bit Bomb)\n", a->target, bits, a->file, info.bits);
+    if (e != FRB_OK) {
+        printf("Verification: FAIL (%s)\n", frb_error_str(e));
+        return X_FAIL;
+    }
+    printf("Status: %s\n", status_text(FRB_MINIMAL));
+    if (bits < info.bits) {
+        frb_target_format(emitted, info.bits, extension);
+        printf("Extension: %s: of the %d-bit strings starting with the target that need the\n"
+               "fewest nodes, the %s\n",
+               extension, info.bits,
+               a->target[0] == '0' ? "lowest" : "highest (the complement of the answer for the target's complement)");
+    }
+    printf("Nodes: %d\n\n", g.node_count);
+    print_graph(&g);
+    printf("\nVerification: PASS\n");
+    if (a->out) {
+        FILE *f = fopen(a->out, "w");
+        if (!f || rev_graph_write(f, &g) != REV_OK || fclose(f) != 0) {
+            fprintf(stderr, "cannot write %s\n", a->out);
+            return X_USAGE;
+        }
+        printf("Graph written to %s\n", a->out);
+    }
+    return X_OK;
+}
+
+/* Which of the two extensions of a string needs fewer nodes: worked out on demand from a compact Bomb. */
+static int cmd_compare(const BombArgs *a) {
+    FrbCompactInfo info;
+    uint32_t index;
+    int bits, which = 0, nodes[2] = {0, 0}, x;
+    FrbError e;
+    if (!a->file || !a->target) return usage_error("compare needs --file and --target");
+    if (!frb_target_parse(a->target, &bits, &index)) {
+        fprintf(stderr, "invalid target: must be 1..%d characters 0 and 1\n", FRB_MAX_BITS);
+        return X_USAGE;
+    }
+    if (frb_file_is_compact(a->file) != 1) {
+        fprintf(stderr,
+                "error: %s is not a Bomb in the compact format.  The comparison is worked out from the\n"
+                "index of a compact Bomb: `carlobomb bomb compact` makes one from a fixed-width file.\n",
+                a->file);
+        return X_USAGE;
+    }
+    x = compact_head(a, bits, &info);
+    if (x != X_OK) return x;
+    if (bits == info.bits) {
+        fprintf(stderr,
+                "%s has %d bits, as many as the strings of %s: its two extensions have %d, and only\n"
+                "a Bomb of %d-bit strings can compare them\n",
+                a->target, bits, a->file, bits + 1, bits + 1);
+        return X_USAGE;
+    }
+    e = frb_compact_file_compare(a->file, bits, index, &info, &which, nodes);
+    printf("Target: %s (%d bits; %s, compact, %d-bit Bomb)\n", a->target, bits, a->file, info.bits);
+    if (e != FRB_OK) {
+        printf("Verification: FAIL (%s)\n", frb_error_str(e));
+        return X_FAIL;
+    }
+    printf("Followed by 0: %d nodes\nFollowed by 1: %d nodes\n", nodes[0], nodes[1]);
+    if (which == FRB_COMPACT_TIE) printf("Fewer nodes: neither\n");
+    else printf("Fewer nodes: %d (by %d)\n", which, which ? nodes[0] - nodes[1] : nodes[1] - nodes[0]);
+    return X_OK;
+}
+
 static int cmd_lookup(const BombArgs *a) {
     FrbFileInfo info;
     FrbStatus status;
@@ -186,6 +314,7 @@ static int cmd_lookup(const BombArgs *a) {
         fprintf(stderr, "invalid target: must be 1..%d characters 0 and 1\n", FRB_MAX_BITS);
         return X_USAGE;
     }
+    if (frb_file_is_compact(a->file) == 1) return lookup_compact(a, bits, index);
     e = frb_file_info(a->file, &info);
     if (e == FRB_ERR_IO) {
         fprintf(stderr, "cannot read %s\n", a->file);
@@ -295,6 +424,17 @@ static int fail(FrbError e, const char *err) {
 
 /* ---- build and resume --------------------------------------------------- */
 
+/* A construction reads and writes the fixed-width formats only. */
+static int refuse_compact_base(const char *path, const char *option) {
+    if (!path || frb_file_is_compact(path) != 1) return 0;
+    fprintf(stderr,
+            "error: %s is in the compact format.  A construction builds on a fixed-width file:\n"
+            "`carlobomb bomb expand --file %s --output FILE` gives back the one it was made\n"
+            "from, byte for byte; name that with %s.\n",
+            path, path, option);
+    return 1;
+}
+
 static int apply_changeable(const BombArgs *a, FrbConfig *cfg) {
     if (a->max_nodes >= 0) cfg->max_nodes = (int)a->max_nodes;
     if (a->workers >= 0) cfg->workers = (int)a->workers;
@@ -391,6 +531,7 @@ static int cmd_build(const BombArgs *a) {
         cfg.format = format->version;
         cfg.max_nodes = format->node_capacity;
     }
+    if (refuse_compact_base(a->base, "--base")) return X_USAGE;
     if (a->base) {
         e = frb_config_set_base(&cfg, a->base, err, sizeof err);
         if (e != FRB_OK) return fail(e == FRB_ERR_IO ? FRB_ERR_ARG : e, err);
@@ -555,6 +696,7 @@ static int cmd_ladder(const BombArgs *a) {
     if (!a->dir) return usage_error("ladder needs --dir");
     if (a->status) return ladder_status(a->dir);
     if (a->to < 0) return usage_error("ladder needs --to (the length to climb to) or --status");
+    if (refuse_compact_base(a->from, "--from")) return X_USAGE;
 
     frb_config_default(&settings, 1);
     settings.format = a->format >= 0 ? (int)a->format : 0; /* 0: what each length needs */
@@ -616,6 +758,512 @@ static int cmd_ladder(const BombArgs *a) {
 
 #endif /* CARLOBOMB_HAVE_BOMB_BUILD */
 
+/* ---- the compact format -------------------------------------------------- */
+
+static const char *commas_u64(uint64_t v) {
+    static char bufs[8][32];
+    static int next;
+    char digits[24], *out = bufs[next];
+    int n, k = 0;
+    next = (next + 1) % 8;
+    n = snprintf(digits, sizeof digits, "%llu", (unsigned long long)v);
+    for (int i = 0; i < n; i++) {
+        out[k++] = digits[i];
+        if ((n - 1 - i) % 3 == 0 && i != n - 1) out[k++] = ',';
+    }
+    out[k] = '\0';
+    return out;
+}
+
+/* The class directory, and the sizes of the parts of the file. */
+static void print_compact_layout(const FrbCompactInfo *info) {
+    uint64_t revs = 0;
+    printf("  Nodes   Kept as             Bits per REV   Stored REVs            Bytes\n");
+    for (int n = 1; n <= info->max_nodes; n++) {
+        printf("  %5d   %-17s   %12u   %11s   %14s\n", n,
+               n > FRB_COMPACT_PLAIN_NODES ? "rank of its graph" : "colors and links", (unsigned)info->class_bits[n],
+               commas_u64(info->class_count[n]), commas_u64(info->class_bytes[n]));
+        revs += info->class_bytes[n];
+    }
+    printf("  REVs                 %15s bytes (one for each string that starts with 0)\n", commas_u64(revs));
+    printf("  node counts          %15s bytes (4 bits each)\n", commas_u64(info->nodes_bytes));
+    printf("  counts before        %15s bytes (for every %dth string)\n", commas_u64(info->blocks_bytes),
+           1 << info->block_shift);
+    printf("  navigation bits      %15s bytes (1 bit for each shorter string that starts with 0)\n",
+           commas_u64(info->nav_bytes));
+    printf("  header, directory    %15s bytes (with the 8 bytes after the last REV)\n",
+           commas_u64(info->file_bytes - revs - info->nodes_bytes - info->blocks_bytes - info->nav_bytes));
+    printf("  file                 %15s bytes\n", commas_u64(info->file_bytes));
+}
+
+/* What the header's number of other REVs means, in a sentence or two. */
+static void print_other_revs(const FrbCompactInfo *info) {
+    if (info->other_revs == 0)
+        printf("Every string of %d bits has the REV here that the source has for it, link for link and color\n"
+               "for color: `carlobomb bomb expand` gives the source back from this file, byte for byte.\n",
+               info->bits);
+    else
+        printf("%s of the %s strings of %d bits have another REV here than in the source: the same graph\n"
+               "with other colors or another numbering, or the complement of the other string's REV.  Each\n"
+               "emits its string with the minimum number of nodes.  `carlobomb bomb expand` gives a\n"
+               "fixed-width Bomb with these REVs, which is not the source byte for byte.\n",
+               commas_u64(info->other_revs), commas_u64(info->count), info->bits);
+}
+
+/* A conversion never replaces a file. */
+static int output_is_free(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 1;
+    fclose(f);
+    fprintf(stderr, "error: %s exists.  A conversion never replaces a file: choose another name, or\n"
+                    "remove the file yourself if it is not needed.\n",
+            path);
+    return 0;
+}
+
+/* Why a table cannot be written in the compact format, where the error alone does not say. */
+static const char *compact_refusal(FrbError e) {
+    switch (e) {
+    case FRB_ERR_CAPACITY: return "a REV of more than 12 nodes: the compact format holds up to 12";
+    case FRB_ERR_EVIDENCE:
+        return "a string and its complement with different node counts, or a REV with a node its\n"
+               "string does not need: this is no table of minima";
+    default: return frb_error_str(e);
+    }
+}
+
+static int cmd_compact(const BombArgs *a) {
+    char target[FRB_MAX_BITS + 1];
+    FrbCompactInfo cinfo;
+    FrbFileInfo info;
+    FrbTable t;
+    uint64_t source_bytes;
+    uint32_t bad = 0;
+    FrbError e;
+    if (!a->file || !a->output) return usage_error("compact needs --file and --output");
+    if (frb_file_is_compact(a->file) == 1) {
+        fprintf(stderr, "error: %s is in the compact format already\n", a->file);
+        return X_USAGE;
+    }
+    memset(&info, 0, sizeof info);
+    e = frb_file_read(a->file, &t, &info, &bad); /* header, length, both checksums, every REV run */
+    if (e == FRB_ERR_IO) {
+        fprintf(stderr, "cannot read %s\n", a->file);
+        return X_USAGE;
+    }
+    if (e == FRB_OK && !output_is_free(a->output)) {
+        frb_table_destroy(&t);
+        return X_USAGE;
+    }
+    if (e != FRB_OK) {
+        frb_target_format(bad, info.bits >= 1 && info.bits <= FRB_MAX_BITS ? info.bits : 1, target);
+        printf("Source: %s\nVerification: FAIL (%s%s%s)\nNothing was written.\n", a->file, frb_error_str(e),
+               e == FRB_ERR_ENTRY || e == FRB_ERR_OUTPUT ? ", target " : "",
+               e == FRB_ERR_ENTRY || e == FRB_ERR_OUTPUT ? target : "");
+        return X_FAIL;
+    }
+    source_bytes = frb_file_bytes(t.format, t.bits);
+    printf("Source: %s\n  format version %d, %d-bit targets, %s bytes, table CRC-32 %08x; validated in full\n",
+           a->file, info.version, info.bits, commas_u64(source_bytes), (unsigned)info.table_crc);
+    if (!info.complete) {
+        frb_table_destroy(&t);
+        printf("  it is a partial table: only a complete Bomb can be written in the compact format,\n"
+               "  which has no place for an entry without a certified minimum.  Nothing was written.\n");
+        return X_PARTIAL;
+    }
+    fflush(stdout);
+    e = frb_compact_write(a->output, &t, info.version, info.table_crc);
+    frb_table_destroy(&t);
+    if (e != FRB_OK) {
+        fprintf(stderr, "error: cannot write %s: %s.  Nothing was written.\n", a->output, compact_refusal(e));
+        return X_FAIL;
+    }
+    e = frb_compact_file_info(a->output, &cinfo);
+    if (e != FRB_OK) {
+        fprintf(stderr, "error: the file just written cannot be read: %s\n", frb_error_str(e));
+        return X_FAIL;
+    }
+    printf("Compact: %s\n", a->output);
+    print_compact_layout(&cinfo);
+    printf("  %.1f%% of the source\n", 100.0 * (double)cinfo.file_bytes / (double)source_bytes);
+    printf("Before it got its name the new file was read back in full and compared with the source:\n"
+           "every string of %d bits with its node count and a REV that emits it, every shorter string\n"
+           "answered by one of its extensions with the fewest nodes, every comparison of two extensions.\n",
+           cinfo.bits);
+    print_other_revs(&cinfo);
+    printf("The source is unchanged.\n");
+    return X_OK;
+}
+
+static int cmd_expand(const BombArgs *a) {
+    FrbCompact *c = NULL;
+    const FrbCompactInfo *cinfo;
+    const FrbFormat *format;
+    uint32_t bad = 0, crc = 0;
+    FrbError e;
+    if (!a->file || !a->output) return usage_error("expand needs --file and --output");
+    if (frb_file_is_compact(a->file) != 1) {
+        fprintf(stderr, "error: %s is not a Bomb in the compact format\n", a->file);
+        return X_USAGE;
+    }
+    e = frb_compact_open(a->file, &c, &bad);
+    if (e != FRB_OK) {
+        printf("File: %s\n", a->file);
+        draft_notice(a->file);
+        printf("Verification: FAIL (%s)\nNothing was written.\n", frb_error_str(e));
+        return X_FAIL;
+    }
+    cinfo = frb_compact_info(c);
+    format = frb_format(cinfo->source_version);
+    if (!format) format = frb_format_for_bits(cinfo->bits);
+    printf("Compact: %s\n  %d-bit targets, %s bytes; validated in full\n", a->file, cinfo->bits,
+           commas_u64(cinfo->file_bytes));
+    if (cinfo->source_version && cinfo->other_revs == 0) { /* is it the table it says it is?  Before anything is written. */
+        e = frb_compact_table_crc(c, format, &crc);
+        if (e != FRB_OK || crc != cinfo->source_table_crc) {
+            printf("  it says it was made from a version-%d file with table CRC-32 %08x, but the table it\n"
+                   "  holds has %08x.  Nothing was written.\n",
+                   cinfo->source_version, (unsigned)cinfo->source_table_crc, (unsigned)crc);
+            frb_compact_close(c);
+            return X_FAIL;
+        }
+    }
+    if (!output_is_free(a->output)) {
+        frb_compact_close(c);
+        return X_USAGE;
+    }
+    fflush(stdout);
+    e = frb_compact_expand(c, format, a->output, &crc);
+    if (e != FRB_OK) {
+        fprintf(stderr, "error: cannot write %s: %s.  Nothing was written.\n", a->output, frb_error_str(e));
+        frb_compact_close(c);
+        return X_FAIL;
+    }
+    printf("Wrote %s: format version %d, %d-bit targets, %s bytes, table CRC-32 %08x\n", a->output,
+           format->version, cinfo->bits, commas_u64(frb_file_bytes(format, cinfo->bits)), (unsigned)crc);
+    if (cinfo->source_version && cinfo->other_revs == 0)
+        printf("That is the version and table checksum of the file the compact one was made from: the same\n"
+               "table, byte for byte.  ");
+    else if (cinfo->other_revs)
+        printf("%s of its REVs are not those of the file the compact one was made from (table CRC-32\n"
+               "%08x), as the compact file says of itself: a complete Bomb, and not that file.  ",
+               commas_u64(cinfo->other_revs), (unsigned)cinfo->source_table_crc);
+    printf("The new file was read back in full and compared with the compact\none, REV for REV.\n");
+    frb_compact_close(c);
+    return X_OK;
+}
+
+static int verify_compact(const BombArgs *a) {
+    char target[FRB_MAX_BITS + 1];
+    FrbCompact *c = NULL;
+    const FrbCompactInfo *info;
+    FrbCompactInfo head;
+    uint32_t bad = 0;
+    FrbError e;
+    if (a->work_dir || a->recertify) {
+        fprintf(stderr,
+                "--work-dir and --recertify check a fixed-width file against how it was built.  For a\n"
+                "compact file, check the file it was made from (`carlobomb bomb expand` regenerates it)\n"
+                "and this one against it with --against.\n");
+        return X_USAGE;
+    }
+    printf("File: %s\n", a->file);
+    memset(&head, 0, sizeof head);
+    e = frb_compact_file_info(a->file, &head);
+    if (e == FRB_OK) e = frb_compact_open(a->file, &c, &bad);
+    if (e != FRB_OK) {
+        draft_notice(a->file);
+        if ((e == FRB_ERR_ENTRY || e == FRB_ERR_OUTPUT) && head.bits) {
+            frb_target_format(bad, head.bits, target);
+            printf("Verification: FAIL (%s: target %s)\n", frb_error_str(e), target);
+        } else {
+            printf("Verification: FAIL (%s)\n", frb_error_str(e));
+        }
+        return X_FAIL;
+    }
+    info = frb_compact_info(c);
+    printf("Compact format (version %d), %d-bit targets, %u strings answered from %u stored REVs", FRB_FORMAT_COMPACT,
+           info->bits, (unsigned)info->count, (unsigned)info->stored);
+    if (info->source_version)
+        printf(";\nmade from a version-%d file with table CRC-32 %08x", info->source_version,
+               (unsigned)info->source_table_crc);
+    printf("\nHeader, class directory, length and checksums ............... PASS\n");
+    printf("Node counts, counts before, and every navigation bit ........ PASS (%s strings of 1 to %d bits)\n",
+           commas_u64((uint64_t)info->count - 2u), info->bits - 1);
+    printf("Every REV decoded, its colors found, and run for %2d bits .... PASS (%u REVs)\n", info->bits,
+           (unsigned)info->stored);
+    printf("A string that starts with 1: the complement of the answer\n"
+           "for its complement ........................................... by construction\n");
+    if (info->source_version && info->other_revs == 0) {
+        uint32_t crc = 0;
+        e = frb_compact_table_crc(c, NULL, &crc);
+        if (e != FRB_OK || crc != info->source_table_crc) {
+            printf("The table it holds has the checksum of its source ........... FAIL (%08x, not %08x)\n",
+                   (unsigned)crc, (unsigned)info->source_table_crc);
+            printf("Verification: FAIL (%s)\n", frb_error_str(e != FRB_OK ? e : FRB_ERR_EVIDENCE));
+            frb_compact_close(c);
+            return X_FAIL;
+        }
+        printf("The table it holds has the checksum of its source ........... PASS (%08x)\n", (unsigned)crc);
+    } else if (info->other_revs) {
+        printf("REVs that are not those of its source, by its own count ..... %s\n", commas_u64(info->other_revs));
+    }
+    if (a->against) {
+        FrbFileInfo other_info;
+        FrbTable other, mine;
+        e = frb_file_read(a->against, &other, &other_info, &bad);
+        if (e != FRB_OK) {
+            printf("Against %s: cannot use it (%s)\nVerification: FAIL (%s)\n", a->against, frb_error_str(e),
+                   frb_error_str(e));
+            frb_compact_close(c);
+            return e == FRB_ERR_IO ? X_USAGE : X_FAIL;
+        }
+        if (other_info.bits == info->bits) { /* the fixed-width file of the same Bomb */
+            FrbCompactDifference d;
+            e = frb_compact_against_table(c, &other, &d, &bad);
+            printf("Against the fixed-width file %s:\n"
+                   "  every node count, a REV that emits every string, every shorter string answered by one\n"
+                   "  of its extensions with the fewest nodes, every comparison of two extensions ... %s\n",
+                   a->against, e == FRB_OK ? "PASS" : "FAIL");
+            if (e == FRB_OK) {
+                int as_said = d.other_revs == info->other_revs;
+                printf("  REVs that are not the ones of that file: %s", commas_u64(d.other_revs));
+                if (d.other_revs) printf(" (%s of them go on with another next bit)", commas_u64(d.other_next_bit));
+                printf(" ... %s\n", as_said ? "PASS (as the header says)" : "FAIL (the header says otherwise)");
+                printf("  shorter strings answered by another extension than the lowest of the equals: %s\n"
+                       "  (the rule for strings that start with 1)\n",
+                       commas_u64(d.other_extension));
+                if (!as_said) {
+                    printf("  this compact file was not made from that file\nVerification: FAIL (%s)\n",
+                           frb_error_str(FRB_ERR_EVIDENCE));
+                    frb_table_destroy(&other);
+                    frb_compact_close(c);
+                    return X_FAIL;
+                }
+                /* The same answers, and yet not the file the header names: said, not failed. */
+                if (info->source_version && (other_info.version != info->source_version ||
+                                             other_info.table_crc != info->source_table_crc))
+                    printf("  note: that file is format version %d with table CRC-32 %08x; the file this one was\n"
+                           "  made from is version %d with table CRC-32 %08x%s\n",
+                           other_info.version, (unsigned)other_info.table_crc, info->source_version,
+                           (unsigned)info->source_table_crc,
+                           d.other_revs == 0 && other_info.version != info->source_version
+                               ? ": the same REVs in another fixed-width format"
+                               : "");
+            }
+        } else if (other_info.bits < info->bits) { /* a complete Bomb for fewer bits */
+            e = frb_compact_to_table(c, NULL, &mine);
+            if (e == FRB_OK) {
+                e = frb_table_check_chain(&mine, &other, &bad);
+                frb_table_destroy(&mine);
+            }
+            printf("Against the complete %d-bit Bomb %s: prefix minima and stretches ... %s\n", other_info.bits,
+                   a->against, e == FRB_OK ? "PASS" : "FAIL");
+        } else {
+            fprintf(stderr, "--against takes a Bomb for the same or fewer bits than the %d of the file checked\n",
+                    info->bits);
+            frb_table_destroy(&other);
+            frb_compact_close(c);
+            return X_USAGE;
+        }
+        frb_table_destroy(&other);
+        if (e != FRB_OK) {
+            frb_target_format(bad, info->bits, target);
+            printf("  first difference at target %s\nVerification: FAIL (%s)\n", target, frb_error_str(e));
+            frb_compact_close(c);
+            return X_FAIL;
+        }
+    }
+    printf("\n");
+    print_compact_layout(info);
+    {
+        int formula = 0;
+        while (formula * formula < 4 * info->bits) formula++;
+        printf("\nCOMPLETE: every string of %d bits has its certified minimum-node REV here.  The largest\n"
+               "is %d nodes, needed by %s strings; ceil(2*sqrt(%d)) - 1 = %d.\n",
+               info->bits, info->max_nodes, commas_u64(2u * (uint64_t)info->class_count[info->max_nodes]), info->bits,
+               formula - 1);
+    }
+    printf("That the node counts are minima is certified by the construction of the fixed-width file\n"
+           "this was made from, not by this file.\n");
+    print_other_revs(info);
+    printf("\nVerification: PASS (complete certified table, compact format)\n");
+    frb_compact_close(c);
+    return X_OK;
+}
+
+/* ---- migrate -------------------------------------------------------------- */
+
+static int file_exists(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (f) fclose(f);
+    return f != NULL;
+}
+
+/* 1 if the two names are one directory, as far as can be told. */
+static int same_directory(const char *one, const char *two) {
+    size_t n = strlen(one), m = strlen(two);
+#if !defined(_WIN32)
+    struct stat a, b;
+    if (stat(one, &a) == 0 && stat(two, &b) == 0) return a.st_dev == b.st_dev && a.st_ino == b.st_ino;
+#endif
+    while (n > 1 && (one[n - 1] == '/' || one[n - 1] == '\\')) n--;
+    while (m > 1 && (two[m - 1] == '/' || two[m - 1] == '\\')) m--;
+    return n == m && !strncmp(one, two, n);
+}
+
+/* 1 if the directory is there, made now if it was not. */
+static int directory_ready(const char *path) {
+#if defined(_WIN32)
+    return _mkdir(path) == 0 || errno == EEXIST;
+#else
+    struct stat st;
+    if (mkdir(path, 0777) != 0 && errno != EEXIST) return 0;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+/*
+ * The compact file of every complete Bomb of a ladder directory, in a
+ * directory of their own.  The fixed-width files are opened for reading and
+ * nothing else happens to them or to their directory.
+ */
+static int cmd_migrate(const BombArgs *a) {
+    struct {
+        int bits, state; /* 1 written, 2 there already, 3 skipped (partial), 4 failed */
+        uint64_t source_bytes, compact_bytes;
+        uint32_t other_revs;
+        double seconds;
+    } rows[FRB_MAX_BITS + 1];
+    char source[2048], output[2048], target[FRB_MAX_BITS + 1];
+    uint64_t total_source = 0, total_compact = 0;
+    int count = 0, failed = 0, done = 0;
+    if (!a->dir || !a->output) return usage_error("migrate needs --dir (where the fixed-run-L.frb files are) and --output (a directory for the compact files)");
+    if (strlen(a->dir) > 1900 || strlen(a->output) > 1900) return usage_error("path too long");
+    if (same_directory(a->dir, a->output)) {
+        fprintf(stderr, "error: --output is the directory of the fixed-width files.  The compact files go to a\n"
+                        "directory of their own, so that nothing is added to a directory a ladder may be using.\n");
+        return X_USAGE;
+    }
+    if (!directory_ready(a->output)) {
+        fprintf(stderr, "error: cannot make or use the directory %s\n", a->output);
+        return X_USAGE;
+    }
+    printf("Compact files (format version 4) of the complete Bombs in %s, written to %s.\n"
+           "The fixed-width files are only read.\n\n",
+           a->dir, a->output);
+    for (int bits = 1; bits <= FRB_MAX_BITS; bits++) {
+        FrbFileInfo info;
+        FrbCompactInfo cinfo;
+        FrbTable t;
+        uint32_t bad = 0;
+        double t0 = cb_now();
+        FrbError e;
+        snprintf(source, sizeof source, "%s/fixed-run-%d.frb", a->dir, bits);
+        if (!file_exists(source)) continue;
+        snprintf(output, sizeof output, "%s/fixed-run-%d.v4.frb", a->output, bits);
+        memset(&rows[count], 0, sizeof rows[count]);
+        rows[count].bits = bits;
+        memset(&info, 0, sizeof info);
+        e = frb_file_info(source, &info);
+        if (e == FRB_OK && !info.complete) {
+            printf("%2d bits: %s is a partial table: skipped\n", bits, source);
+            rows[count++].state = 3;
+            continue;
+        }
+        if (e == FRB_OK) rows[count].source_bytes = frb_file_bytes(frb_format(info.version), bits);
+        if (e == FRB_OK && file_exists(output)) {
+            /* never replaced: is it the compact file of this very table? */
+            e = frb_compact_file_info(output, &cinfo);
+            if (e == FRB_OK && cinfo.bits == bits && cinfo.source_version == info.version &&
+                cinfo.source_table_crc == info.table_crc) {
+                printf("%2d bits: %s is there already (made from this table: CRC-32 %08x); left as it is\n", bits,
+                       output, (unsigned)info.table_crc);
+                rows[count].state = 2;
+                rows[count].compact_bytes = cinfo.file_bytes;
+                rows[count].other_revs = cinfo.other_revs;
+                count++;
+                continue;
+            }
+            printf("%2d bits: %s exists and is not the compact file of %s.\n"
+                   "         Nothing was written: remove or rename it yourself if it is not needed.\n",
+                   bits, output, source);
+            rows[count++].state = 4;
+            failed++;
+            continue;
+        }
+        if (e == FRB_OK) {
+            printf("%2d bits: reading and validating %s ...\n", bits, source);
+            fflush(stdout);
+            e = frb_file_read(source, &t, &info, &bad); /* every check of a reader, every REV run */
+            if (e == FRB_OK) {
+                printf("         writing %s and checking it against the source ...\n", output);
+                fflush(stdout);
+                e = frb_compact_write(output, &t, info.version, info.table_crc);
+                frb_table_destroy(&t);
+                if (e == FRB_OK) e = frb_compact_file_info(output, &cinfo);
+                if (e != FRB_OK) {
+                    printf("         NOT WRITTEN: %s\n", compact_refusal(e));
+                    rows[count++].state = 4;
+                    failed++;
+                    continue;
+                }
+            } else if (e == FRB_ERR_ENTRY || e == FRB_ERR_OUTPUT) {
+                frb_target_format(bad, bits, target);
+                printf("         the source does not validate: %s, target %s\n", frb_error_str(e), target);
+            }
+        }
+        if (e != FRB_OK) {
+            if (e != FRB_ERR_ENTRY && e != FRB_ERR_OUTPUT) printf("%2d bits: %s: %s\n", bits, source, frb_error_str(e));
+            rows[count++].state = 4;
+            failed++;
+            continue;
+        }
+        rows[count].state = 1;
+        rows[count].compact_bytes = cinfo.file_bytes;
+        rows[count].other_revs = cinfo.other_revs;
+        rows[count].seconds = cb_now() - t0;
+        printf("         done: %s bytes, %.1f%% of the fixed-width file, in %.1f s\n", commas_u64(cinfo.file_bytes),
+               100.0 * (double)cinfo.file_bytes / (double)rows[count].source_bytes, rows[count].seconds);
+        fflush(stdout);
+        count++;
+        done++;
+    }
+    if (!count) {
+        printf("No fixed-run-L.frb in %s: nothing to do.\n", a->dir);
+        return X_USAGE;
+    }
+    printf("\n  Bits   Fixed-width bytes     Compact bytes   Share   REVs not as in the source   Seconds\n");
+    for (int i = 0; i < count; i++) {
+        if (rows[i].state == 3) {
+            printf("  %4d   partial table: skipped\n", rows[i].bits);
+        } else if (rows[i].state == 4) {
+            printf("  %4d   NOT MIGRATED (see above)\n", rows[i].bits);
+        } else {
+            printf("  %4d   %17s   %15s   %4.1f%%   %25s   %7.1f%s\n", rows[i].bits, commas_u64(rows[i].source_bytes),
+                   commas_u64(rows[i].compact_bytes),
+                   100.0 * (double)rows[i].compact_bytes / (double)rows[i].source_bytes, commas_u64(rows[i].other_revs),
+                   rows[i].seconds, rows[i].state == 2 ? "   (was there already)" : "");
+            total_source += rows[i].source_bytes;
+            total_compact += rows[i].compact_bytes;
+        }
+    }
+    if (total_source)
+        printf("         %17s   %15s   %4.1f%%\n", commas_u64(total_source), commas_u64(total_compact),
+               100.0 * (double)total_compact / (double)total_source);
+    printf("\n");
+    if (done)
+        printf("Each file written was read back in full before it got its name and compared with its\n"
+               "fixed-width file: every string its node count and a REV that emits it, every shorter\n"
+               "string answered by one of its extensions with the fewest nodes, every comparison of two\n"
+               "extensions.  Where the last column is 0 the REVs are those of the source, link for link\n"
+               "and color for color, and `carlobomb bomb expand` gives the source back byte for byte.\n");
+    printf("Nothing in %s was written, renamed or removed.  A ladder builds on the fixed-width\n"
+           "files: keep them for as long as longer Bombs are to be built from them.\n",
+           a->dir);
+    return failed ? X_FAIL : X_OK;
+}
+
 /* ---- verify ------------------------------------------------------------- */
 
 static int cmd_verify(const BombArgs *a) {
@@ -633,6 +1281,8 @@ static int cmd_verify(const BombArgs *a) {
         return X_USAGE;
     }
     fclose(probe);
+
+    if (frb_file_is_compact(a->file) == 1) return verify_compact(a);
 
     printf("File: %s\n", a->file);
     e = frb_file_read(a->file, &t, &info, &bad);
@@ -662,6 +1312,14 @@ static int cmd_verify(const BombArgs *a) {
     }
     printf("Complement symmetry of witnesses and minima .......... PASS\n");
 
+    if (a->against && frb_file_is_compact(a->against) == 1) {
+        fprintf(stderr,
+                "%s is in the compact format.  To compare the two files, verify the compact one\n"
+                "against this one: carlobomb bomb verify --file %s --against %s\n",
+                a->against, a->against, a->file);
+        frb_table_destroy(&t);
+        return X_USAGE;
+    }
     if (a->against) {
         FrbFileInfo short_info;
         FrbTable shorter;
@@ -792,6 +1450,10 @@ int fixed_run_cli(int argc, char **argv) {
     if (!parse_bomb_args(argc, argv, &a)) return usage_error(NULL);
     if (!strcmp(sub, "verify")) return cmd_verify(&a);
     if (!strcmp(sub, "lookup")) return cmd_lookup(&a);
+    if (!strcmp(sub, "compact")) return cmd_compact(&a);
+    if (!strcmp(sub, "expand")) return cmd_expand(&a);
+    if (!strcmp(sub, "compare")) return cmd_compare(&a);
+    if (!strcmp(sub, "migrate")) return cmd_migrate(&a);
 #ifdef CARLOBOMB_HAVE_BOMB_BUILD
     if (!strcmp(sub, "build")) return cmd_build(&a);
     if (!strcmp(sub, "resume")) return cmd_resume(&a);

@@ -180,3 +180,14 @@ this SHA-256:
 
 Largest minimum 9 nodes, needed by 44 strings; 7,720,456,914,039 search
 steps in 3,052,702 searches.
+
+The 24-bit table was finished in the container as well, a day later, in
+eleven sessions of ten minutes on 4 virtual CPUs and two more that a restart
+of the container cut short. `fixed-run-24.frb` must have this SHA-256:
+
+    3f99769699e24d97d7c15a3b305c3d47f1cb0496978ac71ef086c91457ecd0c1
+
+Largest minimum 9 nodes, needed by 1,886 strings; 20,867,501,480,268 search
+steps in 6,273,837 searches; table CRC-32 `dfd98e11`. The same numbers must
+stand in `level-24.txt` of any machine, since the searches and their steps
+do not depend on it.

@@ -116,11 +116,11 @@ selection but no counters.
 
 `compact_bench.c` puts the fixed-width file of a Bomb and its compact file
 (format version 4) side by side through the solver that reads both: sizes,
-opening, lookups, memory, and that every string of every length gets the
-same answer from both.
+opening, lookups, the comparison of two extensions, memory, and that every
+string of every length gets the answer it has to get from both.
 
     ./build/carlobomb bomb compact --file BOMB.frb --output COMPACT.frb
-    ./build/compact_bench --fixed BOMB.frb --compact COMPACT.frb [--wide COMPACT4.frb] [--alternatives]
+    ./build/compact_bench --fixed BOMB.frb --compact COMPACT.frb
 
-The design review and the results on the real Bombs of 16 to 24 bits are in
-`COMPACT_FORMAT.md`.
+How the format was chosen and the results on the real Bombs of 16 to 24 bits
+are in `COMPACT_FORMAT.md`.

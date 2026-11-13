@@ -8,10 +8,12 @@ number of nodes.
 Versions 1, 2 and 3 are the **fixed-width** formats, specified in sections
 1 to 11: every string has an entry of the same size, found by arithmetic.
 They differ in the size of an entry and in nothing else. Version 4 is the
-**compact** format of section 12: the same REVs of a complete table in the
-space each of them needs, with an index that also answers every shorter
-string. A compact file is made from a fixed-width one and gives it back,
-byte for byte; it replaces nothing.
+**compact** format of section 12: a complete table in a fifteenth of the
+space, with the answer for every shorter string as well. It keeps one REV
+for a string and its complement, the graph of a REV as one number, and no
+colors where they can be found again from the string. A compact file is
+made from a fixed-width one and, for the Bombs the construction builds,
+gives it back byte for byte; it replaces nothing.
 
 The fixed-width versions:
 
@@ -611,63 +613,94 @@ calls it "v3"; by the time it was built, tables of 25 bits and more were
 being written as version 3 of the fixed-width format, and those files
 exist. The compact format therefore has the next number, 4, and nothing was
 renumbered: no byte of any file of versions 1 to 3 means anything else than
-it did.
+it did. The one exception to "one number, one layout" was never released:
+the draft of version 4 had another layout, which readers recognize and
+reject (section 12.14).
 
 ## 12. The compact format (version 4)
 
 A complete FixedRunBomb(L) holds 2^L certified minimum-node REVs. In a
 fixed-width file each takes the space of the largest REV the version allows:
 19, 34 or 44 bytes for REVs that, up to 24 bits, nearly all have 8 nodes or
-fewer and fit in 7 bytes. A compact file holds the same REVs in the space they need, and adds
-what a fixed-width file does not have: the answer for every string of fewer
-than L bits.
+fewer. A compact file stores what is essential of the same table and derives
+the rest, and adds what a fixed-width file does not have: the answer for
+every string of fewer than L bits.
 
     fixed-width, 24 bits      570,425,408 bytes
-    compact, 24 bits          217,653,502 bytes     38.2%
+    compact, 24 bits           38,858,512 bytes      6.8%
 
 What it is and is not:
 
-- It is made **from a complete fixed-width file** and holds exactly its
-  REVs, node for node. The fixed-width file can be regenerated from it, byte
-  for byte (section 12.9).
+- It is made **from a complete fixed-width file**, after the construction,
+  and never the other way round. A construction neither reads nor writes it.
+  Journals, base Bombs and the tables a ladder builds on are fixed-width.
 - **Only a complete table can be compact.** There is no status in it: every
-  REV in the file is a certified minimum, and a table with any entry that is
-  not has no compact form.
+  node count in the file is a certified minimum, and a table with any entry
+  that is not has no compact form.
 - It certifies nothing by itself that the fixed-width file did not. That the
   node counts are minima is established by the construction of the
   fixed-width file and recorded in its journal; a compact file names the
   table it was made from by version and checksum.
-- A construction neither reads nor writes it. Journals, base Bombs and the
-  tables a ladder builds on are fixed-width.
+- Its node counts are those of the table, exactly. Its REVs are the REVs of
+  the table **as far as the header says** (section 12.11): for every Bomb the
+  construction of this project builds, all of them, link for link and color
+  for color, and the fixed-width file can then be regenerated from it byte
+  for byte.
 
-### 12.1 Order, classes and ordinals
+### 12.1 What is stored, and what is derived
 
-The 2^L REVs are sorted by **(node count, index of the string)**: all REVs
-of one node first, then all of two, and so on; within one node count in the
-order of their strings. The position of a REV in this order is its
-**ordinal**, 0 .. 2^L − 1.
+A string and its complement need the same number of nodes, and the
+complement of a REV of the one (every color inverted, the two links of every
+node exchanged) is a REV of the other. So of the 2^L strings only the
+2^(L−1) that **start with 0** are stored. A stored string is addressed by its
+index s, 0 .. 2^(L−1) − 1, which is its index of section 2.
 
-The REVs of N nodes are **class N**. With count[N] of them, class N holds
-the ordinals start[N] .. start[N] + count[N] − 1, where start[1] = 0 and
-start[N+1] = start[N] + count[N]. Classes exist for N = 1 .. 31; most are
-empty.
+Stored, for every stored string of L bits:
 
-Because the order is by node count first, **a smaller ordinal never has
-more nodes**, and among REVs of the same node count the smaller ordinal
-belongs to the smaller string. Everything in section 12.5 follows from that.
+- its **node count**, in 4 bits;
+- its **REV**, in the class of its node count. The REVs of N nodes are
+  **class N**, kept in the order of their strings. A REV of 6 or more nodes
+  is one number, the **rank of its graph** (section 12.7); its colors are
+  not stored. A REV of up to 5 nodes is stored with its colors and links.
+
+Stored, for every stored string of 1 to L−1 bits: one **navigation bit**
+(section 12.5).
+
+Stored to find a REV: for every 256th stored string, how many stored strings
+before it have each node count (section 12.6).
+
+Derived, and stored nowhere:
+
+- the **place** of a REV in its class: the number of stored strings before
+  it that have its node count;
+- the **colors** of a REV of 6 or more nodes, and the numbering of its
+  nodes: by running the machine on its graph against its string (section
+  12.8);
+- the **answer for a shorter string**: the navigation bits lead from it to
+  one of its L-bit extensions with the fewest nodes (section 12.9);
+- **everything about a string that starts with 1**: the complement of what
+  the file gives for its complement;
+- **which of the two extensions of a string needs fewer nodes**: the node
+  counts of the two, compared (section 12.9).
 
 ### 12.2 Layout
 
-    offset 0            header, 64 bytes
-    offset 64           class directory: 31 rows of 32 bytes, for N = 1 .. 31
-    offset 1056         prefix index: 2^(L+1) − 2 ordinals of I bytes each
-    ...                 zero bytes up to the next multiple of 8
-    offset P            class 1: count[1] REVs of stride[1] bytes
-    ...                 class 2, class 3, ... class 31, without gaps
-    end                 P + Σ count[N] · stride[N] bytes exactly
+With S = 2^(L−1), M the largest node count of any REV, and a8(x) = x rounded
+up to a multiple of 8:
 
-P = (1056 + I · (2^(L+1) − 2)) rounded up to a multiple of 8. Every offset
-is a 64-bit number.
+    offset 0        header, 64 bytes
+    offset 64       class directory: 12 rows of 32 bytes, for N = 1 .. 12
+    offset 448      navigation bits: a8(⌈S / 8⌉) bytes
+    then            node counts: a8(⌈S / 2⌉) bytes
+    then            counts before: a8(R · M · 4) bytes, R = ⌈S / 256⌉ rows
+    then            class 1, class 2, ... class 12, each a8(⌈count[N] · bits[N] / 8⌉) bytes
+    then            8 bytes of zero
+    end
+
+Every part starts at a multiple of 8, and every offset is a 64-bit number.
+From 7 bits on, the navigation bits are 2^(L−4) bytes and the node counts
+2^(L−2). The last 8 bytes let a reader take any record as 9 bytes from its
+first byte without looking past the end of the file.
 
 ### 12.3 Header
 
@@ -677,34 +710,29 @@ is a 64-bit number.
 | 8 | 2 | Format version: 4 |
 | 10 | 2 | Header size in bytes: 64 |
 | 12 | 1 | L, the target length in bits: 1..31 |
-| 13 | 1 | Largest node count a class can have: 31 |
-| 14 | 1 | I, the bytes of an ordinal in the prefix index: ⌈L/8⌉ .. 4 |
+| 13 | 1 | Largest node count the format holds: 12 |
+| 14 | 1 | 8: the counts before are kept for every 2^8th stored string |
 | 15 | 1 | 0 (the entry size of the fixed-width versions; there are no entries here) |
-| 16 | 4 | Number of REVs: 2^L |
+| 16 | 4 | Number of strings answered: 2^L |
 | 20 | 4 | Flags: 1 (COMPLETE) |
 | 24 | 4 | 2^L (entries that hold a witness) |
 | 28 | 4 | 2^L (entries with status MINIMAL) |
-| 32 | 1 | Largest node count of any REV: the last class that is not empty |
+| 32 | 1 | M, the largest node count of any REV: the last class that is not empty |
 | 33 | 1 | The same |
 | 34 | 2 | Version of the fixed-width file this was made from: 1, 2 or 3, and one that holds L bits; 0 if it was made from a table that never was a file |
-| 36 | 4 | CRC-32 of the class directory: the 992 bytes from offset 64 |
-| 40 | 4 | CRC-32 of the prefix index: I · (2^(L+1) − 2) bytes from offset 1056 |
+| 36 | 4 | CRC-32 of the class directory: the 384 bytes from offset 64 |
+| 40 | 4 | CRC-32 of the index: navigation bits, node counts and counts before, the bytes from offset 448 to the first byte of class 1 |
 | 44 | 4 | Table CRC-32 of the fixed-width file this was made from (its header field at offset 36) |
 | 48 | 8 | Length of this file in bytes |
-| 56 | 4 | Reserved |
+| 56 | 4 | Other REVs: the number of strings of L bits, of all 2^L, whose REV as read from this file is not the REV of the table it was made from (section 12.11) |
 | 60 | 4 | CRC-32 of header bytes 0..59 |
 
 Offsets 0 to 13 and 16 to 33 are the fields of the fixed-width header with
 the values they have for a complete table, so that a tool that prints a
-header prints the truth. Offset 14 holds I where a fixed-width header has
-the bits of a node, offset 15 is 0 where it has the size of an entry, and
-offsets 34 to 59 are used differently: a fixed-width header has one table
-checksum there and reserved bytes.
-
-I is ⌈L/8⌉ in every file this code writes unless asked otherwise
-(`--index-bytes`): 2 bytes up to 16 bits, 3 up to 24, 4 beyond. A wider I
-is valid and is read; it makes the index larger and every entry a 4-byte
-word.
+header prints the truth. Offset 14 holds the spacing of the counts where a
+fixed-width header has the bits of a node, offset 15 is 0 where it has the
+size of an entry, and offsets 34 to 59 are used differently: a fixed-width
+header has one table checksum there and reserved bytes.
 
 ### 12.4 Class directory
 
@@ -712,248 +740,414 @@ Row N − 1, at offset 64 + 32 · (N − 1), describes class N:
 
 | Offset | Size | Field |
 |---:|---:|---|
-| 0 | 4 | count[N]: the number of REVs of N nodes |
-| 4 | 4 | start[N]: the ordinal of the first |
-| 8 | 8 | File offset of the first |
-| 16 | 4 | stride[N]: bytes of a REV of this class (section 12.6) |
-| 20 | 1 | Bits of a link in this class: ⌈log2 N⌉ |
-| 21 | 3 | Reserved |
-| 24 | 4 | CRC-32 of the class: its count[N] · stride[N] bytes; 0 for an empty class |
+| 0 | 4 | count[N]: the number of stored REVs of N nodes |
+| 4 | 1 | bits[N]: bits of one record (section 12.7) |
+| 5 | 1 | Kind of record: 0 colors and links (N up to 5), 1 the rank of the graph (N from 6) |
+| 6 | 2 | Reserved |
+| 8 | 8 | File offset of the class |
+| 16 | 8 | Its length in bytes, a multiple of 8 |
+| 24 | 4 | CRC-32 of those bytes; 0 for an empty class |
 | 28 | 4 | Reserved |
 
-Only the counts and the checksums are information. Start, offset, stride and
-link bits follow from the counts, L and I by the rules of this section, and
-**a reader computes them and rejects a file whose directory says anything
-else**: a directory is never trusted to say where a class is. The counts
-must add up to 2^L.
+The counts add up to 2^(L−1). **Everything else in a row follows from the
+counts and L**, and a reader recomputes it and rejects a file in which a row
+says otherwise. bits[N] is the same in every file:
 
-### 12.5 The prefix index
+| N | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| bits[N] | 1 | 6 | 15 | 20 | 35 | 23 | 28 | 34 | 40 | 46 | 52 | 58 |
 
-The index has one entry for every string of 1 to L bits: 2 + 4 + ... + 2^L
-= 2^(L+1) − 2 entries. The entry of the string of k bits with index v
-(section 2, with k for L) is at **place 2^k − 2 + v**: first the two strings
-of one bit, then the four of two bits, and so on, each length in the order
-of its strings. An entry is an ordinal, I bytes, little-endian.
+A REV of more than 12 nodes has no class, and a table with one has no
+compact form. Up to 24 bits no string needs more than 9 nodes.
 
-- **A string of L bits:** the ordinal of its REV.
-- **A shorter string:** the smaller of the entries of its two extensions by
-  one bit, s0 and s1.
+### 12.5 Navigation bits
 
-By the order of the ordinals, the entry of a shorter string is the ordinal
-of the REV with the **fewest nodes among all its extensions to L bits, and
-among those the one of the smallest string**. That REV emits the shorter
-string as its first bits, and no REV with fewer nodes does: a REV that emits
-the shorter string emits some L-bit extension of it when run on, and none of
-those has a smaller minimum. So the index answers every string of 1 to L
-bits with a certified minimum-node REV, by one entry. The choice among REVs
-of equal size is the one the Bomb-backed FixedSolver makes on a fixed-width
-table: lowest index.
+One bit for every stored string of 1 to L−1 bits: for the string of k bits
+with index v (it starts with 0, so v < 2^(k−1)), the bit at **place
+2^(k−1) + v**. Place 0 belongs to no string and is 0. The places are the
+nodes of a binary tree in level order: the two extensions of the string at
+place p are at places 2p and 2p + 1, and the strings of L bits would be at
+places 2^(L−1) + s.
 
-### 12.6 A REV of a class
+The bit of a string is
 
-A REV of class N is N nodes of **1 + 2·b bits**, b = ⌈log2 N⌉ (0, 1, 2, 2,
-3, 3, 3, 3, 4, ... for N = 1, 2, 3, ...), packed as the nodes of section 5.2
-are: node i occupies the bits from i·(1+2b); its lowest bit is the color,
-the next b bits link 0, the next b bits link 1. The stride of the class is
-⌈N·(1+2b)/8⌉ bytes; the bits after the last node are zero.
+- **0** if an L-bit extension of the string with the fewest nodes lies under
+  its extension by 0: if the fewest nodes under its extension by 0 are at
+  most the fewest under its extension by 1;
+- **1** if the fewest nodes under its extension by 1 are fewer.
 
-| N | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 16 | 17 | 24 | 31 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| Link bits b | 0 | 1 | 2 | 2 | 3 | 3 | 3 | 3 | 4 | 4 | 4 | 4 | 4 | 5 | 5 | 5 |
-| Stride, bytes | 1 | 1 | 2 | 3 | 5 | 6 | 7 | 7 | 11 | 12 | 13 | 14 | 18 | 24 | 33 | 43 |
+Following the bits from a string, 2p + bit at every step, ends at place
+2^(L−1) + s of an L-bit string s. That string is the **lowest of the
+extensions of the string that need the fewest nodes**, and its node count is
+the minimum of the string itself: a REV that emits the string goes on and
+emits one of its L-bit extensions, so the fewest nodes of a string are the
+fewest among those.
 
-Nothing else is stored with a REV, not its node count: that is the class it
-is in. A REV of one node is one byte, 0 or 1, its color; its two links can
-only lead to itself. For N = 16 the bytes are those of a version-1 packed
-graph, and from N = 17 those of the first ⌈11·N/8⌉ bytes of a version-2 or
-version-3 one.
+### 12.6 Node counts, and the counts before
 
-A link must be less than N: a reader rejects a REV with a link to a node
-that does not exist, and one with a nonzero bit after its last node.
+The node count of stored string s is the 4-bit field at bit 4·s of the node
+counts: the low half of byte s div 2 for an even s, the high half for an odd
+one. It is 1 .. M.
 
-### 12.7 Lookup
+The counts before are R rows of M numbers of 4 bytes. Number N − 1 of row r
+is the number of stored strings **before string 256·r** that have N nodes.
+Row 0 is all zero.
 
-For a string of k bits with index v, 1 ≤ k ≤ L:
+The **place of the REV of s** in its class of N nodes is therefore the
+number N − 1 of row s div 256, plus the number of strings t with
+256·(s div 256) ≤ t < s that have N nodes: at most 255 node counts to look
+at, in 128 consecutive bytes.
 
-1. ordinal = the entry at place 2^k − 2 + v of the prefix index;
-2. N = the class with start[N] ≤ ordinal < start[N] + count[N];
-3. the REV is the stride[N] bytes at
-   (file offset of class N) + (ordinal − start[N]) · stride[N].
+### 12.7 The record of a REV
 
-Two reads, of I and of stride[N] bytes, after a header and directory of
-1,056 bytes. The node count of the answer needs the first read only.
-`frb_compact_file_lookup` does exactly this on a file, and then runs the
-REV: it must emit the string.
+The records of class N are bits[N] bits each, one after the other without
+gaps: record j of the class is the bit field at bit j·bits[N] of the bytes
+of the class (section 1, bit order). The bits after the last record of a
+class are zero.
 
-The index gives the REV of a shorter string, not the L-bit string that REV
-stands for. That string is what the REV emits in L steps.
+**Up to 5 nodes: colors and links.** With w = ⌈log2 N⌉ (0, 1, 2, 2, 3 for N
+= 1 .. 5), the record is, from its least significant bit:
 
-### 12.8 Validation
+    N bits      the colors: bit i is the color of node i
+    then, for node 0, node 1, ... node N−1:
+    w bits      its link on color 0
+    w bits      its link on color 1
 
-A reader that opens a compact file checks, and rejects the file on the first
-failure (`frb_compact_open`):
+N + 2·N·w bits. A link is a node number below N; a record with a link that
+is not is rejected. The REV is stored as it is in the table, with the
+numbering it has there.
 
-1. magic, version 4, header size 64, header checksum, directory checksum;
-2. offsets 13 and 15 are 31 and 0; the reserved bytes of header and
-   directory are zero; L is 1..31; I is ⌈L/8⌉..4;
-3. the class counts add up to 2^L, and every start, offset, stride and link
-   width in the directory is what section 12.4 computes from the counts; an
-   empty class has checksum 0;
-4. count, flags and the two totals are 2^L, 1, 2^L and 2^L; the two largest
-   node counts are the last class that is not empty; the source version is
-   0, or a fixed-width version that holds strings of L bits; the length
-   field is the length section 12.2 computes, and the file has that length;
-5. the checksum of the prefix index; the bytes between the index and the
-   first class are zero; the checksum of every class;
-6. **the entries of the L-bit strings, taken in the order of the strings:**
-   each ordinal lies in a class, and is the next ordinal of that class not
-   yet seen, counting from the start of the class. That holds exactly if the
-   ordinals are a permutation of 0 .. 2^L − 1 in the order of section 12.1;
-7. **every REV**, decoded as section 12.6 says and run for L bits, emits the
-   string whose entry points to it;
-8. **every entry of a shorter string** is the smaller of the entries of its
-   two extensions.
+**From 6 nodes: the rank of the graph.** The graph of a REV is its links
+without its colors. Its nodes are first numbered **canonically**: the root is
+0; then the nodes in the order in which a breadth-first search meets them
+that takes the nodes in the order of their new numbers and looks at the link
+on color 0 before the link on color 1. Every node of a minimum-node REV is
+reached, since a node no link leads to could be left out.
 
-After 6 and 7 every string of L bits has a REV that emits it, with the node
-count of its class, and no REV is shared; after 8 the index is the one of
-section 12.5 and nothing else. Checks 1 to 4 need the first 1,056 bytes and
-the length of the file; a lookup in a file that is not opened in full
-(section 12.7) makes those and checks the one REV it returns.
+A canonically numbered graph of n nodes is the list of its 2n links in the
+order node 0 on color 0, node 0 on color 1, node 1 on color 0, ...: link
+number p belongs to node p div 2 and color p mod 2. Reading the list from
+the front, with m the number of nodes that have a number so far (1 before
+the first link: the root), every link leads either to one of those m nodes
+or to the next new node, which is node m and makes m one more. A list is one
+of a canonical graph of n nodes exactly if every link's node has a number by
+the time the list comes to it (p div 2 < m) and m is n at the end.
 
-`frb_compact_check_symmetry` checks in addition what a file cannot say of
-itself: a string and its complement have REVs of the same size, and the
-complement of each REV emits the complement of its string.
+Let ways(p, m) be the number of ways to finish such a list from link p on
+when m nodes have a number:
 
-### 12.9 Conversion, both ways
+    ways(2n, m) = 1 if m = n, else 0
+    ways(p, m)  = 0                                      if m < 1, m > n or p div 2 ≥ m
+    ways(p, m)  = m · ways(p+1, m) + ways(p+1, m+1)      if m < n
+    ways(p, m)  = m · ways(p+1, m)                       if m = n
 
-`carlobomb bomb compact --file FIXED --output COMPACT` and
-`frb_compact_write`:
+The number of canonical graphs of n nodes is ways(0, 1):
 
-1. The fixed-width file is read and validated in full (section 6). If it is
-   not complete, nothing is written.
-2. The compact file is built under a temporary name.
-3. The temporary file is opened as section 12.8 says, by the code any reader
-   uses, and compared with the fixed-width table: every string of L bits
-   must have the REV the table has for it, node for node, and every shorter
-   string must be answered by its extension with the fewest nodes and the
-   lowest index, **worked out again from the table alone**.
-4. Only then is it renamed. A failure at any step leaves no file under the
-   name asked for.
+| n | Graphs | Bits of a rank |
+|---:|---:|---:|
+| 6 | 5,931,540 | 23 |
+| 7 | 256,182,290 | 28 |
+| 8 | 12,665,445,248 | 34 |
+| 9 | 705,068,085,303 | 40 |
+| 10 | 43,631,250,229,700 | 46 |
+| 11 | 2,970,581,345,516,818 | 52 |
+| 12 | 220,642,839,342,906,336 | 58 |
 
-The source file is opened for reading only and is never written to. The
-command refuses an output name that exists: a conversion replaces nothing.
-The header of the compact file records the version of the source file and
-its table checksum.
+(1, 12, 216, 5,248 and 160,675 for 1 to 5 nodes.) The **rank** of a graph is
+its number when all the lists are put in order, a link to a lower node
+first: starting from rank = 0 and m = 1, for p = 0, 1, ... 2n − 1 and the
+link `to` at that place,
 
-A compact file for a given table and I is the same bytes wherever it is
-made.
+    if to < m:   rank = rank + to · ways(p+1, m)
+    else:        rank = rank + m · ways(p+1, m),  and m = m + 1
 
-`carlobomb bomb expand --file COMPACT --output FIXED` and
-`frb_compact_expand` write the fixed-width file again, in the version
-recorded: entry i is the REV of string i with status MINIMAL. It is the file
-the compact one was made from, byte for byte, and it is read back as any
-reader would read it and compared with the compact file before the command
-reports success.
+The graph of a rank is found the other way round: at each p, with w =
+ways(p+1, m), if rank < m·w the link is rank div w and rank becomes rank mod
+w; else the link is the new node m, rank becomes rank − m·w, and m one more.
+A record that is not below the number of graphs is rejected.
 
-The table checksum of that file can be computed from the compact one
-without writing anything (`frb_compact_table_crc`), and must be the one
-recorded in the header. `carlobomb bomb expand` checks that before it
-writes, and `carlobomb bomb verify` on a compact file checks it too. A
-compact file therefore cannot name a table as its source that it does not
-hold, short of a collision of CRC-32, which protects against accident and
-not against intent: the SHA-256 of the files is what to publish and
-compare.
+### 12.8 The colors, and the numbering of the nodes
 
-### 12.10 Worked example
+The colors of a REV of 6 or more nodes are found from its graph, as the rank
+gives it, and its string, by running the machine of `core/rev/SPEC.md`
+against the string. fp and cp start at the root. For each bit of the string
+in turn, the first bit first:
 
-FixedRunBomb(3) as built by `carlobomb bomb build --bits 3`: 8 strings, of
-which `000` and `111` need 1 node, `010`, `011`, `100` and `101` need 2, and
-`001` and `110` need 3. Its fixed-width file is 216 bytes; its compact file
-is 1,082, most of them directory. (The compact file is the smaller one
-from 7 bits.)
+1. For every bit but the first, fp moves along its link on the color of cp.
+2. If the node under fp has no color yet, it gets color 0. This is a
+   **choice**: the state of the search is remembered with color 1 for that
+   node instead.
+3. cp moves along its link on the color of fp.
+4. If the node cp is on now has no color yet, it gets the color the string
+   has at this bit. If it has that color, the search goes on. If it has the
+   other color, the search goes back to the choice made last, takes color 1
+   there, and goes on from step 3 of that bit. With no choice left there are
+   no colors: the record is rejected.
 
-The ordinals: `000` 0, `111` 1 (class 1); `010` 2, `011` 3, `100` 4, `101` 5
-(class 2); `001` 6, `110` 7 (class 3).
+When the last bit has been emitted the nodes have their colors. Every node
+must have been reached, or the record is rejected: a node the string does
+not need means that the REV is not one of the fewest nodes.
 
-Header:
+The nodes are then **renumbered in the order in which the machine reached
+them**: the root is 0, and after it each node gets the next number when fp
+or cp first comes to it, fp's move of a bit before cp's. The REV with those
+numbers and colors is the REV the file gives for the string.
 
-    43 42 46 52 42 0d 0a 1a   magic
-    04 00                     version 4
-    40 00                     header size 64
-    03                        L = 3
-    1f                        31
-    01                        I = 1
-    00
-    08 00 00 00               8 REVs
-    01 00 00 00               COMPLETE
-    08 00 00 00  08 00 00 00
-    03 03                     largest node count 3
-    01 00                     made from a version-1 file
-    61 98 cd aa               CRC-32 of the directory
-    b6 b0 86 92               CRC-32 of the index
-    ae ba 02 98               table CRC-32 of the source, 0x9802baae
-    3a 04 00 00 00 00 00 00   1,082 bytes
-    00 00 00 00
-    8a cc b8 01               CRC-32 of the 60 bytes before
+Why this order: it is the order in which the search of the solvers tries
+colors (white first) and numbers the nodes of the REV it finds, and the
+construction searches for the string of a pair that starts with 0 and gives
+the other its complement. A REV that came from that search therefore comes
+back as it was: any other coloring of its graph that emitted the string and
+came earlier in this order would have been found by the search first. Where
+several colorings of a graph emit the string, the one found first is the
+answer; the others are REVs of as many nodes for the same string, which may
+go on differently after bit L.
 
-The first three rows of the directory; the other 28 are zero except for
-start (8), offset (1,082), stride and link bits:
+### 12.9 Lookup
 
-    02 00 00 00  00 00 00 00  30 04 00 00 00 00 00 00  01 00 00 00  00 00 00 00  69 22 de 36  00 00 00 00
-    04 00 00 00  02 00 00 00  32 04 00 00 00 00 00 00  01 00 00 00  01 00 00 00  c3 e0 0f a7  00 00 00 00
-    02 00 00 00  06 00 00 00  36 04 00 00 00 00 00 00  02 00 00 00  02 00 00 00  8a 5e 94 c4  00 00 00 00
+**A string of L bits that starts with 0**, index s: its node count N from
+the node counts; the place j of its REV from the counts before (section
+12.6); record j of class N; for N up to 5 the record is the REV, from 6 on
+its graph is that of the rank, colored and numbered against the string
+(section 12.8).
 
-Class 1: 2 REVs from ordinal 0 at offset 1,072, 1 byte each. Class 2: 4
-from ordinal 2 at 1,074, 1 byte each, links of 1 bit. Class 3: 2 from
-ordinal 6 at 1,078, 2 bytes each, links of 2 bits.
+**A string of fewer than L bits that starts with 0**: from its place
+(section 12.5), 2p + bit until the place is 2^(L−1) + s. The node count of s
+is the node count of the string, and the REV of s is its REV.
 
-The prefix index at offset 1,056, 14 entries of 1 byte, and 2 bytes of
-padding:
+**A string that starts with 1**, of any length: the same for its complement,
+and the complement of the result. Its node count is the same. The L-bit
+string that answers it is the complement of the one that answers its
+complement: it is one of its extensions with the fewest nodes, and the
+**highest** of them, where a string that starts with 0 gets the lowest. Its
+REV is the REV of its complement with every color inverted and the two links
+of every node exchanged.
 
-    00 01                     0 → 0 (the REV of 000), 1 → 1 (of 111)
-    00 02 04 01               00 → 0, 01 → 2 (of 010), 10 → 4 (of 100), 11 → 1
-    00 06 02 03 04 05 07 01   000, 001, 010, 011, 100, 101, 110, 111
-    00 00
+**The comparison.** Which of the two extensions by one bit of a string of 0
+to L−1 bits needs fewer nodes: the node counts of the two extensions, each
+looked up as above. No REV is read for it. For a string of L bits the
+question belongs to the Bomb of L+1.
 
-`01` has the extensions `010` and `011`, both of 2 nodes; its entry is the
-smaller ordinal, that of `010`. `1` has `10` → 4 and `11` → 1; its entry is
-1, the one-node REV of `111`.
+A reader that answers one question from a file checks the header and
+directory and then trusts no number it meets: a node count outside 1 .. M, a
+place outside its class, a record that is no REV, and a REV that does not
+emit the string are all refused, and nothing outside the file is read.
 
-The REVs at offset 1,072:
+### 12.10 Validation
 
-    00 01                     class 1: white (000), black (111)
-    07 05 0a 0e               class 2: 010, 011, 100, 101
-    09 02  a2 04              class 3: 001, 110
+A reader that validates a file in full checks, in this order:
 
-`07` is the REV of `010`, two nodes of 3 bits: node 0 = `111` (black, link 0
-to node 1, link 1 to node 1), node 1 = `000` (white, both links to node 0).
-`09 02` is the REV of `001`, three nodes of 5 bits read from the 16-bit
-number 0x0209: node 0 = `01001` (black, link 0 to node 0, link 1 to node 1),
-node 1 = `10000` (white, link 0 to node 0, link 1 to node 2), node 2 =
-`00000` (white, both links to node 0).
+1. Magic, version, header size, the header CRC; offsets 13, 14 and 15; the
+   CRC of the directory.
+2. The class counts add up to 2^(L−1); every other number of the directory
+   and the length of the file are what section 12.2 gives; the counts and
+   flags at offsets 16 to 33; a source version that could hold L bits.
+3. The CRC of the index and of every class.
+4. Everything no string stands on is zero: place 0 of the navigation bits
+   and the places from 2^(L−1) on, the node counts after the last, the bytes
+   after the last row, the bits after the last record of every class, the
+   last 8 bytes.
+5. For every stored string in order: its node count is 1 .. M; if it is the
+   first of a block of 256, the row of the block is the number of strings
+   of each node count so far; its record decodes, its colors are found
+   where they are not stored, and the REV emits the string.
+6. Every navigation bit is what the node counts under it call for, checked
+   as the strings under it go by.
+7. Each class has as many strings as its count.
 
-### 12.11 Sizes
+A file that passes is consistent in itself. It is the file of a given table
+only if, besides, its node counts are the table's and its REVs are the
+table's but for as many as the header says: that is section 12.11.
 
-For the tables of the ladder, built as OVERNIGHT.md describes (I = 2 at 16
-bits, 3 from 17):
+### 12.11 Conversion, both ways
 
-| L | Fixed-width, bytes | Compact, bytes | | REVs | Prefix index |
-|---:|---:|---:|---:|---:|---:|
-| 16 | 1,245,248 | 640,084 | 51.4% | 376,884 | 262,140 |
-| 17 | 4,456,512 | 1,566,366 | 35.1% | 778,878 | 786,426 |
-| 18 | 8,912,960 | 3,194,136 | 35.8% | 1,620,216 | 1,572,858 |
-| 19 | 17,825,856 | 6,524,810 | 36.6% | 3,378,026 | 3,145,722 |
-| 20 | 35,651,648 | 13,278,592 | 37.2% | 6,986,080 | 6,291,450 |
-| 21 | 71,303,232 | 26,865,794 | 37.7% | 14,281,826 | 12,582,906 |
-| 22 | 142,606,400 | 54,099,256 | 37.9% | 28,932,376 | 25,165,818 |
-| 23 | 285,212,736 | 108,606,260 | 38.1% | 58,273,556 | 50,331,642 |
-| 24 | 570,425,408 | 217,653,502 | 38.2% | 116,989,150 | 100,663,290 |
+**To the compact format.** The table is validated as section 6 describes and
+must be complete. It is refused if a REV has more than 12 nodes, if a string
+and its complement have different node counts, or if a REV of 6 or more
+nodes has a node its string does not need (section 12.8): the last two mean
+that the table is no table of minima.
 
-The REVs themselves take a fifth of what they take in a fixed-width file;
-the prefix index, which the fixed-width file does not have at all, is nearly
-half of the compact one. From 25 bits an ordinal needs 4 bytes, and the
-index is 2^(L+3) bytes: 268 MB at 25 bits, 17 GB at 31.
+The file is written under a temporary name, opened and validated as any
+reader would, and compared with the table before it gets its name:
 
-No REV is larger in a compact file than in the fixed-width one it came
-from, so a compact file is at most the fixed-width file plus the directory
-and the index, whatever the table.
+- every string of L bits has the node count of the table and a REV of that
+  many nodes that emits it;
+- every string of 1 to L−1 bits is answered by the extension section 12.9
+  names, worked out from the node counts of the table alone;
+- every comparison of the two extensions of a string of 0 to L−1 bits is
+  what the node counts of the table say;
+- the number of strings of L bits whose REV is not the REV of the table is
+  the number at offset 56 of the header.
+
+**Other REVs.** The REV a file returns for a string can differ from the REV
+of the table in three ways, and in no other: a REV of 6 or more nodes that
+has, in the table, another numbering of its nodes than the search gives, or
+another of the colorings that emit the string than the one found first; and
+a string that starts with 1 whose REV in the table is not the complement of
+its complement's. In each case the file returns a REV of the same number of
+nodes that emits the string. The header counts the strings. For a table
+built by `carlobomb bomb build` or `bomb ladder` with their defaults the
+count is 0: REVs of up to 5 nodes are stored as they are, those of 6 or more
+come from the search, and the second string of every pair has the complement
+of the first's.
+
+**Back.** The REVs a compact file returns for the 2^L strings, written as a
+fixed-width table of the version named at offset 34 (or the one L calls for
+if that is 0), with every entry MINIMAL. With 0 other REVs **that is the
+file the compact one was made from, byte for byte**, and its table CRC is
+the one at offset 44. With other REVs it is a complete Bomb with the same
+node counts and not that file.
+
+### 12.12 Worked example
+
+The Bomb of the 32 strings of 5 bits, as the construction builds it. The
+REVs of the 16 strings that start with 0 (color, link on 0, link on 1):
+
+| String | Nodes | Node 0 | Node 1 | Node 2 | Node 3 |
+|---|---:|---|---|---|---|
+| 00000 | 1 | W 0 0 | | | |
+| 00001 | 4 | B 2 1 | W 1 3 | W 0 0 | W 2 0 |
+| 00010 | 3 | B 2 1 | W 1 2 | W 0 0 | |
+| 00011 | 4 | B 0 1 | W 0 2 | W 0 3 | W 0 0 |
+| 00100 | 3 | B 1 1 | W 2 0 | W 0 0 | |
+| 00101 | 3 | B 1 1 | W 2 0 | W 0 2 | |
+| 00110 | 3 | B 2 1 | W 0 1 | B 1 0 | |
+| 00111 | 3 | B 0 1 | W 0 2 | W 0 0 | |
+| 01000 | 3 | W 1 0 | W 2 0 | B 0 0 | |
+| 01001 | 2 | B 1 1 | W 0 1 | | |
+| 01010 | 2 | B 1 1 | W 0 0 | | |
+| 01011 | 3 | W 1 2 | W 2 1 | B 0 2 | |
+| 01100 | 3 | W 1 2 | W 2 0 | B 2 1 | |
+| 01101 | 2 | B 0 1 | W 0 0 | | |
+| 01110 | 3 | B 0 1 | W 0 2 | B 2 0 | |
+| 01111 | 3 | W 1 0 | W 2 0 | B 2 0 | |
+
+S = 16, M = 4. The file is 536 bytes: header and directory to 448; 8 bytes
+of navigation bits; 8 of node counts; one row of 4 counts, 16 bytes; class
+1, 8 bytes at 480; class 2, 8 bytes at 488; class 3, 24 bytes at 496; class
+4, 8 bytes at 520; and 8 bytes of zero.
+
+The header:
+
+    43 42 46 52 42 0D 0A 1A  04 00 40 00 05 0C 08 00
+    20 00 00 00 01 00 00 00  20 00 00 00 20 00 00 00
+    04 04 01 00 49 86 8D 17  8A 5C 17 BA A9 6D 37 C9
+    18 02 00 00 00 00 00 00  00 00 00 00 C9 93 07 1A
+
+Version 4, header 64, L = 5, capacity 12, spacing 2^8, 32 strings, COMPLETE,
+32 witnesses, 32 minima, largest 4 nodes, made from a version-1 file with
+table CRC `C9376DA9`, 536 (`0x218`) bytes, 0 other REVs.
+
+The rows of the directory for N = 1 to 4, and the row for 5 as the first of
+the empty ones:
+
+    01 00 00 00 01 00 00 00  E0 01 00 00 00 00 00 00  08 00 00 00 00 00 00 00  69 DF 22 65 00 00 00 00
+    03 00 00 00 06 00 00 00  E8 01 00 00 00 00 00 00  08 00 00 00 00 00 00 00  A2 06 EC F0 00 00 00 00
+    0A 00 00 00 0F 00 00 00  F0 01 00 00 00 00 00 00  18 00 00 00 00 00 00 00  92 4C 6B 43 00 00 00 00
+    02 00 00 00 14 00 00 00  08 02 00 00 00 00 00 00  08 00 00 00 00 00 00 00  F6 14 1A 58 00 00 00 00
+    00 00 00 00 23 00 00 00  10 02 00 00 00 00 00 00  00 00 00 00 00 00 00 00  00 00 00 00 00 00 00 00
+
+The rest of the file, from offset 448:
+
+    448   00 50 00 00 00 00 00 00      navigation bits
+    456   41 43 33 33 23 32 23 33      node counts
+    464   00 00 00 00 00 00 00 00      counts before: row 0
+    472   00 00 00 00 00 00 00 00
+    480   00 00 00 00 00 00 00 00      class 1
+    488   6D 93 00 00 00 00 00 00      class 2
+    496   B1 84 94 40 4A B0 46 11      class 3
+    504   42 60 08 30 0D 99 62 25
+    512   14 86 08 00 00 00 00 00
+    520   61 0D 12 84 0C 00 00 00      class 4
+    528   00 00 00 00 00 00 00 00
+
+**Navigation bits.** Byte 1 is `50`: the bits at places 12 and 14. Place 12
+= 2^3 + 4 is the string 0100: 01000 needs 3 nodes and 01001 needs 2. Place
+14 is 0110: 01100 needs 3 and 01101 needs 2. Every other stored string has
+0: for 010, at place 6, the fewest nodes under 0100 and under 0101 are both
+2.
+
+**Node counts.** `41`: string 00000 has 1 node (the low half), 00001 has 4.
+`43`: 00010 has 3, 00011 has 4. And so on to `33`: 01110 and 01111 have 3.
+
+**A lookup: 01101.** s = 13. Its node count is the high half of byte 6,
+`23`: 2. Row 0 has 0 for 2 nodes, and of the strings 0 to 12 two have 2
+nodes (01001 and 01010): its REV is record 2 of class 2. The records of
+class 2 are 6 bits: `6D 93` is the number `0x936D`, and its bits 12 to 17
+are 001001. The low 2 bits, 01, are the colors: node 0 black, node 1 white.
+Then one bit a link: node 0 leads to 0 on color 0 and to 1 on color 1; node
+1 to 0 and 0. That is the REV of the table.
+
+**A shorter string: 011.** It starts with 0; its place is 2^2 + 3 = 7. The
+bit at place 7 is 0: place 14. The bit at place 14 is 1: place 29 = 2^4 +
+13. The answer is string 13, 01101, with 2 nodes: 011 needs 2 nodes, and
+01101 is the lowest of its extensions that need no more.
+
+**A string that starts with 1: 10.** Its complement is 01, at place 2^1 +
+1 = 3. Bit 0: place 6. Bit 0: place 12. Bit 1: place 25 = 2^4 + 9, string
+01001, the lowest of the three extensions of 01 that need 2 nodes (01001,
+01010 and 01101). So 10 is answered by 10110, the highest of the three
+extensions of 10 that need 2 (10010, 10101 and 10110), with the complement
+of the REV of 01001: node 0 white with links 1 and 1, node 1 black with
+links 1 and 0.
+
+**The comparison for 01.** Its extensions are 010 and 011. From 010, place
+6: bit 0, place 12; bit 1, place 25 = 2^4 + 9: string 01001, 2 nodes. From
+011: string 01101, 2 nodes. Neither needs fewer.
+
+**A record of class 3.** The first, of 00010: `B1 84` is `0x84B1`, of which
+15 bits: `0x04B1`. Colors 001: node 0 black. Then 2 bits a link: node 0
+leads to 2 and 1, node 1 to 1 and 2, node 2 to 0 and 0.
+
+**A rank.** No string of 5 bits needs 6 nodes; the first that does at 11
+bits is 00000000001. Its REV in the table, and the same nodes numbered
+canonically (old 1 becomes 2, old 2 becomes 1):
+
+    table:      0: B 2 1    1: W 1 4    2: W 3 3    3: W 0 5    4: W 2 0    5: W 4 0
+    canonical:  0:   1 2    1:   3 3    2:   2 4    3:   0 5    4:   1 0    5:   4 0
+
+The list of links is 1 2 3 3 2 4 0 5 1 0 4 0, and its rank among the
+5,931,540 graphs of 6 nodes is **4,581,456**: the 23 bits of its record. A
+reader gets the canonical graph from the rank, runs it against 00000000001,
+and finds the colors black for node 0 and white for the others, the nodes
+reached in the order 0, 2, 1, 3, 4, 5: renumbered in that order, the REV of
+the table.
+
+**The search, on a small graph.** The graph of 01001 above (node 0 leads to
+1 and 1, node 1 to 0 and 1), against 01001. Bit 1: the root has no color and
+gets 0, a choice; cp moves to node 1, which gets the bit, 0. Bit 2: fp moves
+to node 1; cp moves from node 1 on color 0 to node 0, which has color 0
+where the bit is 1. Back to the choice: the root is 1. Bit 1 again: cp moves
+to node 1, which gets 0. Bit 2: fp to node 1; cp to node 0, color 1, as the
+bit. Bits 3, 4 and 5 find the colors they need: 0 at node 1, 0 at node 1, 1
+at node 0. Colors: black, white; the nodes were reached in the order 0, 1.
+
+### 12.13 Sizes
+
+For the tables of the ladder, built as OVERNIGHT.md describes:
+
+| L | Fixed-width, bytes | Compact, bytes | | REVs | Node counts | Counts before | Navigation bits | Bits a string |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 1,245,248 | 129,680 | 10.4% | 105,160 | 16,384 | 3,584 | 4,096 | 15.8 |
+| 17 | 4,456,512 | 253,192 | 5.7% | 203,584 | 32,768 | 8,192 | 8,192 | 15.5 |
+| 18 | 8,912,960 | 508,872 | 5.7% | 410,112 | 65,536 | 16,384 | 16,384 | 15.5 |
+| 19 | 17,825,856 | 1,042,448 | 5.8% | 845,384 | 131,072 | 32,768 | 32,768 | 15.9 |
+| 20 | 35,651,648 | 2,138,680 | 6.0% | 1,745,008 | 262,144 | 65,536 | 65,536 | 16.3 |
+| 21 | 71,303,232 | 4,386,800 | 6.2% | 3,583,528 | 524,288 | 147,456 | 131,072 | 16.7 |
+| 22 | 142,606,400 | 9,000,848 | 6.3% | 7,394,760 | 1,048,576 | 294,912 | 262,144 | 17.2 |
+| 23 | 285,212,736 | 18,673,000 | 6.5% | 15,461,280 | 2,097,152 | 589,824 | 524,288 | 17.8 |
+| 24 | 570,425,408 | 38,858,512 | 6.8% | 32,435,528 | 4,194,304 | 1,179,648 | 1,048,576 | 18.5 |
+
+The share is of the fixed-width file, whose entries are 19 bytes at 16 bits
+and 34 from 17. A string costs 16 to 19 bits, growing with the node counts:
+most strings of 16 bits need 6 nodes (23 bits a REV, for two strings), most
+of 24 bits need 7 or 8 (28 and 34).
+
+### 12.14 The layout of the draft
+
+While this format was a draft (pull request 8, before 13 November 2026) the
+number 4 was used for another layout: a prefix index of ordinals and REVs as
+bit fields, with 31 at offset 13 and the bytes of an ordinal, 1 to 4, at
+offset 14. No file of it was ever released. A reader of version 4 rejects
+such a file at offset 13; the tool says what it is. It has to be made again
+from its fixed-width file.

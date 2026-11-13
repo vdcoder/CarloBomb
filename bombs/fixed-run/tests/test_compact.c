@@ -194,6 +194,116 @@ static void test_layout(void) {
     printf("layout: every offset and length from the class counts; 38,858,512 bytes for the 24-bit Bomb\n");
 }
 
+/* ---- the worked example of FORMAT.md, section 12.12 ------------------------ */
+
+static void test_worked_example(void) {
+    static const uint8_t header[64] = {
+        0x43, 0x42, 0x46, 0x52, 0x42, 0x0D, 0x0A, 0x1A, 0x04, 0x00, 0x40, 0x00, 0x05, 0x0C, 0x08, 0x00,
+        0x20, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+        0x04, 0x04, 0x01, 0x00, 0x49, 0x86, 0x8D, 0x17, 0x8A, 0x5C, 0x17, 0xBA, 0xA9, 0x6D, 0x37, 0xC9,
+        0x18, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC9, 0x93, 0x07, 0x1A};
+    static const uint8_t rows[5][32] = {
+        {0x01, 0, 0, 0, 0x01, 0, 0, 0, 0xE0, 0x01, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0x69, 0xDF, 0x22, 0x65, 0, 0, 0, 0},
+        {0x03, 0, 0, 0, 0x06, 0, 0, 0, 0xE8, 0x01, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0xA2, 0x06, 0xEC, 0xF0, 0, 0, 0, 0},
+        {0x0A, 0, 0, 0, 0x0F, 0, 0, 0, 0xF0, 0x01, 0, 0, 0, 0, 0, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 0x92, 0x4C, 0x6B, 0x43, 0, 0, 0, 0},
+        {0x02, 0, 0, 0, 0x14, 0, 0, 0, 0x08, 0x02, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0, 0, 0, 0, 0, 0xF6, 0x14, 0x1A, 0x58, 0, 0, 0, 0},
+        {0x00, 0, 0, 0, 0x23, 0, 0, 0, 0x10, 0x02, 0, 0, 0, 0, 0, 0, 0x00, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, 0x00, 0x00, 0, 0, 0, 0}};
+    static const uint8_t rest[88] = {
+        0x00, 0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x43, 0x33, 0x33, 0x23, 0x32, 0x23, 0x33,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x6D, 0x93, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xB1, 0x84, 0x94, 0x40, 0x4A, 0xB0, 0x46, 0x11, 0x42, 0x60, 0x08, 0x30, 0x0D, 0x99, 0x62, 0x25,
+        0x14, 0x86, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x61, 0x0D, 0x12, 0x84, 0x0C, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    /* the 16 REVs of the table in the specification: nodes, then color, link on 0, link on 1 of each */
+    static const int8_t revs[16][13] = {
+        {1, 0, 0, 0},                         {4, 1, 2, 1, 0, 1, 3, 0, 0, 0, 0, 2, 0}, {3, 1, 2, 1, 0, 1, 2, 0, 0, 0},
+        {4, 1, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0, 0}, {3, 1, 1, 1, 0, 2, 0, 0, 0, 0},       {3, 1, 1, 1, 0, 2, 0, 0, 0, 2},
+        {3, 1, 2, 1, 0, 0, 1, 1, 1, 0},       {3, 1, 0, 1, 0, 0, 2, 0, 0, 0},          {3, 0, 1, 0, 0, 2, 0, 1, 0, 0},
+        {2, 1, 1, 1, 0, 0, 1},                {2, 1, 1, 1, 0, 0, 0},                   {3, 0, 1, 2, 0, 2, 1, 1, 0, 2},
+        {3, 0, 1, 2, 0, 2, 0, 1, 2, 1},       {2, 1, 0, 1, 0, 0, 0},                   {3, 1, 0, 1, 0, 0, 2, 1, 2, 0},
+        {3, 0, 1, 0, 0, 2, 0, 1, 2, 0}};
+    const char *path = file("e.frb");
+    FrbTable t;
+    FrbFileInfo finfo;
+    FrbCompact *c = NULL;
+    RevGraph g;
+    uint8_t *image;
+    size_t size;
+    int nodes[2];
+
+    /* the table as the construction builds it is the table printed there */
+    solved_table(&t, 5, frb_format(1));
+    for (uint32_t i = 0; i < 16; i++) {
+        FrbStatus status;
+        CHECK(frb_table_get(&t, i, &status, &g) == FRB_OK && g.node_count == revs[i][0]);
+        for (int k = 0; k < g.node_count; k++)
+            CHECK(g.nodes[k].color == revs[i][1 + 3 * k] && g.nodes[k].links[0] == revs[i][2 + 3 * k] &&
+                  g.nodes[k].links[1] == revs[i][3 + 3 * k]);
+    }
+    CHECK(frb_file_write(file("f.frb"), &t) == FRB_OK && frb_file_info(file("f.frb"), &finfo) == FRB_OK);
+    CHECK(finfo.table_crc == 0xC9376DA9u && finfo.version == 1);
+    remove(path);
+    CHECK(frb_compact_write(path, &t, finfo.version, finfo.table_crc) == FRB_OK);
+    image = slurp(path, &size);
+    CHECK(image && size == 536);
+    if (image && size == 536) {
+        CHECK(memcmp(image, header, 64) == 0);
+        for (int r = 0; r < 5; r++) CHECK(memcmp(image + 64 + 32 * r, rows[r], 32) == 0);
+        CHECK(memcmp(image + 448, rest, 88) == 0);
+    }
+    free(image);
+    /* and the lookups it walks through */
+    CHECK(frb_compact_open(path, &c, NULL) == FRB_OK);
+    if (c) {
+        CHECK(frb_compact_nodes(c, 5, 13) == 2 && frb_compact_graph(c, 5, 13, &g) == FRB_OK);
+        CHECK(g.node_count == 2 && g.nodes[0].color == 1 && g.nodes[0].links[0] == 0 && g.nodes[0].links[1] == 1 &&
+              g.nodes[1].color == 0 && g.nodes[1].links[0] == 0 && g.nodes[1].links[1] == 0);
+        CHECK(frb_compact_extension(c, 3, 3) == 13 && frb_compact_nodes(c, 3, 3) == 2);     /* 011 -> 01101 */
+        CHECK(frb_compact_extension(c, 2, 1) == 9 && frb_compact_extension(c, 2, 2) == 22); /* 01 -> 01001, 10 -> 10110 */
+        CHECK(frb_compact_graph(c, 2, 2, &g) == FRB_OK && g.node_count == 2 && g.nodes[0].color == 0 &&
+              g.nodes[0].links[0] == 1 && g.nodes[0].links[1] == 1 && g.nodes[1].color == 1 &&
+              g.nodes[1].links[0] == 1 && g.nodes[1].links[1] == 0);
+        CHECK(frb_compact_compare(c, 2, 1, nodes) == FRB_COMPACT_TIE && nodes[0] == 2 && nodes[1] == 2); /* 010 and 011 */
+        CHECK(frb_compact_compare(c, 4, 4, nodes) == 1 && nodes[0] == 3 && nodes[1] == 2);               /* 01000 and 01001 */
+        frb_compact_close(c);
+    }
+    remove(path);
+    remove(file("f.frb"));
+    frb_table_destroy(&t);
+
+    /* the rank: the REV of 00000000001, its canonical numbering, and what the search makes of it */
+    {
+        static const uint8_t list[12] = {1, 2, 3, 3, 2, 4, 0, 5, 1, 0, 4, 0};
+        static const int8_t table[6][3] = {{1, 2, 1}, {0, 1, 4}, {0, 3, 3}, {0, 0, 5}, {0, 2, 0}, {0, 4, 0}};
+        static const uint8_t reached[6] = {0, 2, 1, 3, 4, 5};
+        FrbTopology graph, canonical, back, again;
+        uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+        uint32_t colors = 0, found = 0, back_colors = 0;
+        solve(1, 11, &g);
+        CHECK(g.node_count == 6);
+        for (int k = 0; k < 6; k++)
+            CHECK(g.nodes[k].color == table[k][0] && g.nodes[k].links[0] == table[k][1] && g.nodes[k].links[1] == table[k][2]);
+        CHECK(frb_topology_from_graph(&g, &graph, &colors) && frb_topology_canonical(&graph, &canonical, NULL) == 6);
+        for (int p = 0; p < 12; p++) CHECK(canonical.link[p & 1][p >> 1] == list[p]);
+        CHECK(frb_topology_rank(&canonical) == 4581456u && frb_topology_count(6) == 5931540u);
+        CHECK(frb_topology_unrank(6, 4581456u, &again) && frb_topology_find_colors(&again, 1, 11, &found, order) == 6);
+        CHECK(found == 1u);
+        for (int k = 0; k < 6; k++) CHECK(order[k] == reached[k]);
+        frb_topology_renumber(&again, found, order, &back, &back_colors);
+        CHECK(back_colors == colors && memcmp(&back, &graph, sizeof back) == 0);
+    }
+    /* the search on the graph of 01001, which has to take back its first color */
+    {
+        FrbTopology small = {2, {{1, 0}, {1, 1}}};
+        uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+        uint32_t found = 0;
+        CHECK(frb_topology_find_colors(&small, 9, 5, &found, order) == 2 && found == 1u && order[0] == 0 && order[1] == 1);
+    }
+    printf("example: the 536 bytes of the worked example in the specification, byte for byte, its lookups,\n"
+           "         the rank 4,581,456 and the search\n");
+}
+
 /* ---- conversion ---------------------------------------------------------- */
 
 /*
@@ -880,6 +990,7 @@ int main(int argc, char **argv) {
     frb_topology_init();
     test_records();
     test_layout();
+    test_worked_example();
     test_conversion();
     test_rings();
     test_mixed();

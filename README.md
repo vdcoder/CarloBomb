@@ -23,8 +23,8 @@ version 2 (`bombs/fixed-run/OVERNIGHT.md`,
 version 3 (`bombs/fixed-run/BEYOND_24.md`,
 `benchmarks/FIXED_RUN_31_FEASIBILITY.md`). The format reaches 31 bits; what
 one machine can compute is 26 in a day and 28 in a week. A complete Bomb can
-also be written in a compact format, version 4: the same REVs in 38% of the
-space, with the answer for every shorter string in the file
+also be written in the compact format, version 4: a fifteenth of the size,
+with the answer for every shorter string in the file as well
 (`benchmarks/COMPACT_FORMAT.md`). No neural guidance and no LevelSearchBomb
 yet.
 
@@ -125,15 +125,17 @@ night and a day (`bombs/fixed-run/BEYOND_24.md`).
 A complete table in the compact format, and back:
 
 ```bash
-./build/carlobomb bomb compact --file ladder/fixed-run-20.frb --output fixed-run-20.compact.frb   # 35.7 MB -> 13.3 MB
-./build/carlobomb bomb verify  --file fixed-run-20.compact.frb --against ladder/fixed-run-20.frb
-./build/carlobomb bomb lookup  --file fixed-run-20.compact.frb --target 01001000        # any length up to 20 bits
-./build/carlobomb bomb expand  --file fixed-run-20.compact.frb --output again.frb       # the same bytes as the source
+./build/carlobomb bomb compact --file ladder/fixed-run-20.frb --output fixed-run-20.v4.frb   # 35.7 MB -> 2.1 MB
+./build/carlobomb bomb verify  --file fixed-run-20.v4.frb --against ladder/fixed-run-20.frb
+./build/carlobomb bomb lookup  --file fixed-run-20.v4.frb --target 01001000        # any length up to 20 bits
+./build/carlobomb bomb compare --file fixed-run-20.v4.frb --target 0101010         # does 01010100 or 01010101 need fewer nodes?
+./build/carlobomb bomb expand  --file fixed-run-20.v4.frb --output again.frb       # the same bytes as the source
+./build/carlobomb bomb migrate --dir ladder --output ladder-v4                     # every complete Bomb of a ladder
 ```
 
-The source is only read, and no file is ever replaced. The compact file
-holds the same REVs and is derived from the fixed-width one, which stays the
-certified artifact (`bombs/fixed-run/README.md`, "The compact format").
+The source is only read, and no file is ever replaced. The compact file is
+derived from the fixed-width one, which stays the certified artifact and
+what a ladder builds on (`bombs/fixed-run/README.md`, "The compact format").
 
 ### Bomb-backed FixedSolver
 

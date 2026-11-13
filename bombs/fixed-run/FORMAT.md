@@ -1,12 +1,19 @@
-# FixedRunBomb file format, versions 1, 2 and 3
+# FixedRunBomb file format, versions 1 to 4
 
 A FixedRunBomb is a table with one entry for every binary string of one fixed
 length L. An entry holds a REV that emits the string as its first L output
 bits, and says whether that REV is certified to have the minimum possible
 number of nodes.
 
-There are three versions of the format. They differ in the size of an entry
-and in nothing else:
+Versions 1, 2 and 3 are the **fixed-width** formats, specified in sections
+1 to 11: every string has an entry of the same size, found by arithmetic.
+They differ in the size of an entry and in nothing else. Version 4 is the
+**compact** format of section 12: the same REVs of a complete table in the
+space each of them needs, with an index that also answers every shorter
+string. A compact file is made from a fixed-width one and gives it back,
+byte for byte; it replaces nothing.
+
+The fixed-width versions:
 
 | | Version 1 | Version 2 | Version 3 |
 |---|---:|---:|---:|
@@ -32,16 +39,18 @@ entries are what the 32-bit fields of the header hold, 31 nodes are what a
 many nodes as the target has bits. A longer target needs wider fields
 throughout and is a matter for a version that does not exist.
 
-This document specifies two things:
+This document specifies three things:
 
 1. the **table file** (`.frb`), the product: portable, fixed-size, addressed
    directly by the string;
 2. the **construction journal**, the working files of `carlobomb bomb build`
    and `bomb ladder`, from which a table is derived. A reader of tables can
-   skip that part.
+   skip that part;
+3. the **compact file** (also `.frb`, told apart by its version field), made
+   from a complete table file (section 12).
 
 `fixed_run.h` is the C interface to the table file, `fixed_run_build.h` to the
-journal. Neither file is written by copying C structures: every field below
+journal, `compact.h` to the compact file. Neither file is written by copying C structures: every field below
 is produced and consumed byte by byte.
 
 ## 1. Conventions
@@ -585,11 +594,363 @@ node counts and statuses of a complete table do not depend on any setting.
 ## 11. Versions
 
 Version 1 is the format of tables of up to 16 bits; version 2 that of
-tables of up to 24; version 3 that of tables of up to 31. A change that an
+tables of up to 24; version 3 that of tables of up to 31; version 4 is the
+compact format of section 12, for any of those lengths. A change that an
 existing reader would misread increases the format version, and readers
 reject versions they do not know rather than guess: a reader that knows
-only versions 1 and 2 rejects a version-3 file at the version field. The
+only versions 1 and 2 rejects a version-3 file at the version field, and a
+reader of the fixed-width formats rejects a compact file there. The
 header size field lets a later version add header fields without moving the
-table; readers of versions 1 to 3 require it to be 64. The journal carries the version of the table format it serves, and
-the search revision is a third number, for the reasons given in section
+table; readers of versions 1 to 4 require it to be 64. The journal carries
+the version of the table format it serves, which is 1, 2 or 3 and never 4,
+and the search revision is a third number, for the reasons given in section
 9.1.
+
+One number means one layout. The proposal for the compact format (issue 6)
+calls it "v3", from a time when version 3 was not taken; by the time it was
+built, tables of 25 bits and more were being written as version 3 of the
+fixed-width format, and those files exist. The compact format therefore has
+the next number, 4, and nothing was renumbered: no byte of any file of
+versions 1 to 3 means anything else than it did.
+
+## 12. The compact format (version 4)
+
+A complete FixedRunBomb(L) holds 2^L certified minimum-node REVs. In a
+fixed-width file each takes the space of the largest REV the version allows:
+19, 34 or 44 bytes for REVs that, at 24 bits, have 7 or 8 nodes and fit in 7
+bytes. A compact file holds the same REVs in the space they need, and adds
+what a fixed-width file does not have: the answer for every string of fewer
+than L bits.
+
+    fixed-width, 23 bits      285,212,736 bytes
+    compact, 23 bits          108,606,260 bytes     38.1%
+
+What it is and is not:
+
+- It is made **from a complete fixed-width file** and holds exactly its
+  REVs, node for node. The fixed-width file can be regenerated from it, byte
+  for byte (section 12.8).
+- **Only a complete table can be compact.** There is no status in it: every
+  REV in the file is a certified minimum, and a table with any entry that is
+  not has no compact form.
+- It certifies nothing by itself that the fixed-width file did not. That the
+  node counts are minima is established by the construction of the
+  fixed-width file and recorded in its journal; a compact file names the
+  table it was made from by version and checksum.
+- A construction neither reads nor writes it. Journals, base Bombs and the
+  tables a ladder builds on are fixed-width.
+
+### 12.1 Order, classes and ordinals
+
+The 2^L REVs are sorted by **(node count, index of the string)**: all REVs
+of one node first, then all of two, and so on; within one node count in the
+order of their strings. The position of a REV in this order is its
+**ordinal**, 0 .. 2^L − 1.
+
+The REVs of N nodes are **class N**. With count[N] of them, class N holds
+the ordinals start[N] .. start[N] + count[N] − 1, where start[1] = 0 and
+start[N+1] = start[N] + count[N]. Classes exist for N = 1 .. 31; most are
+empty.
+
+Because the order is by node count first, **a smaller ordinal never has
+more nodes**, and among REVs of the same node count the smaller ordinal
+belongs to the smaller string. Everything in section 12.5 follows from that.
+
+### 12.2 Layout
+
+    offset 0            header, 64 bytes
+    offset 64           class directory: 31 rows of 32 bytes, for N = 1 .. 31
+    offset 1056         prefix index: 2^(L+1) − 2 ordinals of I bytes each
+    ...                 zero bytes up to the next multiple of 8
+    offset P            class 1: count[1] REVs of stride[1] bytes
+    ...                 class 2, class 3, ... class 31, without gaps
+    end                 P + Σ count[N] · stride[N] bytes exactly
+
+P = (1056 + I · (2^(L+1) − 2)) rounded up to a multiple of 8. Every offset
+is a 64-bit number.
+
+### 12.3 Header
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 8 | Magic: `43 42 46 52 42 0D 0A 1A`, as in every version |
+| 8 | 2 | Format version: 4 |
+| 10 | 2 | Header size in bytes: 64 |
+| 12 | 1 | L, the target length in bits: 1..31 |
+| 13 | 1 | Largest node count a class can have: 31 |
+| 14 | 1 | I, the bytes of an ordinal in the prefix index: ⌈L/8⌉ .. 4 |
+| 15 | 1 | 0 (the entry size of the fixed-width versions; there are no entries here) |
+| 16 | 4 | Number of REVs: 2^L |
+| 20 | 4 | Flags: 1 (COMPLETE) |
+| 24 | 4 | 2^L (entries that hold a witness) |
+| 28 | 4 | 2^L (entries with status MINIMAL) |
+| 32 | 1 | Largest node count of any REV: the last class that is not empty |
+| 33 | 1 | The same |
+| 34 | 2 | Version of the fixed-width file this was made from: 1, 2 or 3; 0 if it was made from a table that never was a file |
+| 36 | 4 | CRC-32 of the class directory: the 992 bytes from offset 64 |
+| 40 | 4 | CRC-32 of the prefix index: I · (2^(L+1) − 2) bytes from offset 1056 |
+| 44 | 4 | Table CRC-32 of the fixed-width file this was made from (its header field at offset 36) |
+| 48 | 8 | Length of this file in bytes |
+| 56 | 4 | Reserved |
+| 60 | 4 | CRC-32 of header bytes 0..59 |
+
+Bytes 0 to 33 are the fields of the fixed-width header with the values they
+have for a complete table, so that a tool that prints a header prints the
+truth. Offsets 34 to 59 are used differently: a fixed-width header has one
+table checksum there and reserved bytes.
+
+I is ⌈L/8⌉ in every file this code writes unless asked otherwise
+(`--index-bytes`): 2 bytes up to 16 bits, 3 up to 24, 4 beyond. A wider I
+is valid and is read; it makes the index larger and every entry a 4-byte
+word.
+
+### 12.4 Class directory
+
+Row N − 1, at offset 64 + 32 · (N − 1), describes class N:
+
+| Offset | Size | Field |
+|---:|---:|---|
+| 0 | 4 | count[N]: the number of REVs of N nodes |
+| 4 | 4 | start[N]: the ordinal of the first |
+| 8 | 8 | File offset of the first |
+| 16 | 4 | stride[N]: bytes of a REV of this class (section 12.6) |
+| 20 | 1 | Bits of a link in this class: ⌈log2 N⌉ |
+| 21 | 3 | Reserved |
+| 24 | 4 | CRC-32 of the class: its count[N] · stride[N] bytes; 0 for an empty class |
+| 28 | 4 | Reserved |
+
+Only the counts and the checksums are information. Start, offset, stride and
+link bits follow from the counts, L and I by the rules of this section, and
+**a reader computes them and rejects a file whose directory says anything
+else**: a directory is never trusted to say where a class is. The counts
+must add up to 2^L.
+
+### 12.5 The prefix index
+
+The index has one entry for every string of 1 to L bits: 2 + 4 + ... + 2^L
+= 2^(L+1) − 2 entries. The entry of the string of k bits with index v
+(section 2, with k for L) is at **place 2^k − 2 + v**: first the two strings
+of one bit, then the four of two bits, and so on, each length in the order
+of its strings. An entry is an ordinal, I bytes, little-endian.
+
+- **A string of L bits:** the ordinal of its REV.
+- **A shorter string:** the smaller of the entries of its two extensions by
+  one bit, s0 and s1.
+
+By the order of the ordinals, the entry of a shorter string is the ordinal
+of the REV with the **fewest nodes among all its extensions to L bits, and
+among those the one of the smallest string**. That REV emits the shorter
+string as its first bits, and no REV with fewer nodes does: a REV that emits
+the shorter string emits some L-bit extension of it when run on, and none of
+those has a smaller minimum. So the index answers every string of 1 to L
+bits with a certified minimum-node REV, by one entry. The choice among REVs
+of equal size is the one the Bomb-backed FixedSolver makes on a fixed-width
+table: lowest index.
+
+### 12.6 A REV of a class
+
+A REV of class N is N nodes of **1 + 2·b bits**, b = ⌈log2 N⌉ (0, 1, 2, 2,
+3, 3, 3, 3, 4, ... for N = 1, 2, 3, ...), packed as the nodes of section 5.2
+are: node i occupies the bits from i·(1+2b); its lowest bit is the color,
+the next b bits link 0, the next b bits link 1. The stride of the class is
+⌈N·(1+2b)/8⌉ bytes; the bits after the last node are zero.
+
+| N | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 16 | 17 | 24 | 31 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Link bits b | 0 | 1 | 2 | 2 | 3 | 3 | 3 | 3 | 4 | 4 | 4 | 4 | 4 | 5 | 5 | 5 |
+| Stride, bytes | 1 | 1 | 2 | 3 | 5 | 6 | 7 | 7 | 11 | 12 | 13 | 14 | 18 | 24 | 33 | 43 |
+
+Nothing else is stored with a REV, not its node count: that is the class it
+is in. A REV of one node is one byte, 0 or 1, its color; its two links can
+only lead to itself. For N = 16 the bytes are those of a version-1 packed
+graph, and from N = 17 those of the first ⌈11·N/8⌉ bytes of a version-2 or
+version-3 one.
+
+A link must be less than N: a reader rejects a REV with a link to a node
+that does not exist, and one with a nonzero bit after its last node.
+
+### 12.7 Lookup
+
+For a string of k bits with index v, 1 ≤ k ≤ L:
+
+1. ordinal = the entry at place 2^k − 2 + v of the prefix index;
+2. N = the class with start[N] ≤ ordinal < start[N] + count[N];
+3. the REV is the stride[N] bytes at
+   (file offset of class N) + (ordinal − start[N]) · stride[N].
+
+Two reads, of I and of stride[N] bytes, after a header and directory of
+1,056 bytes. The node count of the answer needs the first read only.
+`frb_compact_file_lookup` does exactly this on a file, and then runs the
+REV: it must emit the string.
+
+The index gives the REV of a shorter string, not the L-bit string that REV
+stands for. That string is what the REV emits in L steps.
+
+### 12.8 Validation
+
+A reader that opens a compact file checks, and rejects the file on the first
+failure (`frb_compact_open`):
+
+1. magic, version 4, header size 64, header checksum, directory checksum;
+2. offsets 13 and 15 are 31 and 0; the reserved bytes of header and
+   directory are zero; L is 1..31; I is ⌈L/8⌉..4;
+3. the class counts add up to 2^L, and every start, offset, stride and link
+   width in the directory is what section 12.4 computes from the counts; an
+   empty class has checksum 0;
+4. count, flags and the two totals are 2^L, 1, 2^L and 2^L; the two largest
+   node counts are the last class that is not empty; the source version is
+   0..3; the length field is the length section 12.2 computes, and the file
+   has that length;
+5. the checksum of the prefix index; the bytes between the index and the
+   first class are zero; the checksum of every class;
+6. **the entries of the L-bit strings, taken in the order of the strings:**
+   each ordinal lies in a class, and is the next ordinal of that class not
+   yet seen, counting from the start of the class. That holds exactly if the
+   ordinals are a permutation of 0 .. 2^L − 1 in the order of section 12.1;
+7. **every REV**, decoded as section 12.6 says and run for L bits, emits the
+   string whose entry points to it;
+8. **every entry of a shorter string** is the smaller of the entries of its
+   two extensions.
+
+After 6 and 7 every string of L bits has a REV that emits it, with the node
+count of its class, and no REV is shared; after 8 the index is the one of
+section 12.5 and nothing else. Checks 1 to 4 need the first 1,056 bytes and
+the length of the file; a lookup in a file that is not opened in full
+(section 12.7) makes those and checks the one REV it returns.
+
+`frb_compact_check_symmetry` checks in addition what a file cannot say of
+itself: a string and its complement have REVs of the same size, and the
+complement of each REV emits the complement of its string.
+
+### 12.9 Conversion, both ways
+
+`carlobomb bomb compact --file FIXED --output COMPACT` and
+`frb_compact_write`:
+
+1. The fixed-width file is read and validated in full (section 6). If it is
+   not complete, nothing is written.
+2. The compact file is built under a temporary name.
+3. The temporary file is opened as section 12.8 says, by the code any reader
+   uses, and compared with the fixed-width table: every string of L bits
+   must have the REV the table has for it, node for node, and every shorter
+   string must be answered by its extension with the fewest nodes and the
+   lowest index, **worked out again from the table alone**.
+4. Only then is it renamed. A failure at any step leaves no file under the
+   name asked for.
+
+The source file is opened for reading only and is never written to. The
+command refuses an output name that exists: a conversion replaces nothing.
+The header of the compact file records the version of the source file and
+its table checksum.
+
+A compact file for a given table and I is the same bytes wherever it is
+made.
+
+`carlobomb bomb expand --file COMPACT --output FIXED` and
+`frb_compact_expand` write the fixed-width file again, in the version
+recorded: entry i is the REV of string i with status MINIMAL. It is the file
+the compact one was made from, byte for byte, and it is read back as any
+reader would read it and compared with the compact file before the command
+reports success.
+
+The table checksum of that file can be computed from the compact one
+without writing anything (`frb_compact_table_crc`), and must be the one
+recorded in the header. `carlobomb bomb expand` checks that before it
+writes, and `carlobomb bomb verify` on a compact file checks it too. A
+compact file therefore cannot name a table as its source that it does not
+hold, short of a collision of CRC-32, which protects against accident and
+not against intent: the SHA-256 of the files is what to publish and
+compare.
+
+### 12.10 Worked example
+
+FixedRunBomb(3) as built by `carlobomb bomb build --bits 3`: 8 strings, of
+which `000` and `111` need 1 node, `010`, `011`, `100` and `101` need 2, and
+`001` and `110` need 3. Its fixed-width file is 216 bytes; its compact file
+is 1,082, most of them directory. (The compact file is the smaller one
+from 7 bits.)
+
+The ordinals: `000` 0, `111` 1 (class 1); `010` 2, `011` 3, `100` 4, `101` 5
+(class 2); `001` 6, `110` 7 (class 3).
+
+Header:
+
+    43 42 46 52 42 0d 0a 1a   magic
+    04 00                     version 4
+    40 00                     header size 64
+    03                        L = 3
+    1f                        31
+    01                        I = 1
+    00
+    08 00 00 00               8 REVs
+    01 00 00 00               COMPLETE
+    08 00 00 00  08 00 00 00
+    03 03                     largest node count 3
+    01 00                     made from a version-1 file
+    61 98 cd aa               CRC-32 of the directory
+    b6 b0 86 92               CRC-32 of the index
+    ae ba 02 98               table CRC-32 of the source, 0x9802baae
+    3a 04 00 00 00 00 00 00   1,082 bytes
+    00 00 00 00
+    8a cc b8 01               CRC-32 of the 60 bytes before
+
+The first three rows of the directory; the other 28 are zero except for
+start (8), offset (1,082), stride and link bits:
+
+    02 00 00 00  00 00 00 00  30 04 00 00 00 00 00 00  01 00 00 00  00 00 00 00  69 22 de 36  00 00 00 00
+    04 00 00 00  02 00 00 00  32 04 00 00 00 00 00 00  01 00 00 00  01 00 00 00  c3 e0 0f a7  00 00 00 00
+    02 00 00 00  06 00 00 00  36 04 00 00 00 00 00 00  02 00 00 00  02 00 00 00  8a 5e 94 c4  00 00 00 00
+
+Class 1: 2 REVs from ordinal 0 at offset 1,072, 1 byte each. Class 2: 4
+from ordinal 2 at 1,074, 1 byte each, links of 1 bit. Class 3: 2 from
+ordinal 6 at 1,078, 2 bytes each, links of 2 bits.
+
+The prefix index at offset 1,056, 14 entries of 1 byte, and 2 bytes of
+padding:
+
+    00 01                     0 → 0 (the REV of 000), 1 → 1 (of 111)
+    00 02 04 01               00 → 0, 01 → 2 (of 010), 10 → 4 (of 100), 11 → 1
+    00 06 02 03 04 05 07 01   000, 001, 010, 011, 100, 101, 110, 111
+    00 00
+
+`01` has the extensions `010` and `011`, both of 2 nodes; its entry is the
+smaller ordinal, that of `010`. `1` has `10` → 4 and `11` → 1; its entry is
+1, the one-node REV of `111`.
+
+The REVs at offset 1,072:
+
+    00 01                     class 1: white (000), black (111)
+    07 05 0a 0e               class 2: 010, 011, 100, 101
+    09 02  a2 04              class 3: 001, 110
+
+`07` is the REV of `010`, two nodes of 3 bits: node 0 = `111` (black, link 0
+to node 1, link 1 to node 1), node 1 = `000` (white, both links to node 0).
+`09 02` is the REV of `001`, three nodes of 5 bits read from the 16-bit
+number 0x0209: node 0 = `01001` (black, link 0 to node 0, link 1 to node 1),
+node 1 = `10000` (white, link 0 to node 0, link 1 to node 2), node 2 =
+`00000` (white, both links to node 0).
+
+### 12.11 Sizes
+
+For the tables of the ladder, built as OVERNIGHT.md describes (I = 2 at 16
+bits, 3 from 17):
+
+| L | Fixed-width, bytes | Compact, bytes | | REVs | Prefix index |
+|---:|---:|---:|---:|---:|---:|
+| 16 | 1,245,248 | 640,084 | 51.4% | 376,884 | 262,140 |
+| 17 | 4,456,512 | 1,566,366 | 35.1% | 778,878 | 786,426 |
+| 18 | 8,912,960 | 3,194,136 | 35.8% | 1,620,216 | 1,572,858 |
+| 19 | 17,825,856 | 6,524,810 | 36.6% | 3,378,026 | 3,145,722 |
+| 20 | 35,651,648 | 13,278,592 | 37.2% | 6,986,080 | 6,291,450 |
+| 21 | 71,303,232 | 26,865,794 | 37.7% | 14,281,826 | 12,582,906 |
+| 22 | 142,606,400 | 54,099,256 | 37.9% | 28,932,376 | 25,165,818 |
+| 23 | 285,212,736 | 108,606,260 | 38.1% | 58,273,556 | 50,331,642 |
+
+The REVs themselves take a fifth of what they take in a fixed-width file;
+the prefix index, which the fixed-width file does not have at all, is nearly
+half of the compact one. From 25 bits an ordinal needs 4 bytes, and the
+index is 2^(L+3) bytes: 268 MB at 25 bits, 17 GB at 31.
+
+No REV is larger in a compact file than in the fixed-width one it came
+from, so a compact file is at most the fixed-width file plus the directory
+and the index, whatever the table.

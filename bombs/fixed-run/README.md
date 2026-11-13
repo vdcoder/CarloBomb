@@ -32,6 +32,8 @@ ladder to 24 bits, and how to check the result, is in
 | `statistics.c` | The reports of `bomb status` |
 | `tests/test_fixed_run.c` | Tests of all of the above |
 | `tests/test_fixed_run_ladder.c` | Tests of format version 2 and of the ladder |
+| `compact.h`, `compact.c` | The compact format (version 4): a complete table in the space its REVs need, with the answer for every shorter string. Plain C11 |
+| `tests/test_compact.c`, `tests/test_compact_internal.c` | Tests of the compact format |
 | [`OVERNIGHT.md`](OVERNIGHT.md) | Running the ladder to 24 bits unattended, and checking the result |
 | [`BEYOND_24.md`](BEYOND_24.md) | The next stage: 25 and 26 bits on a finished 24-bit Bomb, and what 27 to 31 would take |
 | `MULTI_SEARCH_SIMD.md` | Design note on a possible vectorized search. Not implemented |
@@ -95,7 +97,9 @@ build/carlobomb bomb status --work-dir bomb-work
 | `bomb verify ... --recertify` | Also recomputes every minimum from node budget 1 with the MinimalSolver (`--engine`, `--sample K`, `--max-steps K`) |
 | `bomb verify ... --hardest` | Recomputes exactly the strings certified at the largest minimum: the ones the table's headline number rests on (`--engine`, `--sample K` for the first K) |
 | `bomb verify ... --against SHORTER.frb` | Also checks the table against a complete table for fewer bits, and reports the hardest strings |
-| `bomb lookup --file FILE --target S` | Prints the stored REV after validating and running it; `--out GRAPH` writes it in the REV text format |
+| `bomb lookup --file FILE --target S` | Prints the stored REV after validating and running it; `--out GRAPH` writes it in the REV text format. From a compact file, S may be any string of 1 to L bits |
+| `bomb compact --file FILE --output COMPACT` | Writes a complete table in the compact format ([below](#the-compact-format)); `--index-bytes N` for wider index entries. Never replaces a file |
+| `bomb expand --file COMPACT --output FILE` | Writes the fixed-width file a compact one was made from, byte for byte. Never replaces a file |
 | `bomb ladder --dir DIR --to L [--from FILE]` | Builds complete tables for every length up to L, each on the one before; run again to continue |
 | `bomb ladder --dir DIR --status` | The tables a ladder directory holds, and the level under construction |
 
@@ -296,10 +300,56 @@ its file, so a table may be larger than memory
 `carlobomb bomb lookup` reads one entry: the REV for one string of exactly L
 bits. The Bomb-backed FixedSolver (`solvers/fixed/bomb/`, `carlobomb fixed`)
 answers every string of 1 to L bits from the same table, through an index of
-prefixes built when the table is opened.
+prefixes built when the table is opened. Both read a compact file as well,
+and from a compact file `bomb lookup` answers shorter strings too: the
+index is in the file.
+
+## The compact format
+
+A complete table can be written a second time in the compact format, format
+version 4 ([`FORMAT.md`](FORMAT.md), section 12): the same REVs, each in the
+bytes its node count needs instead of the 19, 34 or 44 of a fixed-width
+entry, sorted by node count, with an index that gives the REV of every
+string of 1 to L bits. The 23-bit table is 285,212,736 bytes fixed-width and
+108,606,260 compact. Measurements are in
+[`benchmarks/COMPACT_FORMAT.md`](../../benchmarks/COMPACT_FORMAT.md).
+
+```
+carlobomb bomb compact --file fixed-run-24.frb --output fixed-run-24.compact.frb
+carlobomb bomb verify  --file fixed-run-24.compact.frb --against fixed-run-24.frb
+carlobomb bomb lookup  --file fixed-run-24.compact.frb --target 0110100110
+carlobomb fixed        --bomb fixed-run-24.compact.frb --target 0110100110
+carlobomb bomb expand  --file fixed-run-24.compact.frb --output again.frb
+```
+
+`compact` validates the source in full, builds the new file under a
+temporary name, opens it as any reader would, compares it with the source
+REV for REV and string for string, and only then gives it its name.
+`verify` on a compact file checks its structure and checksums, runs every
+REV, checks the index and complement symmetry, and that the table it holds
+has the checksum of the source it names; `--against` compares it with the
+fixed-width file itself, or with a complete Bomb for fewer bits as for a
+fixed-width file. `expand` gives back the source: the same bytes, the same
+SHA-256.
+
+What it is not:
+
+- **Not a replacement for the fixed-width file.** The fixed-width file and
+  the work directory it was built in are the certified artifact and its
+  evidence. The compact file is derived from them and says so in its header.
+  Keep both; `compact` and `expand` open their input for reading only, and
+  neither will write over a file that exists.
+- **Not for partial tables.** Only a complete table has a compact form.
+- **Not an input of a construction.** `bomb build --base` and `bomb ladder
+  --from` take fixed-width files. A ladder that is running is not affected
+  by any of this: nothing here opens a work directory, and reading a
+  finished table while a higher level is being built on it is safe.
 
 ## Limits
 
+- `bomb verify --work-dir` and `--recertify` are for fixed-width files: they
+  check a table against how it was built. For a compact file, check the
+  file it was made from, and the compact file against that.
 - L is at most 31: an entry of format version 3 holds 31 nodes, which is
   what the ring needs at 31 bits, and a table index and the number of
   entries fit 32-bit fields. Versions 1 and 2, for up to 16 and 24 bits,

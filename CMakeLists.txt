@@ -150,6 +150,9 @@ target_link_libraries(big_table PRIVATE carlobomb_fixed_run)
 # reads both: sizes, opening, lookups, memory.
 add_executable(compact_bench benchmarks/compact_bench.c)
 target_link_libraries(compact_bench PRIVATE carlobomb_fixed_bomb)
+if(UNIX)
+  target_link_libraries(compact_bench PRIVATE m)
+endif()
 
 add_executable(fixed_bomb_longer benchmarks/fixed_bomb_longer.c)
 target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_fixed_bomb carlobomb_minimal m)

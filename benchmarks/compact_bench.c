@@ -3,6 +3,7 @@
  * by side, through the one interface that reads both.
  *
  *   compact_bench --fixed FILE --compact FILE [--wide FILE] [--queries N] [--no-check]
+ *                 [--alternatives]
  *
  * FILE of --fixed is a complete fixed-width Bomb (format version 1, 2 or 3),
  * FILE of --compact the compact file made from it, and --wide optionally the
@@ -19,12 +20,20 @@
  * all the files, and the node count and the extension chosen must agree.
  * The timed lookups add up what they return, and the sums must agree too.
  *
+ * --alternatives measures two things the format does not do, for the design
+ * review in benchmarks/COMPACT_FORMAT.md: an index that keeps one bit for
+ * every shorter string instead of an ordinal (which of its two extensions
+ * holds the answer), built here in memory from the compact file and walked
+ * down to the full-length string; and the size the REVs would have with
+ * their links coded in base N.  Nothing of it is written anywhere.
+ *
  * Timings are the best of five passes over the same queries, in an order
  * the processor cannot learn.  They are of this machine with the files in
  * the page cache; what a cold disk adds is its own business.
  */
 #include "timer.h" /* first: may need feature-test macros set by the build */
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -105,6 +114,112 @@ static double time_solve(const RevFixedBomb *b, const Query *q, char (*text)[FRB
     return best / (double)n * 1e9;
 }
 
+/*
+ * The index that is not in the format.  One bit for the string of k bits
+ * with index v (k = 0 .. L-1), at position 2^k + v: 1 if the answer for the
+ * string lies among the extensions of v1, 0 if among those of v0.  Following
+ * the bits from a string leads to its L-bit extension with the fewest nodes
+ * and the lowest index, in L - k steps.
+ */
+static uint32_t walk(const uint64_t *direction, int L, int bits, uint32_t value) {
+    uint64_t h = ((uint64_t)1 << bits) + value;
+    for (int k = bits; k < L; k++) h = 2 * h + ((direction[h >> 6] >> (h & 63)) & 1u);
+    return (uint32_t)(h - ((uint64_t)1 << L));
+}
+
+static int alternatives(const char *path, const Query *any, size_t n) {
+    FrbCompact *c = NULL;
+    const FrbCompactInfo *info;
+    uint64_t *direction, pool = 0, pool_radix = 0, index_now, index_bits;
+    unsigned long long wrong = 0, sums[4] = {0, 0, 0, 0};
+    double ns[4] = {1e30, 1e30, 1e30, 1e30};
+    int L;
+    if (frb_compact_open(path, &c, NULL) != FRB_OK) return 1;
+    info = frb_compact_info(c);
+    L = info->bits;
+    direction = calloc(((size_t)1 << L) / 64 + 1, sizeof *direction);
+    if (!direction) return 1;
+    for (int k = 1; k < L; k++)
+        for (uint32_t v = 0; v < ((uint32_t)1 << k); v++)
+            if (frb_compact_ordinal(c, k + 1, 2 * v + 1) < frb_compact_ordinal(c, k + 1, 2 * v)) {
+                uint64_t h = ((uint64_t)1 << k) + v;
+                direction[h >> 6] |= (uint64_t)1 << (h & 63);
+            }
+    /* The walk ends at the string whose REV the ordinal index names: for every shorter string. */
+    for (int k = 1; k < L; k++)
+        for (uint32_t v = 0; v < ((uint32_t)1 << k); v++)
+            wrong += frb_compact_ordinal(c, L, walk(direction, L, k, v)) != frb_compact_ordinal(c, k, v);
+
+    for (int run = 0; run < RUNS; run++) {
+        unsigned long long s = 0;
+        double t0 = cb_now(), t;
+        RevGraph g;
+        for (size_t i = 0; i < n; i++) s += (unsigned)frb_compact_nodes(c, any[i].bits, any[i].value);
+        t = (cb_now() - t0) / (double)n * 1e9;
+        if (t < ns[0]) ns[0] = t;
+        sums[0] = s;
+
+        s = 0, t0 = cb_now();
+        for (size_t i = 0; i < n; i++)
+            s += (unsigned)frb_compact_nodes(c, L, walk(direction, L, any[i].bits, any[i].value));
+        t = (cb_now() - t0) / (double)n * 1e9;
+        if (t < ns[1]) ns[1] = t;
+        sums[1] = s;
+
+        /* The REV, the L-bit string it stands for, and the check that it emits the string asked for. */
+        s = 0, t0 = cb_now();
+        for (size_t i = 0; i < n; i++) {
+            uint32_t extension;
+            if (frb_compact_graph(c, any[i].bits, any[i].value, &g) != FRB_OK) s += 1u << 30;
+            extension = frb_graph_output(&g, L);
+            if ((extension >> (L - any[i].bits)) != any[i].value) s += 1u << 30;
+            s += (unsigned)g.node_count * 1000003u + extension;
+        }
+        t = (cb_now() - t0) / (double)n * 1e9;
+        if (t < ns[2]) ns[2] = t;
+        sums[2] = s;
+
+        s = 0, t0 = cb_now();
+        for (size_t i = 0; i < n; i++) {
+            uint32_t extension = walk(direction, L, any[i].bits, any[i].value);
+            if (frb_compact_graph(c, L, extension, &g) != FRB_OK) s += 1u << 30;
+            if (frb_graph_output(&g, any[i].bits) != any[i].value) s += 1u << 30;
+            s += (unsigned)g.node_count * 1000003u + extension;
+        }
+        t = (cb_now() - t0) / (double)n * 1e9;
+        if (t < ns[3]) ns[3] = t;
+        sums[3] = s;
+    }
+    wrong += sums[0] != sums[1] || sums[2] != sums[3];
+
+    for (int k = 1; k <= info->max_nodes; k++) {
+        /* 2^k colorings times k^(2k) link tables: the bytes that many values need. */
+        double bits_needed = (double)k + 2.0 * (double)k * log2((double)k);
+        pool += (uint64_t)info->class_count[k] * info->class_stride[k];
+        pool_radix += (uint64_t)info->class_count[k] * (uint64_t)ceil(bits_needed / 8.0 - 1e-9);
+    }
+    index_now = info->index_entries * (uint64_t)info->index_bytes;
+    index_bits = (uint64_t)info->count * (uint64_t)info->index_bytes + (uint64_t)info->count / 8u;
+    printf("\nAlternatives to the index and the packing of the format (measured in memory, not written)\n");
+    printf("  Prefix index                                   bytes   nodes, 1..L   REV, 1..L (ns)\n");
+    printf("  an ordinal for every string (the format)  %12llu %11.1f %13.1f\n", (unsigned long long)index_now,
+           ns[0], ns[2]);
+    printf("  ordinals for L bits, 1 bit for shorter    %12llu %11.1f %13.1f\n", (unsigned long long)index_bits,
+           ns[1], ns[3]);
+    printf("  the walk along the bits ends at the REV the ordinal names, for every shorter string: %s\n",
+           wrong ? "NO" : "yes");
+    printf("  REVs                                           bytes\n");
+    printf("  links of ceil(log2 N) bits (the format)   %12llu\n", (unsigned long long)pool);
+    printf("  colors and links as one number in base N  %12llu   (%.1f%%)\n", (unsigned long long)pool_radix,
+           100.0 * (double)pool_radix / (double)pool);
+    printf("  file with both: %llu bytes, against %llu\n",
+           (unsigned long long)(info->pool_offset - index_now + index_bits + pool_radix),
+           (unsigned long long)info->file_bytes);
+    free(direction);
+    frb_compact_close(c);
+    return wrong != 0;
+}
+
 int main(int argc, char **argv) {
     const char *paths[MAX_FILES] = {NULL, NULL, NULL};
     const char *names[MAX_FILES] = {"fixed-width", "compact", "compact, 4-byte index"};
@@ -115,10 +230,11 @@ int main(int argc, char **argv) {
     char (*text)[FRB_MAX_BITS + 1];
     Query *exact, *any;
     size_t queries = 2000000;
-    int files = 0, bits = 0, check = 1, failed = 0;
+    int files = 0, bits = 0, check = 1, failed = 0, alternative = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--no-check")) check = 0;
+        else if (!strcmp(argv[i], "--alternatives")) alternative = 1;
         else if (!strcmp(argv[i], "--fixed") && i + 1 < argc) paths[0] = argv[++i];
         else if (!strcmp(argv[i], "--compact") && i + 1 < argc) paths[1] = argv[++i];
         else if (!strcmp(argv[i], "--wide") && i + 1 < argc) paths[2] = argv[++i];
@@ -126,7 +242,8 @@ int main(int argc, char **argv) {
         else paths[0] = NULL, i = argc;
     }
     if (!paths[0] || !paths[1] || queries < 1) {
-        fprintf(stderr, "usage: compact_bench --fixed FILE --compact FILE [--wide FILE] [--queries N] [--no-check]\n");
+        fprintf(stderr, "usage: compact_bench --fixed FILE --compact FILE [--wide FILE] [--queries N] [--no-check]"
+                        " [--alternatives]\n");
         return 2;
     }
     files = paths[2] ? 3 : 2;
@@ -267,6 +384,7 @@ int main(int argc, char **argv) {
     }
 
     for (int f = 0; f < files; f++) rev_fixed_bomb_close(bombs[f]);
+    if (alternative) failed |= alternatives(paths[1], any, queries);
     free(exact);
     free(any);
     free(text);

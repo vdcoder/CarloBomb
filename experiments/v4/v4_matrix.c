@@ -303,8 +303,18 @@ static inline int entry_unpack(const FrbTable *table, uint32_t index, ClTopo *t,
     return n;
 }
 
-/* The verified REV of a string: 1 if one was found and it emits the string. */
-static inline int rev_of(const Source *s, int bits, uint32_t value, uint32_t *fold) {
+/*
+ * The REV of a string as the reader of the file returns it; with `verify`
+ * also run against the string by cl_verify, which is no part of any reader.
+ * 1 if a REV was found (and, verified, emits the string).
+ *
+ * What a reader does before it returns differs: the fixed-width and compact
+ * files and the candidates with colors and plain links unpack a record; a
+ * candidate without colors runs the machine to find them, and one with rank
+ * and colors runs it to number the nodes, so for those the REV returned has
+ * been seen to emit the string already and the verification is a second run.
+ */
+static inline int rev_of(const Source *s, int bits, uint32_t value, uint32_t *fold, int verify) {
     ClTopo t;
     uint32_t colors = 0;
     int ok;
@@ -320,7 +330,7 @@ static inline int rev_of(const Source *s, int bits, uint32_t value, uint32_t *fo
         break;
     }
     }
-    ok = ok && cl_verify(&t, colors, value, bits);
+    if (verify) ok = ok && cl_verify(&t, colors, value, bits);
     *fold += colors + ((uint32_t)t.n << 16) + t.link[0][0] + 5u * t.link[1][t.n - 1];
     return ok;
 }
@@ -366,7 +376,8 @@ static Latency summarize(uint32_t *ticks, size_t n, unsigned long long failed) {
 }
 
 /* Every lookup timed by itself. */
-static unsigned long long time_each(const Source *s, const Query *q, size_t n, uint32_t *ticks, uint32_t *fold_out) {
+static unsigned long long time_each(const Source *s, const Query *q, size_t n, uint32_t *ticks, int verify,
+                                    uint32_t *fold_out) {
     unsigned long long failed = 0;
     uint32_t fold = 0;
     for (size_t i = 0; i < n; i++) {
@@ -374,7 +385,7 @@ static unsigned long long time_each(const Source *s, const Query *q, size_t n, u
         uint64_t a = tick_begin(), b;
         int ok;
         HIDE(value);
-        ok = rev_of(s, q[i].bits, value, &fold);
+        ok = rev_of(s, q[i].bits, value, &fold, verify);
         KEEP(ok);
         KEEP(fold);
         b = tick_end();
@@ -383,6 +394,28 @@ static unsigned long long time_each(const Source *s, const Query *q, size_t n, u
     }
     *fold_out = fold;
     return failed;
+}
+
+/*
+ * Four passes over the same strings.  The first brings the file into the
+ * caches and is not counted; of the others the one with the lowest mean is
+ * kept, the one the rest of the machine disturbed least.  *fold_out is what
+ * one pass returned, added up.
+ */
+static Latency time_best(const Source *s, const Query *q, size_t n, uint32_t *ticks, int verify, uint32_t *fold_out) {
+    Latency best;
+    unsigned long long failed_any = 0;
+    memset(&best, 0, sizeof best);
+    for (int pass = 0; pass < 4; pass++) {
+        uint32_t fold = 0;
+        unsigned long long failed = time_each(s, q, n, ticks, verify, &fold);
+        Latency now = summarize(ticks, n, failed);
+        failed_any += failed;
+        if (pass == 1 || (pass > 1 && now.mean < best.mean)) best = now;
+        *fold_out = fold;
+    }
+    best.failed = failed_any;
+    return best;
 }
 
 typedef struct {
@@ -398,7 +431,7 @@ typedef struct {
 static void *reader_main(void *arg) {
     Reader *r = arg;
     pthread_barrier_wait(r->start);
-    r->failed = time_each(r->source, r->q, r->n, r->ticks, &r->fold);
+    r->failed = time_each(r->source, r->q, r->n, r->ticks, 1, &r->fold);
     return NULL;
 }
 
@@ -463,7 +496,8 @@ typedef struct {
     int checked;
     double nodes_full, nodes_short, choice; /* ns each, many in a row */
     Latency choice_alone;                   /* one at a time */
-    Latency full, shorter;
+    Latency full, shorter;           /* verified REVs */
+    Latency fetch_full, fetch_short; /* REVs as the reader returns them */
     /* what the timed questions answered, added up: the same for every file */
     unsigned long long sum_nodes_full, sum_nodes_short, sum_choice;
     uint32_t fold_full, fold_short;
@@ -491,15 +525,14 @@ static int same_answers(const Row *row, const Row *fixed, const Row *sums, const
 
 static void measure(Row *row, const Source *s, const Query *exact, const Query *prefix, size_t queries,
                     const int *thread_list, int thread_count) {
-    uint32_t *ticks = malloc(queries * sizeof *ticks), fold = 0;
-    unsigned long long failed;
+    uint32_t *ticks = malloc(queries * sizeof *ticks), fold = 0, fold2 = 0;
     double best;
     int L = s->L;
     if (!ticks) return;
 
-    /* node counts and the choice between two extensions: index only */
+    /* node counts and the choice between two extensions: index only; the best of five runs */
     best = 1e30;
-    for (int run = 0; run < 3; run++) {
+    for (int run = 0; run < 5; run++) {
         unsigned long long sum = 0;
         double t0 = cb_now();
         for (size_t i = 0; i < queries; i++) sum += (unsigned)nodes_of(s, L, exact[i].value);
@@ -512,7 +545,7 @@ static void measure(Row *row, const Source *s, const Query *exact, const Query *
     if (s->kind != KIND_FIXED) {
         unsigned long long sum = 0;
         best = 1e30;
-        for (int run = 0; run < 3; run++) {
+        for (int run = 0; run < 5; run++) {
             double t0 = cb_now();
             sum = 0;
             for (size_t i = 0; i < queries; i++) sum += (unsigned)nodes_of(s, prefix[i].bits, prefix[i].value);
@@ -522,7 +555,7 @@ static void measure(Row *row, const Source *s, const Query *exact, const Query *
         }
         row->nodes_short = best / (double)queries * 1e9;
         best = 1e30;
-        for (int run = 0; run < 3; run++) {
+        for (int run = 0; run < 5; run++) {
             double t0 = cb_now();
             sum = 0;
             for (size_t i = 0; i < queries; i++) /* the two extensions of a string of 1 to L-1 bits */
@@ -533,40 +566,50 @@ static void measure(Row *row, const Source *s, const Query *exact, const Query *
         }
         row->choice = best / (double)queries * 1e9;
         /* and one at a time, each by itself: what one such question costs when it comes alone */
-        sum = 0;
-        for (size_t i = 0; i < queries; i++) {
-            uint32_t value = prefix[i].value;
-            unsigned answer;
-            uint64_t a = tick_begin(), b;
-            HIDE(value);
-            answer = (unsigned)choice_of(s, prefix[i].bits, value);
-            KEEP(answer);
-            b = tick_end();
-            sum += answer;
-            ticks[i] = (uint32_t)(b - a > tick_overhead ? b - a - tick_overhead : 0);
+        for (int pass = 0; pass < 3; pass++) {
+            Latency now;
+            sum = 0;
+            for (size_t i = 0; i < queries; i++) {
+                uint32_t value = prefix[i].value;
+                unsigned answer;
+                uint64_t a = tick_begin(), b;
+                HIDE(value);
+                answer = (unsigned)choice_of(s, prefix[i].bits, value);
+                KEEP(answer);
+                b = tick_end();
+                sum += answer;
+                ticks[i] = (uint32_t)(b - a > tick_overhead ? b - a - tick_overhead : 0);
+            }
+            if (sum != row->sum_choice) row->lookups_failed++; /* the same questions, the same answers */
+            now = summarize(ticks, queries, 0);
+            if (pass == 0 || now.mean < row->choice_alone.mean) row->choice_alone = now;
         }
-        if (sum != row->sum_choice) row->lookups_failed++; /* the same questions, the same answers */
-        row->choice_alone = summarize(ticks, queries, 0);
     }
 
-    /* verified REVs, one lookup at a time; the second pass is the one kept */
-    failed = time_each(s, exact, queries, ticks, &fold);
-    failed = time_each(s, exact, queries, ticks, &fold);
+    /* REVs, one lookup at a time: as the reader returns them, and verified */
+    row->fetch_full = time_best(s, exact, queries, ticks, 0, &fold);
+    row->full = time_best(s, exact, queries, ticks, 1, &fold2);
     row->fold_full = fold;
-    row->full = summarize(ticks, queries, failed);
-    row->lookups_failed += failed != 0;
+    row->lookups_failed += row->fetch_full.failed != 0 || row->full.failed != 0 || fold != fold2;
     memset(&row->shorter, 0, sizeof row->shorter);
+    memset(&row->fetch_short, 0, sizeof row->fetch_short);
     if (s->kind != KIND_FIXED) {
-        failed = time_each(s, prefix, queries, ticks, &fold);
-        failed = time_each(s, prefix, queries, ticks, &fold);
+        row->fetch_short = time_best(s, prefix, queries, ticks, 0, &fold);
+        row->shorter = time_best(s, prefix, queries, ticks, 1, &fold2);
         row->fold_short = fold;
-        row->shorter = summarize(ticks, queries, failed);
-        row->lookups_failed += failed != 0;
+        row->lookups_failed += row->fetch_short.failed != 0 || row->shorter.failed != 0 || fold != fold2;
     }
-    for (int k = 0; k < thread_count && k < 8; k++) {
+    for (int k = 0; k < thread_count && k < 8; k++) { /* twice; the faster run is kept */
+        Latency again;
+        double second;
         row->thread_counts[k] = thread_list[k];
         row->throughput[k] = concurrent(s, exact, queries, thread_list[k], &row->thread_latency[k]);
-        row->lookups_failed += row->thread_latency[k].failed != 0;
+        second = concurrent(s, exact, queries, thread_list[k], &again);
+        row->lookups_failed += row->thread_latency[k].failed != 0 || again.failed != 0;
+        if (second > row->throughput[k]) {
+            row->throughput[k] = second;
+            row->thread_latency[k] = again;
+        }
         row->thread_rows = k + 1;
     }
     free(ticks);
@@ -577,7 +620,7 @@ static void cold_pass(const Source *s, const Query *q, size_t n, double *us, dou
     uint32_t fold = 0;
     for (size_t i = 0; i < n; i++) {
         double t0 = cb_now();
-        int ok = rev_of(s, q[i].bits, q[i].value, &fold);
+        int ok = rev_of(s, q[i].bits, q[i].value, &fold, 1);
         KEEP(ok);
         us[i] = (cb_now() - t0) * 1e6;
     }
@@ -672,14 +715,19 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
                r->nodes_short, r->choice, r->choice_alone.mean, r->choice_alone.p50, r->choice_alone.p95,
                r->choice_alone.p99);
     else printf(" (many in a row)\n");
-    printf("  verified REV         %d bits: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns", L, r->full.mean, r->full.p50,
-           r->full.p95, r->full.p99);
+    printf("  REV                  as the reader returns it, %d bits: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns", L,
+           r->fetch_full.mean, r->fetch_full.p50, r->fetch_full.p95, r->fetch_full.p99);
+    if (r->fetch_short.mean > 0)
+        printf("\n                       shorter: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns", r->fetch_short.mean,
+               r->fetch_short.p50, r->fetch_short.p95, r->fetch_short.p99);
+    printf("\n  verified REV         and run against the string, %d bits: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns", L,
+           r->full.mean, r->full.p50, r->full.p95, r->full.p99);
     if (r->shorter.mean > 0)
         printf("\n                       shorter: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns", r->shorter.mean,
                r->shorter.p50, r->shorter.p95, r->shorter.p99);
     printf("\n");
     for (int k = 0; k < r->thread_rows; k++)
-        printf("  %2d reader%s           %.2f million lookups a second; p50 %.0f, p95 %.0f, p99 %.0f ns\n",
+        printf("  %2d reader%s           %.2f million verified REVs a second; p50 %.0f, p95 %.0f, p99 %.0f ns\n",
                r->thread_counts[k], r->thread_counts[k] == 1 ? " " : "s", r->throughput[k] / 1e6,
                r->thread_latency[k].p50, r->thread_latency[k].p95, r->thread_latency[k].p99);
     if (r->cold_done)
@@ -841,42 +889,91 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
     }
 
     /* ---- the matrix ---- */
-    printf("\n\nThe matrix (times in nanoseconds unless said otherwise)\n\n");
-    printf("  %-24s %12s %6s  %7s %7s  %9s %8s  %6s %6s  %5s %5s %5s %5s  %5s %5s %5s %5s", "", "bytes", "of fix",
-           "conv s", "MiB", "not stored", "next bit", "nodes", "choice", "REV", "p50", "p95", "p99", "short", "p50",
-           "p95", "p99");
-    for (int k = 0; k < thread_count; k++) printf("  %2dx M/s", thread_list[k]);
-    if (cold) printf("  cold us");
+    printf("\n\nTHE MATRIX   FixedRunBomb(%d), table CRC-32 %08x; times in nanoseconds unless said otherwise\n", L,
+           (unsigned)finfo.table_crc);
+
+    printf("\n1. Size, conversion, and what comes back\n\n");
+    printf("  %-24s %14s %8s  %8s %9s  %14s %11s\n", "", "bytes", "of fixed", "conv s", "peak MiB", "not as stored",
+           "other next");
+    for (int i = 0; i < nrows; i++) {
+        const Row *r = &rows[i];
+        if (!r->bytes) continue;
+        printf("  %-24s %14s %7.1f%%", r->name, commas(r->bytes), 100.0 * (double)r->bytes / (double)fixed_bytes);
+        if (r->conversion.ok) printf("  %8.1f %9.0f", r->conversion.wall_s, (double)r->conversion.peak_kb / 1024.0);
+        else printf("  %8s %9s", "-", "-");
+        if (r->checked) printf("  %14s %11s", commas(r->check.not_stored), commas(r->check.next_bit_differs));
+        else printf("  %14s %11s", "-", "-");
+        printf("\n");
+    }
+    printf("\n  conv s, peak MiB: the conversion from the fixed-width file, its full validation included; the memory\n"
+           "  of the converting process at its peak, with the source it holds.  not as stored: strings of %d bits\n"
+           "  that get a REV other than the stored one; other next: those of them whose REV emits another bit %d.\n",
+           L, L + 1);
+
+    printf("\n2. Questions the index answers without reading a REV\n\n");
+    printf("  %-24s %12s %12s %12s   %s\n", "", "nodes", "nodes", "choice", "choice, one question at a time");
+    printf("  %-24s %12s %12s %12s  %6s %6s %6s %6s\n", "", "L bits", "shorter", "", "mean", "p50", "p95", "p99");
+    for (int i = 0; i < nrows; i++) {
+        const Row *r = &rows[i];
+        if (!r->bytes) continue;
+        printf("  %-24s %12.1f", r->name, r->nodes_full);
+        if (r->choice >= 0)
+            printf(" %12.1f %12.1f  %6.0f %6.0f %6.0f %6.0f\n", r->nodes_short, r->choice, r->choice_alone.mean,
+                   r->choice_alone.p50, r->choice_alone.p95, r->choice_alone.p99);
+        else printf(" %12s %12s  %6s %6s %6s %6s\n", "-", "-", "-", "-", "-", "-");
+    }
+    printf("\n  nodes: the minimum node count of a string, a million in a row.  choice: which of the two extensions\n"
+           "  of a string of 1 to %d bits needs fewer nodes, or neither; in a row, and each question by itself.\n",
+           L - 1);
+
+    for (int part = 0; part < 2; part++) {
+        printf("\n%d. The REV of a string of %s, one lookup at a time\n\n", 3 + part,
+               part ? "1 to L-1 bits (every length as likely)" : "L bits");
+        printf("  %-24s  %-27s  %-27s\n", "", "as the reader returns it", "and run against the string");
+        printf("  %-24s  %6s %6s %6s %6s  %6s %6s %6s %6s\n", "", "mean", "p50", "p95", "p99", "mean", "p50", "p95",
+               "p99");
+        for (int i = 0; i < nrows; i++) {
+            const Row *r = &rows[i];
+            const Latency *f = part ? &r->fetch_short : &r->fetch_full, *v = part ? &r->shorter : &r->full;
+            if (!r->bytes || v->mean <= 0) continue;
+            printf("  %-24s  %6.0f %6.0f %6.0f %6.0f  %6.0f %6.0f %6.0f %6.0f\n", r->name, f->mean, f->p50, f->p95,
+                   f->p99, v->mean, v->p50, v->p95, v->p99);
+        }
+    }
+    printf("\n  as the reader returns it: what the reader of the file does to hand over a REV.  A candidate without\n"
+           "  colors has run the machine on it to find them, one with rank and colors to number its nodes: those\n"
+           "  REVs have been seen to emit the string.  The other readers unpack a record and return it unrun.\n"
+           "  and run against the string: the REV returned is then run by code outside the reader, the same for all.\n");
+
+    printf("\n5. Readers at once on one mapping: million verified REVs of L-bit strings a second, and one lookup\n\n");
+    printf("  %-24s", "");
+    for (int k = 0; k < thread_count; k++) printf("  %2d: %6s %5s %5s", thread_list[k], "M/s", "p50", "p99");
     printf("\n");
     for (int i = 0; i < nrows; i++) {
         const Row *r = &rows[i];
         if (!r->bytes) continue;
-        printf("  %-24s %12s %5.1f%%", r->name, commas(r->bytes), 100.0 * (double)r->bytes / (double)fixed_bytes);
-        if (r->conversion.ok) printf("  %7.1f %7.0f", r->conversion.wall_s, (double)r->conversion.peak_kb / 1024.0);
-        else printf("  %7s %7s", "-", "-");
-        if (r->checked) printf("  %9s %8s", commas(r->check.not_stored), commas(r->check.next_bit_differs));
-        else printf("  %9s %8s", "-", "-");
-        printf("  %6.1f", r->nodes_full);
-        if (r->choice >= 0) printf(" %6.0f", r->choice_alone.p50);
-        else printf(" %6s", "-");
-        printf("  %5.0f %5.0f %5.0f %5.0f", r->full.mean, r->full.p50, r->full.p95, r->full.p99);
-        if (r->shorter.mean > 0) printf("  %5.0f %5.0f %5.0f %5.0f", r->shorter.mean, r->shorter.p50, r->shorter.p95, r->shorter.p99);
-        else printf("  %5s %5s %5s %5s", "-", "-", "-", "-");
-        for (int k = 0; k < r->thread_rows; k++) printf("  %7.2f", r->throughput[k] / 1e6);
-        if (cold) {
-            if (r->cold_done) printf("  %7.0f", r->cold_rev_p50);
-            else printf("  %7s", "-");
-        }
+        printf("  %-24s", r->name);
+        for (int k = 0; k < r->thread_rows; k++)
+            printf("      %6.2f %5.0f %5.0f", r->throughput[k] / 1e6, r->thread_latency[k].p50, r->thread_latency[k].p99);
         printf("\n");
     }
-    printf("\n  conv s, MiB: the conversion from the fixed-width file, with its validation; peak memory with the mapped source.\n"
-           "  not stored, next bit: strings of %d bits that get a REV other than the stored one, and of those the ones whose\n"
-           "  REV predicts another bit %d.  nodes: node count of a %d-bit string, many in a row.  choice: which of the two\n"
-           "  extensions of a shorter string needs fewer nodes, one question at a time, median.  REV: verified REV of a\n"
-           "  %d-bit string, one at a time; short: of a string of 1 to %d bits.\n"
-           "  Nx M/s: million verified REVs a second with N readers.  cold us: one lookup with the REVs out of the cache\n"
-           "  and the index in memory, median microseconds.\n",
-           L, L + 1, L, L, L - 1);
+
+    if (cold) {
+        printf("\n6. Out of the page cache: microseconds for one lookup\n\n");
+        printf("  %-24s  %-25s  %-25s\n", "", "nothing in memory", "the index in memory");
+        printf("  %-24s  %5s %5s %6s %6s  %5s %5s %6s %6s\n", "", "L p50", "p99", "sh p50", "p99", "L p50", "p99",
+               "sh p50", "p99");
+        for (int i = 0; i < nrows; i++) {
+            const Row *r = &rows[i];
+            if (!r->bytes || !r->cold_done) continue;
+            printf("  %-24s  %5.0f %5.0f %6.0f %6.0f  %5.0f %5.0f %6.0f %6.0f\n", r->name, r->cold_all_p50,
+                   r->cold_all_p99, r->cold_all_short_p50, r->cold_all_short_p99, r->cold_rev_p50, r->cold_rev_p99,
+                   r->cold_rev_short_p50, r->cold_rev_short_p99);
+        }
+        printf("\n  L: strings of %d bits; sh: shorter ones, whose REVs lie on few pages that are soon in memory.\n"
+               "  A lookup costs one read of the disk for each page it touches that is not in memory yet.\n",
+               L);
+    }
     printf("\n%s\n", failed ? "FAIL: a variant did not give what the Bomb gives" : "PASS");
     frb_table_destroy(&table);
     free(rows);

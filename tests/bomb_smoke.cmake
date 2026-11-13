@@ -44,9 +44,9 @@ endfunction()
 # expands to the same bytes.  The source is the same file afterwards.
 function(compact_round_trip source name source_version bits)
   file(SHA256 ${source} before)
-  run(0 "format version ${source_version}, ${bits}-bit targets.*validated in full.*Compact: .*prefix index.*% of the source.*The source is unchanged"
+  run(0 "format version ${source_version}, ${bits}-bit targets.*validated in full.*Compact: .*navigation bits.*% of the source.*Every string of ${bits} bits has the REV here that the source has for it.*The source is unchanged"
       bomb compact --file ${source} --output ${W}/${name}.frb)
-  run(0 "Compact format \\(version 4\\), ${bits}-bit targets.*made from a version-${source_version} file.*ordinals in order[^\n]*PASS.*Every shorter string[^\n]*PASS.*Complement symmetry[^\n]*PASS.*checksum of its source[^\n]*PASS.*every REV and the answer for every shorter string the same[^\n]*PASS.*Verification: PASS \\(complete certified table, compact format\\)"
+  run(0 "Compact format \\(version 4\\), ${bits}-bit targets.*made from a version-${source_version} file.*every navigation bit[^\n]*PASS.*Every REV decoded, its colors found[^\n]*PASS.*checksum of its source[^\n]*PASS.*every comparison of two extensions [.]+ PASS.*REVs that are not the ones of that file: 0 [.]+ PASS.*Verification: PASS \\(complete certified table, compact format\\)"
       bomb verify --file ${W}/${name}.frb --against ${source})
   run(0 "validated in full.*Wrote .*format version ${source_version}, ${bits}-bit targets.*the same.table, byte for byte"
       bomb expand --file ${W}/${name}.frb --output ${W}/${name}-expanded.frb)
@@ -214,45 +214,56 @@ if(MODE STREQUAL "small")
   compact_round_trip(${W}/a.frb c10 1 10)
   compact_round_trip(${W}/v2-11.frb c11 2 11)
   compact_round_trip(${W}/lad3/fixed-run-13.frb c13 3 13)
-  # 1056 bytes of header and directory, 2046 index entries of 2 bytes, 4 bytes
-  # of padding, and the REVs: 2, 6, 64, 562, 388 and 2 of 1, 1, 2, 3, 5 and 6 bytes.
-  expect_size(${W}/c10.frb 8926)
+  # 448 bytes of header and directory; 64 bytes of navigation bits, 256 of node
+  # counts and 48 of counts before for the 512 strings that start with 0; their
+  # REVs, 1, 3, 32, 281, 194 and 1 of 1, 6, 15, 20, 35 and 23 bits, each class to a
+  # whole number of 8 bytes; and 8 bytes.
+  expect_size(${W}/c10.frb 2472)
   run(0 "Verification: PASS \\(complete certified table, compact format\\)" bomb verify --file ${W}/c10.frb)
   run(0 "Against the complete 10-bit Bomb[^\n]*PASS.*Verification: PASS" bomb verify --file ${W}/c13.frb --against ${W}/a.frb)
-  # A compact Bomb answers every length up to its own, with the same REV as the
-  # fixed-width one and the same extension as the FixedSolver chooses.
+  # A compact Bomb answers every length up to its own: a string of its own
+  # length with the REV of the fixed-width one, a shorter one that starts with 0
+  # with the extension the FixedSolver chooses on the fixed-width one, and one
+  # that starts with 1 with the complement of what its complement gets.
   run(0 "Status: MINIMAL.*Nodes: 4.*Verification: PASS" bomb lookup --file ${W}/c10.frb --target 0110100110 --out ${W}/c.rev)
   run(0 "Status: MINIMAL.*Nodes: 4.*Verification: PASS" bomb lookup --file ${W}/a.frb --target 0110100110 --out ${W}/f.rev)
   expect_same_file(${W}/c.rev ${W}/f.rev)
   run(0 "Verification: PASS" verify --target 0110100110 --graph ${W}/c.rev)
-  run(0 "5 bits; .*compact, 10-bit Bomb.*Status: MINIMAL.*Extension: 0110110110: the first of the 10-bit strings.*Nodes: 2.*Verification: PASS"
+  run(0 "5 bits; .*compact, 10-bit Bomb.*Status: MINIMAL.*Extension: 0110110110: of the 10-bit strings.*fewest nodes, the lowest\n.*Nodes: 2.*Verification: PASS"
       bomb lookup --file ${W}/c10.frb --target 01101)
+  run(0 "5 bits; .*compact, 10-bit Bomb.*Status: MINIMAL.*Extension: 1001001001: of the 10-bit strings.*fewest nodes, the highest.*Nodes: 2.*Verification: PASS"
+      bomb lookup --file ${W}/c10.frb --target 10010)
   run(0 "Result: MINIMAL.*Nodes: 2.*Extension: 0110110110 .*Verification: PASS" fixed --bomb ${W}/c10.frb --target 01101)
+  run(0 "Result: MINIMAL.*Nodes: 2.*Extension: 1001001001 .*Verification: PASS" fixed --bomb ${W}/c10.frb --target 10010)
   run(0 "Result: MINIMAL.*Nodes: 2.*Extension: 0110110110 .*Verification: PASS" fixed --bomb ${W}/a.frb --target 01101)
   run(0 "Result: MINIMAL.*Verification: PASS" fixed --bomb ${W}/c13.frb --target 0110100110011)
   run(3 "Result: UNSUPPORTED.*no REV with fewer than 4 nodes emits it" fixed --bomb ${W}/c10.frb --target 011010011001)
   run(3 "Result: UNSUPPORTED.*no REV with fewer than 4 nodes emits it" fixed --bomb ${W}/a.frb --target 011010011001)
-  # Wider index entries: a larger file with the same answers and the same source.
-  run(0 "2,046 strings of 1 to 10 bits, 4 bytes each" bomb compact --file ${W}/a.frb --output ${W}/c10-wide.frb --index-bytes 4)
-  expect_size(${W}/c10-wide.frb 13014)
-  run(0 "every REV and the answer for every shorter string the same[^\n]*PASS" bomb verify --file ${W}/c10-wide.frb --against ${W}/a.frb)
-  run(0 "the same.table, byte for byte" bomb expand --file ${W}/c10-wide.frb --output ${W}/c10-wide-expanded.frb)
-  expect_same_file(${W}/c10-wide-expanded.frb ${W}/a.frb)
+  # Which of the two extensions of a string needs fewer nodes: worked out on
+  # demand from the compact file, for a string and for its complement.
+  run(0 "Target: 0101010 \\(7 bits; .*compact, 10-bit Bomb\\)\nFollowed by 0: 4 nodes\nFollowed by 1: 2 nodes\nFewer nodes: 1 \\(by 2\\)"
+      bomb compare --file ${W}/c10.frb --target 0101010)
+  run(0 "Followed by 0: 2 nodes\nFollowed by 1: 4 nodes\nFewer nodes: 0 \\(by 2\\)" bomb compare --file ${W}/c10.frb --target 1010101)
+  run(0 "Followed by 0: 4 nodes\nFollowed by 1: 4 nodes\nFewer nodes: neither" bomb compare --file ${W}/c10.frb --target 1100110)
+  run(0 "Followed by 0: 1 nodes\nFollowed by 1: 2 nodes\nFewer nodes: 0 \\(by 1\\)" bomb compare --file ${W}/c10.frb --target 0)
+  run(2 "only\na Bomb of 11-bit strings can compare them" bomb compare --file ${W}/c10.frb --target 0110100110)
+  run(2 "holds targets of up to 10 bits" bomb compare --file ${W}/c10.frb --target 01101001100)
+  run(2 "is not a Bomb in the compact format" bomb compare --file ${W}/a.frb --target 01101)
+  run(2 "compare needs --file and --target" bomb compare --file ${W}/c10.frb)
   # A compact file that holds this table and names another as its source:
   # valid in every byte, and found out by the two commands that ask.
   execute_process(COMMAND ${FIXTURE} ${W}/a.frb ${W}/c10-false.frb RESULT_VARIABLE fixture_code)
   if(NOT fixture_code EQUAL 0)
     message(FATAL_ERROR "compact_fixture failed: ${fixture_code}")
   endif()
-  run(1 "ordinals in order[^\n]*PASS.*The table it holds has the checksum of its source[^\n]*FAIL.*Verification: FAIL"
+  run(1 "Every REV decoded[^\n]*PASS.*The table it holds has the checksum of its source[^\n]*FAIL.*Verification: FAIL"
       bomb verify --file ${W}/c10-false.frb)
   run(1 "it says it was made from a version-1 file with table CRC-32.*Nothing was written"
       bomb expand --file ${W}/c10-false.frb --output ${W}/no.frb)
   run(0 "Status: MINIMAL.*Nodes: 4.*Verification: PASS" bomb lookup --file ${W}/c10-false.frb --target 0110100110)
   # Compact refusals: nothing is replaced, nothing partial is written, and a
   # construction does not take a compact file for its base.
-  run(2 "--index-bytes must be 2..4 for 10-bit targets" bomb compact --file ${W}/a.frb --output ${W}/no.frb --index-bytes 1)
-  run(2 "--index-bytes must be 2..4 for 10-bit targets" bomb compact --file ${W}/a.frb --output ${W}/no.frb --index-bytes 5)
+  run(2 "unknown option --index-bytes" bomb compact --file ${W}/a.frb --output ${W}/no.frb --index-bytes 4)
   run(3 "partial table: only a complete Bomb can be written in the compact format.*Nothing was written"
       bomb compact --file ${W}/a-partial.frb --output ${W}/no.frb)
   run(2 "c10.frb exists.  A conversion never replaces a file" bomb compact --file ${W}/a.frb --output ${W}/c10.frb)
@@ -265,9 +276,28 @@ if(MODE STREQUAL "small")
   run(2 "check a fixed-width file against how it was built" bomb verify --file ${W}/c10.frb --work-dir ${W}/a)
   run(2 "takes a Bomb for the same or fewer bits" bomb verify --file ${W}/c10.frb --against ${W}/v2-11.frb)
   run(2 "is in the compact format.  To compare the two files, verify the compact one" bomb verify --file ${W}/a.frb --against ${W}/c10.frb)
-  # b.frb certifies the same minima as a.frb with other REVs: not the same Bomb.
-  run(1 "first difference at target.*Verification: FAIL" bomb verify --file ${W}/c10.frb --against ${W}/b.frb)
-  run(0 "the same[^\n]*PASS" bomb verify --file ${W}/c11.frb --against ${W}/lad3/fixed-run-11.frb)
+  # b.frb certifies the same minima as a.frb with other REVs: every answer of
+  # the compact file is right by it, and it is not the file this one was made from.
+  run(1 "every comparison of two extensions [.]+ PASS.*REVs that are not the ones of that file: [1-9][0-9,]*[^\n]*FAIL \\(the header says otherwise\\).*was not made from that file.*Verification: FAIL"
+      bomb verify --file ${W}/c10.frb --against ${W}/b.frb)
+  run(0 "REVs that are not the ones of that file: 0 [.]+ PASS" bomb verify --file ${W}/c11.frb --against ${W}/lad3/fixed-run-11.frb)
+  # b.frb was built without the symmetry: the REV of a string that starts with 1
+  # is not the complement of its complement's.  Its compact file keeps the half
+  # that starts with 0, says how many strings get another REV for it, and
+  # expands to a complete Bomb that is not b.frb.
+  run(0 "[1-9][0-9,]* of the 1,024 strings of 10 bits have another REV here than in the source.*The source is unchanged"
+      bomb compact --file ${W}/b.frb --output ${W}/cb.frb)
+  run(0 "REVs that are not those of its source, by its own count [.]+ [1-9].*REVs that are not the ones of that file: [1-9][0-9,]*[^\n]*PASS \\(as the header says\\).*Verification: PASS"
+      bomb verify --file ${W}/cb.frb --against ${W}/b.frb)
+  run(0 "of its REVs are not those of the file the compact one was made from.*a complete Bomb, and not that file"
+      bomb expand --file ${W}/cb.frb --output ${W}/cb-expanded.frb)
+  run(0 "Verification: PASS \\(complete certified table\\)" bomb verify --file ${W}/cb-expanded.frb)
+  run(0 "Against the complete 10-bit Bomb[^\n]*PASS" bomb verify --file ${W}/c13.frb --against ${W}/cb-expanded.frb)
+  file(SHA256 ${W}/b.frb sha_b)
+  file(SHA256 ${W}/cb-expanded.frb sha_cb)
+  if(sha_b STREQUAL sha_cb)
+    message(FATAL_ERROR "the expansion of cb.frb is b.frb, which has other REVs")
+  endif()
   run(2 "holds targets of up to 10 bits" bomb lookup --file ${W}/c10.frb --target 01101001100)
   run(2 "is in the compact format.  A construction builds on a fixed-width file.*bomb expand"
       bomb ladder --dir ${W}/nolad --from ${W}/c10.frb --to 11)
@@ -277,6 +307,41 @@ if(MODE STREQUAL "small")
     message(FATAL_ERROR "a refused command left something behind")
   endif()
   expect_sha256(${W}/a.frb ${sha_a})
+
+  # Migration: the compact file of every complete Bomb of a ladder directory, in
+  # a directory of its own.  The ladder directory is the same afterwards.
+  file(GLOB before_migration RELATIVE ${W}/lad3 ${W}/lad3/*)
+  file(SHA256 ${W}/lad3/fixed-run-13.frb sha_13)
+  run(0 "The fixed-width files are only read.*11 bits: reading and validating.*  11 +69,696 +[0-9,]+ +[0-9.]+% +0 .*  12 +139,328 +[0-9,]+ +[0-9.]+% +0 .*  13 +360,512 +[0-9,]+ +[0-9.]+% +0 .*Nothing in [^\n]*lad3 was written, renamed or removed"
+      bomb migrate --dir ${W}/lad3 --output ${W}/v4)
+  file(GLOB after_migration RELATIVE ${W}/lad3 ${W}/lad3/*)
+  if(NOT "${before_migration}" STREQUAL "${after_migration}")
+    message(FATAL_ERROR "the migration changed the ladder directory: ${after_migration}")
+  endif()
+  expect_sha256(${W}/lad3/fixed-run-13.frb ${sha_13})
+  expect_same_file(${W}/v4/fixed-run-13.v4.frb ${W}/c13.frb)
+  run(0 "REVs that are not the ones of that file: 0 [.]+ PASS.*Verification: PASS"
+      bomb verify --file ${W}/v4/fixed-run-12.v4.frb --against ${W}/lad3/fixed-run-12.frb)
+  # again: nothing to do, and nothing is replaced
+  run(0 "11 bits: [^\n]*is there already.*13 bits: [^\n]*is there already.*was there already"
+      bomb migrate --dir ${W}/lad3 --output ${W}/v4)
+  expect_same_file(${W}/v4/fixed-run-13.v4.frb ${W}/c13.frb)
+  # a file of that name that is not the compact file of the Bomb is left alone, and the command fails
+  file(MAKE_DIRECTORY ${W}/v4-other)
+  file(COPY_FILE ${W}/c10.frb ${W}/v4-other/fixed-run-11.v4.frb)
+  run(1 "11 bits: [^\n]*exists and is not the compact file of.*  11 +NOT MIGRATED.*  12 +139,328"
+      bomb migrate --dir ${W}/lad3 --output ${W}/v4-other)
+  expect_same_file(${W}/v4-other/fixed-run-11.v4.frb ${W}/c10.frb)
+  # a partial table is skipped; a directory without Bombs, and the ladder's own directory, are refused
+  file(MAKE_DIRECTORY ${W}/partial)
+  file(COPY_FILE ${W}/a-partial.frb ${W}/partial/fixed-run-10.frb)
+  run(0 "10 bits: [^\n]*is a partial table: skipped" bomb migrate --dir ${W}/partial --output ${W}/v4-partial)
+  run(2 "No fixed-run-L.frb in" bomb migrate --dir ${W}/v4 --output ${W}/v4-none)
+  run(2 "The compact files go to a\ndirectory of their own" bomb migrate --dir ${W}/lad3 --output ${W}/lad3/)
+  run(2 "migrate needs --dir" bomb migrate --dir ${W}/lad3)
+  if(EXISTS ${W}/v4-partial/fixed-run-10.v4.frb OR EXISTS ${W}/lad3/fixed-run-13.v4.frb)
+    message(FATAL_ERROR "a migration wrote a file it should not have")
+  endif()
 
   # Ladder refusals.
   run(2 "ladder needs --dir" bomb ladder --to 12)
@@ -303,9 +368,9 @@ elseif(MODE STREQUAL "16")
       bomb lookup --file ${W}/fixed-run-16.frb --target 0100100011010110 --out ${W}/g.rev)
   run(0 "Verification: PASS" verify --target 0100100011010110 --graph ${W}/g.rev)
   run(0 "Nodes: 6" solve --target 0100100011010110)
-  # The compact format: 640,084 bytes for the same 65,536 REVs, and back.
+  # The compact format: 129,680 bytes for the same 65,536 REVs, and back.
   compact_round_trip(${W}/fixed-run-16.frb c16 1 16)
-  expect_size(${W}/c16.frb 640084)
+  expect_size(${W}/c16.frb 129680)
   run(0 "16 bits; .*compact, 16-bit Bomb.*Status: MINIMAL.*Nodes: 6.*Verification: PASS"
       bomb lookup --file ${W}/c16.frb --target 0100100011010110 --out ${W}/gc.rev)
   expect_same_file(${W}/gc.rev ${W}/g.rev)
@@ -319,8 +384,8 @@ elseif(MODE STREQUAL "16full")
       bomb verify --file ${W}/fixed-run-16.frb --work-dir ${W}/w --recertify)
   # The compact file of a table is the same bytes on every machine as well.
   compact_round_trip(${W}/fixed-run-16.frb c16 1 16)
-  expect_size(${W}/c16.frb 640084)
-  expect_sha256(${W}/c16.frb 51b3e8c8c363a9d2f881f7bf4d326c82d735092031f6f49c62b82e3bacb93a13)
+  expect_size(${W}/c16.frb 129680)
+  expect_sha256(${W}/c16.frb c29f50ad6e4133ca06625f04e1f7acd6f0c7154c07d970d16637942e48e7f765)
   # One rung up.  The 17-bit table is the same bytes on every machine too.
   run(0 "FixedRunBomb\\(17\\) is complete.*      8 +2 +131,072 +100.00%.*The ladder is complete"
       bomb ladder --dir ${W}/lad --from ${W}/fixed-run-16.frb --to 17 --workers 4 --progress 0)
@@ -329,8 +394,8 @@ elseif(MODE STREQUAL "16full")
       bomb verify --file ${W}/lad/fixed-run-17.frb --work-dir ${W}/lad/work-17 --against ${W}/fixed-run-16.frb
       --recertify --sample 2000 --engine c)
   compact_round_trip(${W}/lad/fixed-run-17.frb c17 2 17)
-  expect_size(${W}/c17.frb 1566366)
-  expect_sha256(${W}/c17.frb a48a56e4325ebe856c901704290fc6d2261521dd5246410400e099ff24cf9914)
+  expect_size(${W}/c17.frb 253192)
+  expect_sha256(${W}/c17.frb 3c4a7ba7eaa6737374e603413b1aa8b2136efc6e643cce9ef9cf98ca0cd0225b)
   run(0 "Against the complete 16-bit Bomb[^\n]*PASS.*is 8 nodes, needed by 2 strings.*Verification: PASS"
       bomb verify --file ${W}/c17.frb --against ${W}/fixed-run-16.frb)
 

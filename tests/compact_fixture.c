@@ -21,7 +21,7 @@ int main(int argc, char **argv) {
     }
     e = frb_file_read(argv[1], &t, &info, NULL);
     if (e == FRB_OK) {
-        e = frb_compact_write(argv[2], &t, info.version, info.table_crc ^ 0x00010000u, 0);
+        e = frb_compact_write(argv[2], &t, info.version, info.table_crc ^ 0x00010000u);
         frb_table_destroy(&t);
     }
     if (e != FRB_OK) {

@@ -66,7 +66,7 @@ target_link_libraries(carlobomb_minimal PUBLIC carlobomb_level)
 # FixedRunBomb.  The file format and the enumerator are plain C11; building a
 # table (journal, worker processes) needs POSIX.
 add_library(carlobomb_fixed_run STATIC bombs/fixed-run/fixed_run.c bombs/fixed-run/enumerate.c
-  bombs/fixed-run/compact.c)
+  bombs/fixed-run/topology.c bombs/fixed-run/compact.c)
 target_include_directories(carlobomb_fixed_run PUBLIC bombs/fixed-run)
 target_link_libraries(carlobomb_fixed_run PUBLIC carlobomb_rev)
 set(CARLOBOMB_HAVE_BOMB_BUILD OFF)
@@ -246,6 +246,15 @@ add_test(NAME test_fixed_run_ladder
 set_tests_properties(test_fixed_run_ladder PROPERTIES TIMEOUT 600)
 # The compact format (version 4): packing, layout, conversion both ways, the
 # prefix index against a scan of the table, and damaged files.
+add_executable(test_topology bombs/fixed-run/tests/test_topology.c)
+target_include_directories(test_topology PRIVATE tests)
+target_link_libraries(test_topology PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_topology COMMAND test_topology)
+# The same with the product of two words taken the long way.
+add_executable(test_topology_portable bombs/fixed-run/tests/test_topology_portable.c)
+target_include_directories(test_topology_portable PRIVATE tests bombs/fixed-run bombs/fixed-run/tests)
+target_link_libraries(test_topology_portable PRIVATE carlobomb_minimal)
+add_test(NAME test_topology_portable COMMAND test_topology_portable)
 add_executable(test_compact bombs/fixed-run/tests/test_compact.c)
 target_include_directories(test_compact PRIVATE tests)
 target_link_libraries(test_compact PRIVATE carlobomb_fixed_run carlobomb_minimal)

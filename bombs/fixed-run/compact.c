@@ -24,6 +24,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "topology.h"
+
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/mman.h>
@@ -35,16 +37,16 @@
 static const uint8_t frb_magic[8] = {'C', 'B', 'F', 'R', 'B', 0x0D, 0x0A, 0x1A};
 
 /* Header field offsets.  Bytes 0..13 and 16..33 mean what they mean in a
- * fixed-width header.  Byte 14 is the width of an index entry where that
- * has the bits of a node, and byte 15, its entry size, is 0: there are no
- * entries of a fixed size. */
+ * fixed-width header.  Byte 14 is the block shift where that has the bits of
+ * a node, and byte 15, its entry size, is 0: there are no entries of a fixed
+ * size. */
 enum {
     C_MAGIC = 0,
     C_VERSION = 8,
     C_HEADER_SIZE = 10,
     C_BITS = 12,
     C_CAPACITY = 13,
-    C_INDEX_BYTES = 14,
+    C_BLOCK_SHIFT = 14,
     C_ENTRY_SIZE = 15,
     C_COUNT = 16,
     C_FLAGS = 20,
@@ -57,23 +59,26 @@ enum {
     C_INDEX_CRC = 40,
     C_SOURCE_CRC = 44,
     C_FILE_BYTES = 48,
-    C_RESERVED = 56,
+    C_OTHER_REVS = 56,
     C_HEADER_CRC = 60
 };
 
 /* Class directory row offsets. */
 enum {
     D_COUNT = 0,
-    D_START = 4,
+    D_BITS = 4,
+    D_KIND = 5,      /* 0: colors and links; 1: the rank of the graph */
+    D_RESERVED1 = 6, /* 2 bytes */
     D_OFFSET = 8,
-    D_STRIDE = 16,
-    D_LINK_BITS = 20,
-    D_RESERVED1 = 21, /* 3 bytes */
+    D_BYTES = 16,
     D_CRC = 24,
-    D_RESERVED2 = 28  /* 4 bytes */
+    D_RESERVED2 = 28 /* 4 bytes */
 };
 
-enum { IO_CHUNK = 1 << 22 };
+/* What the layout this format had as a draft wrote into bytes 13 and 14. */
+enum { DRAFT_CAPACITY = 31, DRAFT_INDEX_BYTES_MAX = 4 };
+
+enum { IO_CHUNK = 1 << 22, TAIL_BYTES = 8, BLOCK = 1 << FRB_COMPACT_BLOCK_SHIFT };
 
 static void put16(uint8_t *p, unsigned v) {
     p[0] = (uint8_t)(v & 0xFFu);
@@ -90,177 +95,151 @@ static void put64(uint8_t *p, uint64_t v) {
 
 static unsigned get16(const uint8_t *p) { return (unsigned)p[0] | ((unsigned)p[1] << 8); }
 
-static uint32_t get32(const uint8_t *p) {
+static inline uint32_t get32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
-static uint64_t get64(const uint8_t *p) { return (uint64_t)get32(p) | ((uint64_t)get32(p + 4) << 32); }
+static inline uint64_t get64(const uint8_t *p) { return (uint64_t)get32(p) | ((uint64_t)get32(p + 4) << 32); }
+
+static uint64_t align8(uint64_t v) { return (v + 7u) & ~(uint64_t)7; }
 
 #if defined(_WIN32)
-static int seek64(FILE *f, uint64_t at) { return _fseeki64(f, (__int64)at, SEEK_SET); }
 static int length64(FILE *f, uint64_t *length) {
     __int64 end;
     if (_fseeki64(f, 0, SEEK_END) != 0 || (end = _ftelli64(f)) < 0) return -1;
     *length = (uint64_t)end;
     return 0;
 }
+static int seek_start(FILE *f) { return _fseeki64(f, 0, SEEK_SET); }
 #else
-static int seek64(FILE *f, uint64_t at) { return fseeko(f, (off_t)at, SEEK_SET); }
 static int length64(FILE *f, uint64_t *length) {
     off_t end;
     if (fseeko(f, 0, SEEK_END) != 0 || (end = ftello(f)) < 0) return -1;
     *length = (uint64_t)end;
     return 0;
 }
+static int seek_start(FILE *f) { return fseeko(f, 0, SEEK_SET); }
 #endif
 
-/* ---- one REV of a class -------------------------------------------------- */
+/* ---- one record ------------------------------------------------------------ */
 
-int frb_compact_link_bits(int nodes) {
+static int link_bits(int nodes) {
     int w = 0;
-    if (nodes < 1 || nodes > FRB_COMPACT_CLASSES) return -1;
     while ((1 << w) < nodes) w++;
     return w;
 }
 
-int frb_compact_stride(int nodes) {
-    int w = frb_compact_link_bits(nodes);
-    return w < 0 ? 0 : (nodes * (1 + 2 * w) + 7) / 8;
+int frb_compact_record_bits(int nodes) {
+    if (nodes < 1 || nodes > FRB_COMPACT_MAX_NODES) return 0;
+    if (nodes > FRB_COMPACT_PLAIN_NODES) return frb_topology_rank_bits(nodes);
+    return nodes + 2 * nodes * link_bits(nodes);
 }
 
-/* A field of up to 11 bits at bit position pos of a zeroed buffer. */
-static void put_bits(uint8_t *buf, int nbytes, unsigned pos, unsigned value) {
-    unsigned byte = pos >> 3;
-    uint32_t v = (uint32_t)value << (pos & 7u);
-    buf[byte] |= (uint8_t)(v & 0xFFu);
-    if ((int)byte + 1 < nbytes) buf[byte + 1] |= (uint8_t)((v >> 8) & 0xFFu);
-    if ((int)byte + 2 < nbytes) buf[byte + 2] |= (uint8_t)((v >> 16) & 0xFFu);
-}
-
-static unsigned get_bits(const uint8_t *buf, int nbytes, unsigned pos, unsigned width) {
-    unsigned byte = pos >> 3;
-    uint32_t v = buf[byte];
-    if ((int)byte + 1 < nbytes) v |= (uint32_t)buf[byte + 1] << 8;
-    if ((int)byte + 2 < nbytes) v |= (uint32_t)buf[byte + 2] << 16;
-    return (unsigned)((v >> (pos & 7u)) & ((1u << width) - 1u));
-}
-
-FrbError frb_compact_pack(const RevGraph *g, uint8_t *out) {
-    int n, w, stride;
-    if (!g || !out) return FRB_ERR_ARG;
-    if (rev_graph_validate(g) != REV_OK) return FRB_ERR_ARG;
-    n = g->node_count;
-    if (n > FRB_COMPACT_CLASSES) return FRB_ERR_CAPACITY;
-    w = frb_compact_link_bits(n);
-    stride = frb_compact_stride(n);
-    memset(out, 0, (size_t)stride);
-    for (int i = 0; i < n; i++) {
-        unsigned v = (unsigned)g->nodes[i].color | ((unsigned)g->nodes[i].links[0] << 1) |
-                     ((unsigned)g->nodes[i].links[1] << (1 + w));
-        put_bits(out, stride, (unsigned)(i * (1 + 2 * w)), v);
+/* Colors and links of a REV of up to 5 nodes as one number: the colors in
+ * the low N bits, node 0 lowest; above them, node after node, its link on
+ * color 0 and its link on color 1. */
+static uint64_t plain_pack(const FrbTopology *t, uint32_t colors) {
+    uint64_t code = 0;
+    int w = link_bits(t->n);
+    for (int i = t->n - 1; i >= 0; i--) {
+        code = (code << w) | t->link[1][i];
+        code = (code << w) | t->link[0][i];
     }
-    return FRB_OK;
+    return (code << t->n) | colors;
 }
 
-FrbError frb_compact_unpack(const uint8_t *in, int nodes, RevGraph *g) {
-    int w = frb_compact_link_bits(nodes), stride, width;
-    unsigned mask, used;
-    if (!in || !g) return FRB_ERR_ARG;
-    g->node_count = 0;
-    if (w < 0) return FRB_ERR_ENTRY;
-    stride = frb_compact_stride(nodes);
-    width = 1 + 2 * w;
-    mask = (1u << w) - 1u;
+/* 0 if a link leads to a node that is not there. */
+static int plain_unpack(uint64_t code, int nodes, FrbTopology *t, uint32_t *colors) {
+    int w = link_bits(nodes);
+    uint32_t mask = (1u << w) - 1u;
+    memset(t, 0, sizeof *t);
+    t->n = (uint8_t)nodes;
+    *colors = (uint32_t)code & ((1u << nodes) - 1u);
+    code >>= nodes;
     for (int i = 0; i < nodes; i++) {
-        unsigned v = get_bits(in, stride, (unsigned)(i * width), (unsigned)width);
-        int l0 = (int)((v >> 1) & mask), l1 = (int)((v >> (1 + w)) & mask);
-        if (l0 >= nodes || l1 >= nodes) return FRB_ERR_ENTRY;
-        g->nodes[i].color = (int)(v & 1u);
-        g->nodes[i].links[0] = l0;
-        g->nodes[i].links[1] = l1;
+        uint32_t l0 = (uint32_t)code & mask, l1 = (uint32_t)(code >> w) & mask;
+        if (l0 >= (uint32_t)nodes || l1 >= (uint32_t)nodes) return 0;
+        t->link[0][i] = (uint8_t)l0;
+        t->link[1][i] = (uint8_t)l1;
+        code >>= 2 * w;
     }
-    used = (unsigned)(nodes * width); /* every bit after the last node is zero */
-    if ((used & 7u) && (in[used >> 3] >> (used & 7u)) != 0) return FRB_ERR_ENTRY;
-    g->node_count = nodes;
-    return FRB_OK;
+    return 1;
+}
+
+/* Record number `index` of a class of records of `width` bits (58 at most):
+ * bit k of the class is bit k % 8 of its byte k / 8.  Reads up to 9 bytes
+ * from the first byte of the record, which the 8 zero bytes at the end of
+ * the file make safe for the last record of the last class. */
+static inline uint64_t record_at(const uint8_t *class_bytes, uint64_t index, unsigned width) {
+    uint64_t bit = index * width;
+    const uint8_t *p = class_bytes + (bit >> 3);
+    unsigned shift = (unsigned)(bit & 7u);
+    uint64_t v = get64(p) >> shift;
+    if (shift + width > 64) v |= (uint64_t)p[8] << (64 - shift);
+    return v & (((uint64_t)1 << width) - 1u);
+}
+
+/* Into zeroed bytes. */
+static void record_put(uint8_t *class_bytes, uint64_t index, unsigned width, uint64_t value) {
+    uint64_t bit = index * width;
+    uint8_t *p = class_bytes + (bit >> 3);
+    unsigned shift = (unsigned)(bit & 7u), bytes = (shift + width + 7) / 8;
+    uint64_t low = value << shift;
+    for (unsigned i = 0; i < bytes && i < 8; i++) p[i] |= (uint8_t)((low >> (8 * i)) & 0xFFu);
+    if (bytes > 8) p[8] |= (uint8_t)(value >> (64 - shift));
 }
 
 /* ---- layout ---------------------------------------------------------------- */
 
-FrbError frb_compact_layout(FrbCompactInfo *info, int bits, int index_bytes) {
+FrbError frb_compact_layout(FrbCompactInfo *info, int bits) {
     uint64_t sum = 0, offset;
-    uint32_t start = 0;
-    int least;
-    if (!info || bits < 1 || bits > 31) return FRB_ERR_ARG;
-    least = (bits + 7) / 8;
-    if (index_bytes == 0) index_bytes = least;
-    if (index_bytes < least || index_bytes > 4) return FRB_ERR_ARG;
-    for (int n = 1; n <= FRB_COMPACT_CLASSES; n++) sum += info->class_count[n];
-    if (sum != ((uint64_t)1 << bits)) return FRB_ERR_ARG;
+    if (!info || bits < 1 || bits > FRB_MAX_BITS) return FRB_ERR_ARG;
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) sum += info->class_count[n];
+    if (sum != ((uint64_t)1 << (bits - 1))) return FRB_ERR_ARG;
     info->bits = bits;
-    info->index_bytes = index_bytes;
+    info->block_shift = FRB_COMPACT_BLOCK_SHIFT;
     info->count = (uint32_t)1 << bits;
-    info->index_entries = ((uint64_t)2 << bits) - 2;
-    info->index_offset = FRB_COMPACT_INDEX_OFFSET;
-    info->pool_offset = (info->index_offset + info->index_entries * (uint64_t)index_bytes + 7u) & ~(uint64_t)7;
+    info->stored = (uint32_t)1 << (bits - 1);
     info->max_nodes = 0;
-    info->class_count[0] = info->class_start[0] = info->class_stride[0] = info->class_crc[0] = 0;
-    info->class_offset[0] = 0;
-    offset = info->pool_offset;
-    for (int n = 1; n <= FRB_COMPACT_CLASSES; n++) {
-        info->class_start[n] = start;
-        info->class_stride[n] = (uint32_t)frb_compact_stride(n);
-        info->class_offset[n] = offset;
-        start += info->class_count[n];
-        offset += (uint64_t)info->class_count[n] * (uint64_t)info->class_stride[n];
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++)
         if (info->class_count[n]) info->max_nodes = n;
+    info->nav_offset = FRB_COMPACT_INDEX_OFFSET;
+    info->nav_bytes = align8(((uint64_t)info->stored + 7u) / 8u);
+    info->nodes_offset = info->nav_offset + info->nav_bytes;
+    info->nodes_bytes = align8(((uint64_t)info->stored + 1u) / 2u);
+    info->blocks_offset = info->nodes_offset + info->nodes_bytes;
+    info->block_rows = ((info->stored - 1u) >> FRB_COMPACT_BLOCK_SHIFT) + 1u;
+    info->blocks_bytes = align8((uint64_t)info->block_rows * (uint64_t)info->max_nodes * 4u);
+    offset = info->blocks_offset + info->blocks_bytes;
+    info->class_count[0] = info->class_bits[0] = info->class_crc[0] = 0;
+    info->class_offset[0] = info->class_bytes[0] = 0;
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) {
+        info->class_bits[n] = (uint32_t)frb_compact_record_bits(n);
+        info->class_offset[n] = offset;
+        info->class_bytes[n] = align8(((uint64_t)info->class_count[n] * info->class_bits[n] + 7u) / 8u);
+        offset += info->class_bytes[n];
     }
-    info->file_bytes = offset;
+    info->file_bytes = offset + TAIL_BYTES;
     return FRB_OK;
-}
-
-/* Place in the prefix index of the string of `bits` bits with value `value`. */
-static uint64_t index_place(int bits, uint32_t value) { return (((uint64_t)1 << bits) - 2u) + value; }
-
-static uint32_t get_ordinal(const uint8_t *p, int bytes) {
-    uint32_t v = 0;
-    for (int i = 0; i < bytes; i++) v |= (uint32_t)p[i] << (8 * i);
-    return v;
-}
-
-static void put_ordinal(uint8_t *p, int bytes, uint32_t v) {
-    for (int i = 0; i < bytes; i++) p[i] = (uint8_t)((v >> (8 * i)) & 0xFFu);
-}
-
-/*
- * Node count of the class an ordinal lies in; 0 if it lies in none.  The
- * starts never go down, so the class is the last one that starts at or
- * before the ordinal; counted without a branch, since which class it is
- * cannot be predicted.
- */
-static int class_of(const FrbCompactInfo *info, uint32_t ordinal) {
-    int n = 1;
-    for (int k = 2; k <= info->max_nodes; k++) n += ordinal >= info->class_start[k];
-    return ordinal - info->class_start[n] < info->class_count[n] ? n : 0;
 }
 
 static void write_header(const FrbCompactInfo *info, uint8_t *h) {
     memset(h, 0, FRB_COMPACT_INDEX_OFFSET);
-    for (int n = 1; n <= FRB_COMPACT_CLASSES; n++) {
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) {
         uint8_t *row = h + FRB_HEADER_BYTES + (size_t)(n - 1) * FRB_COMPACT_ROW_BYTES;
         put32(row + D_COUNT, info->class_count[n]);
-        put32(row + D_START, info->class_start[n]);
+        row[D_BITS] = (uint8_t)info->class_bits[n];
+        row[D_KIND] = n > FRB_COMPACT_PLAIN_NODES;
         put64(row + D_OFFSET, info->class_offset[n]);
-        put32(row + D_STRIDE, info->class_stride[n]);
-        row[D_LINK_BITS] = (uint8_t)frb_compact_link_bits(n);
+        put64(row + D_BYTES, info->class_bytes[n]);
         put32(row + D_CRC, info->class_crc[n]);
     }
     memcpy(h + C_MAGIC, frb_magic, sizeof frb_magic);
     put16(h + C_VERSION, FRB_FORMAT_COMPACT);
     put16(h + C_HEADER_SIZE, FRB_HEADER_BYTES);
     h[C_BITS] = (uint8_t)info->bits;
-    h[C_CAPACITY] = FRB_COMPACT_CLASSES;
-    h[C_INDEX_BYTES] = (uint8_t)info->index_bytes;
+    h[C_CAPACITY] = FRB_COMPACT_MAX_NODES;
+    h[C_BLOCK_SHIFT] = FRB_COMPACT_BLOCK_SHIFT;
     h[C_ENTRY_SIZE] = 0;
     put32(h + C_COUNT, info->count);
     put32(h + C_FLAGS, FRB_FLAG_COMPLETE);
@@ -270,14 +249,15 @@ static void write_header(const FrbCompactInfo *info, uint8_t *h) {
     h[C_MAX_WITNESS] = (uint8_t)info->max_nodes;
     put16(h + C_SOURCE_VERSION, (unsigned)info->source_version);
     put32(h + C_DIRECTORY_CRC,
-          frb_crc32(0, h + FRB_HEADER_BYTES, FRB_COMPACT_CLASSES * FRB_COMPACT_ROW_BYTES));
+          frb_crc32(0, h + FRB_HEADER_BYTES, FRB_COMPACT_MAX_NODES * FRB_COMPACT_ROW_BYTES));
     put32(h + C_INDEX_CRC, info->index_crc);
     put32(h + C_SOURCE_CRC, info->source_table_crc);
     put64(h + C_FILE_BYTES, info->file_bytes);
+    put32(h + C_OTHER_REVS, info->other_revs);
     put32(h + C_HEADER_CRC, frb_crc32(0, h, C_HEADER_CRC));
 }
 
-/* The first 1056 bytes of a file: everything in them checked. */
+/* The first 448 bytes of a file: everything in them checked. */
 static FrbError parse_header(const uint8_t *h, size_t available, FrbCompactInfo *info) {
     const uint8_t *dir = h + FRB_HEADER_BYTES;
     memset(info, 0, sizeof *info);
@@ -288,20 +268,20 @@ static FrbError parse_header(const uint8_t *h, size_t available, FrbCompactInfo 
     if (available < FRB_COMPACT_INDEX_OFFSET) return FRB_ERR_SIZE;
     if (get16(h + C_HEADER_SIZE) != FRB_HEADER_BYTES) return FRB_ERR_HEADER;
     if (get32(h + C_HEADER_CRC) != frb_crc32(0, h, C_HEADER_CRC)) return FRB_ERR_HEADER;
-    if (get32(h + C_DIRECTORY_CRC) != frb_crc32(0, dir, FRB_COMPACT_CLASSES * FRB_COMPACT_ROW_BYTES))
+    if (h[C_CAPACITY] != FRB_COMPACT_MAX_NODES || h[C_BLOCK_SHIFT] != FRB_COMPACT_BLOCK_SHIFT || h[C_ENTRY_SIZE] != 0)
+        return FRB_ERR_HEADER; /* the draft layout, among others: 31 and the bytes of an ordinal there */
+    if (get32(h + C_DIRECTORY_CRC) != frb_crc32(0, dir, FRB_COMPACT_MAX_NODES * FRB_COMPACT_ROW_BYTES))
         return FRB_ERR_HEADER;
-    if (h[C_CAPACITY] != FRB_COMPACT_CLASSES || h[C_ENTRY_SIZE] != 0) return FRB_ERR_HEADER;
-    if (get32(h + C_RESERVED) != 0) return FRB_ERR_HEADER;
 
-    for (int n = 1; n <= FRB_COMPACT_CLASSES; n++)
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++)
         info->class_count[n] = get32(dir + (size_t)(n - 1) * FRB_COMPACT_ROW_BYTES + D_COUNT);
     /* Everything else in the directory follows from the counts. */
-    if (frb_compact_layout(info, h[C_BITS], h[C_INDEX_BYTES]) != FRB_OK) return FRB_ERR_HEADER;
-    for (int n = 1; n <= FRB_COMPACT_CLASSES; n++) {
+    if (frb_compact_layout(info, h[C_BITS]) != FRB_OK) return FRB_ERR_HEADER;
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) {
         const uint8_t *row = dir + (size_t)(n - 1) * FRB_COMPACT_ROW_BYTES;
-        if (get32(row + D_START) != info->class_start[n] || get64(row + D_OFFSET) != info->class_offset[n] ||
-            get32(row + D_STRIDE) != info->class_stride[n] || row[D_LINK_BITS] != frb_compact_link_bits(n) ||
-            row[D_RESERVED1] || row[D_RESERVED1 + 1] || row[D_RESERVED1 + 2] || get32(row + D_RESERVED2) != 0)
+        if (row[D_BITS] != info->class_bits[n] || row[D_KIND] != (n > FRB_COMPACT_PLAIN_NODES) ||
+            row[D_RESERVED1] || row[D_RESERVED1 + 1] || get64(row + D_OFFSET) != info->class_offset[n] ||
+            get64(row + D_BYTES) != info->class_bytes[n] || get32(row + D_RESERVED2) != 0)
             return FRB_ERR_HEADER;
         info->class_crc[n] = get32(row + D_CRC);
         if (info->class_count[n] == 0 && info->class_crc[n] != 0) return FRB_ERR_HEADER;
@@ -318,6 +298,8 @@ static FrbError parse_header(const uint8_t *h, size_t available, FrbCompactInfo 
     info->directory_crc = get32(h + C_DIRECTORY_CRC);
     info->index_crc = get32(h + C_INDEX_CRC);
     info->source_table_crc = get32(h + C_SOURCE_CRC);
+    info->other_revs = get32(h + C_OTHER_REVS);
+    if (info->other_revs > info->count) return FRB_ERR_HEADER;
     return FRB_OK;
 }
 
@@ -330,6 +312,18 @@ int frb_file_is_compact(const char *path) {
     fclose(f);
     if (got != sizeof h || memcmp(h, frb_magic, sizeof frb_magic) != 0) return -1;
     return get16(h + C_VERSION) == FRB_FORMAT_COMPACT;
+}
+
+int frb_compact_file_is_draft(const char *path) {
+    uint8_t h[16];
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    size_t got;
+    if (!f) return 0;
+    got = fread(h, 1, sizeof h, f);
+    fclose(f);
+    return got == sizeof h && memcmp(h, frb_magic, sizeof frb_magic) == 0 &&
+           get16(h + C_VERSION) == FRB_FORMAT_COMPACT && h[C_CAPACITY] == DRAFT_CAPACITY &&
+           h[C_BLOCK_SHIFT] >= 1 && h[C_BLOCK_SHIFT] <= DRAFT_INDEX_BYTES_MAX && h[C_ENTRY_SIZE] == 0;
 }
 
 /* Open, read and check header and directory, check the length.  The caller closes. */
@@ -365,48 +359,6 @@ FrbError frb_compact_file_info(const char *path, FrbCompactInfo *info) {
     return e;
 }
 
-FrbError frb_compact_file_lookup(const char *path, int bits, uint32_t value, FrbCompactInfo *info,
-                                 RevGraph *g, uint32_t *extension) {
-    uint8_t buf[64]; /* the longest REV is 43 bytes */
-    FrbCompactInfo local;
-    RevGraph graph;
-    uint32_t ordinal, emitted;
-    FILE *f;
-    FrbError e;
-    int n;
-    if (!info) info = &local;
-    if (!g) g = &graph;
-    g->node_count = 0;
-    e = open_checked(path, info, &f);
-    if (e != FRB_OK) return e;
-    if (bits < 1 || bits > info->bits || value >= ((uint32_t)1 << bits)) {
-        fclose(f);
-        return FRB_ERR_ARG;
-    }
-    if (seek64(f, info->index_offset + index_place(bits, value) * (uint64_t)info->index_bytes) != 0 ||
-        fread(buf, 1, (size_t)info->index_bytes, f) != (size_t)info->index_bytes) {
-        fclose(f);
-        return FRB_ERR_IO;
-    }
-    ordinal = get_ordinal(buf, info->index_bytes);
-    n = class_of(info, ordinal);
-    if (!n) {
-        fclose(f);
-        return FRB_ERR_ENTRY;
-    }
-    if (seek64(f, info->class_offset[n] +
-                      (uint64_t)(ordinal - info->class_start[n]) * (uint64_t)info->class_stride[n]) != 0 ||
-        fread(buf, 1, info->class_stride[n], f) != info->class_stride[n])
-        e = FRB_ERR_IO;
-    fclose(f);
-    if (e == FRB_OK) e = frb_compact_unpack(buf, n, g);
-    if (e != FRB_OK) return e;
-    emitted = frb_graph_output(g, info->bits);
-    if ((emitted >> (info->bits - bits)) != value) return FRB_ERR_OUTPUT;
-    if (extension) *extension = emitted;
-    return FRB_OK;
-}
-
 /* ---- a compact Bomb in use ----------------------------------------------- */
 
 struct FrbCompact {
@@ -415,17 +367,11 @@ struct FrbCompact {
     void *mapping;       /* not NULL: base is a mapping of this length */
     size_t mapping_bytes;
     uint8_t *heap;       /* else the copy that base points to */
+    /* into base, for the lookups */
+    const uint8_t *nav, *nodes, *blocks;
+    const uint8_t *classes[FRB_COMPACT_MAX_NODES + 1];
+    uint32_t mask; /* 2^L - 1 */
 };
-
-static uint32_t ordinal_at(const FrbCompact *b, uint64_t place) {
-    return get_ordinal(b->base + b->info.index_offset + place * (uint64_t)b->info.index_bytes,
-                       b->info.index_bytes);
-}
-
-static const uint8_t *graph_at(const FrbCompact *b, int n, uint32_t ordinal) {
-    return b->base + b->info.class_offset[n] +
-           (uint64_t)(ordinal - b->info.class_start[n]) * (uint64_t)b->info.class_stride[n];
-}
 
 void frb_compact_close(FrbCompact *b) {
     if (!b) return;
@@ -438,94 +384,11 @@ void frb_compact_close(FrbCompact *b) {
 
 const FrbCompactInfo *frb_compact_info(const FrbCompact *b) { return b ? &b->info : NULL; }
 
-uint32_t frb_compact_ordinal(const FrbCompact *b, int bits, uint32_t value) {
-    return ordinal_at(b, index_place(bits, value));
-}
-
-int frb_compact_nodes_of_ordinal(const FrbCompact *b, uint32_t ordinal) { return class_of(&b->info, ordinal); }
-
-int frb_compact_nodes(const FrbCompact *b, int bits, uint32_t value) {
-    return class_of(&b->info, ordinal_at(b, index_place(bits, value)));
-}
-
-FrbError frb_compact_graph(const FrbCompact *b, int bits, uint32_t value, RevGraph *g) {
-    uint32_t ordinal;
-    int n;
-    if (!b || !g || bits < 1 || bits > b->info.bits || value >= ((uint32_t)1 << bits)) return FRB_ERR_ARG;
-    ordinal = ordinal_at(b, index_place(bits, value));
-    n = class_of(&b->info, ordinal);
-    if (!n) return FRB_ERR_ENTRY;
-    return frb_compact_unpack(graph_at(b, n, ordinal), n, g);
-}
-
-static uint32_t crc_of(const uint8_t *p, uint64_t bytes) {
-    uint32_t crc = 0;
-    while (bytes) {
-        size_t now = bytes < (uint64_t)IO_CHUNK ? (size_t)bytes : (size_t)IO_CHUNK;
-        crc = frb_crc32(crc, p, now);
-        p += now;
-        bytes -= now;
-    }
-    return crc;
-}
-
-/* Everything after the header and directory. */
-static FrbError validate(const FrbCompact *b, uint32_t *bad_index) {
-    const FrbCompactInfo *info = &b->info;
-    uint32_t next[FRB_COMPACT_CLASSES + 1] = {0};
-    uint64_t index_end = info->index_offset + info->index_entries * (uint64_t)info->index_bytes;
-    int L = info->bits;
-    RevGraph g;
-
-    if (crc_of(b->base + info->index_offset, index_end - info->index_offset) != info->index_crc)
-        return FRB_ERR_CHECKSUM;
-    for (uint64_t at = index_end; at < info->pool_offset; at++)
-        if (b->base[at] != 0) return FRB_ERR_HEADER;
-    for (int n = 1; n <= FRB_COMPACT_CLASSES; n++)
-        if (crc_of(b->base + info->class_offset[n], (uint64_t)info->class_count[n] * info->class_stride[n]) !=
-            info->class_crc[n])
-            return FRB_ERR_CHECKSUM;
-
-    /*
-     * The leaves, in the order of the strings.  Within a class the ordinals
-     * go up with the string, so the next string of a class must have the
-     * next ordinal of that class: that is the order the format prescribes,
-     * and that every ordinal is used exactly once follows from it.
-     */
-    for (uint32_t t = 0;; t++) {
-        uint32_t ordinal = ordinal_at(b, index_place(L, t));
-        int n = class_of(info, ordinal);
-        FrbError e = FRB_OK;
-        if (!n || ordinal != info->class_start[n] + next[n]) e = FRB_ERR_ENTRY;
-        else if ((e = frb_compact_unpack(graph_at(b, n, ordinal), n, &g)) == FRB_OK &&
-                 frb_graph_output(&g, L) != t)
-            e = FRB_ERR_OUTPUT;
-        if (e != FRB_OK) {
-            if (bad_index) *bad_index = t;
-            return e;
-        }
-        next[n]++;
-        if (t == info->count - 1) break;
-    }
-    /* Every shorter string: the smaller of its two extensions by one bit. */
-    for (int bits = L - 1; bits >= 1; bits--) {
-        for (uint32_t v = 0; v < ((uint32_t)1 << bits); v++) {
-            uint32_t zero = ordinal_at(b, index_place(bits + 1, 2 * v));
-            uint32_t one = ordinal_at(b, index_place(bits + 1, 2 * v + 1));
-            if (ordinal_at(b, index_place(bits, v)) != (one < zero ? one : zero)) {
-                if (bad_index) *bad_index = v << (L - bits);
-                return FRB_ERR_ENTRY;
-            }
-        }
-    }
-    return FRB_OK;
-}
-
-FrbError frb_compact_open(const char *path, FrbCompact **bomb, uint32_t *bad_index) {
+/* Header and directory checked, the file in memory; nothing else looked at. */
+static FrbError load(const char *path, FrbCompact **bomb) {
     FrbCompact *b;
     FILE *f;
     FrbError e;
-    if (!bomb) return FRB_ERR_ARG;
     *bomb = NULL;
     b = calloc(1, sizeof *b);
     if (!b) return FRB_ERR_MEMORY;
@@ -549,7 +412,7 @@ FrbError frb_compact_open(const char *path, FrbCompact **bomb, uint32_t *bad_ind
         size_t bytes = (size_t)b->info.file_bytes;
         b->heap = malloc(bytes);
         if (!b->heap) e = FRB_ERR_MEMORY;
-        else if (seek64(f, 0) != 0) e = FRB_ERR_IO;
+        else if (seek_start(f) != 0) e = FRB_ERR_IO;
         for (size_t done = 0; e == FRB_OK && done < bytes;) {
             size_t now = bytes - done < (size_t)IO_CHUNK ? bytes - done : (size_t)IO_CHUNK;
             if (fread(b->heap + done, 1, now, f) != now) e = FRB_ERR_IO;
@@ -558,6 +421,280 @@ FrbError frb_compact_open(const char *path, FrbCompact **bomb, uint32_t *bad_ind
         b->base = b->heap;
     }
     fclose(f);
+    if (e != FRB_OK) {
+        frb_compact_close(b);
+        return e;
+    }
+    b->nav = b->base + b->info.nav_offset;
+    b->nodes = b->base + b->info.nodes_offset;
+    b->blocks = b->base + b->info.blocks_offset;
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) b->classes[n] = b->base + b->info.class_offset[n];
+    b->mask = b->info.count - 1u;
+    frb_topology_init(); /* before there can be a second thread asking */
+    *bomb = b;
+    return FRB_OK;
+}
+
+/* The navigation bit at a place: bit place % 8 of byte place / 8. */
+static inline unsigned nav_bit(const uint8_t *nav, uint64_t place) {
+    return (unsigned)(nav[place >> 3] >> (place & 7u)) & 1u;
+}
+
+/* The node count of stored string s: the low half of byte s / 2 for an even s, the high half for an odd one. */
+static inline unsigned nodes_at(const uint8_t *nodes, uint32_t s) {
+    return (unsigned)(nodes[s >> 1] >> (4u * (s & 1u))) & 15u;
+}
+
+/*
+ * The L-bit string that answers the string of `bits` bits (1..L).
+ *
+ * The bit of a stored string of k bits is at place 2^(k-1) + its value: the
+ * strings that start with 0, without that 0, as the nodes of a binary tree
+ * in level order.  A string that starts with 1 takes the way of its
+ * complement and the complement of where that leads.
+ */
+static inline uint32_t leaf_of(const FrbCompact *b, int bits, uint32_t value) {
+    int L = b->info.bits;
+    uint32_t mirror = 0u - ((value >> (bits - 1)) & 1u);
+    uint64_t place;
+    value ^= mirror & (uint32_t)((((uint64_t)1 << bits) - 1u));
+    place = ((uint64_t)1 << (bits - 1)) + value;
+    for (int k = bits; k < L; k++) place = 2 * place + nav_bit(b->nav, place);
+    return (uint32_t)(place - ((uint64_t)1 << (L - 1))) ^ (mirror & b->mask);
+}
+
+/* How many of the first `limit` (0..16) of the sixteen node counts in a word are the one of the pattern. */
+static inline uint32_t count_equal(uint64_t word, uint64_t pattern, unsigned limit) {
+    uint64_t x = word ^ pattern; /* a node count that is the one: 0000 */
+    uint64_t equal = ~(x | (x >> 1) | (x >> 2) | (x >> 3)) & 0x1111111111111111ull;
+    if (limit < 16) equal &= ((uint64_t)1 << (4 * limit)) - 1u;
+    equal = (equal + (equal >> 4)) & 0x0F0F0F0F0F0F0F0Full; /* two a byte, then the eight bytes added up */
+    return (uint32_t)((equal * 0x0101010101010101ull) >> 56);
+}
+
+/* How many stored strings before s have n nodes: the count kept for its
+ * block of 256 plus those before it within the block. */
+static inline uint32_t rank_of(const FrbCompact *b, uint32_t s, unsigned n) {
+    uint32_t block = s >> FRB_COMPACT_BLOCK_SHIFT;
+    uint32_t r = get32(b->blocks + ((size_t)block * (size_t)b->info.max_nodes + (n - 1u)) * 4u);
+    const uint8_t *p = b->nodes + (size_t)block * (BLOCK / 2);
+    uint64_t pattern = 0x1111111111111111ull * n;
+    unsigned words = (s & (BLOCK - 1u)) >> 4;
+    for (unsigned i = 0; i < words; i++) r += count_equal(get64(p + 8u * i), pattern, 16);
+    return r + count_equal(get64(p + 8u * words), pattern, s & 15u);
+}
+
+/* The REV of stored string s (which starts with 0), numbered and colored. */
+static FrbError stored_rev(const FrbCompact *b, uint32_t s, FrbTopology *t, uint32_t *colors) {
+    unsigned n = nodes_at(b->nodes, s);
+    uint64_t record;
+    uint32_t place;
+    if (n < 1 || n > (unsigned)b->info.max_nodes) return FRB_ERR_ENTRY;
+    place = rank_of(b, s, n);
+    if (place >= b->info.class_count[n]) return FRB_ERR_ENTRY;
+    record = record_at(b->classes[n], place, b->info.class_bits[n]);
+    if (n <= FRB_COMPACT_PLAIN_NODES) {
+        if (!plain_unpack(record, (int)n, t, colors)) return FRB_ERR_ENTRY;
+    } else {
+        FrbTopology canonical;
+        uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+        uint32_t found = 0;
+        if (!frb_topology_unrank((int)n, record, &canonical)) return FRB_ERR_ENTRY;
+        /* the colors, and with them the order in which the machine reaches the nodes: the numbering */
+        if (frb_topology_find_colors(&canonical, s, b->info.bits, &found, order) != (int)n) return FRB_ERR_OUTPUT;
+        frb_topology_renumber(&canonical, found, order, t, colors);
+    }
+    return FRB_OK;
+}
+
+/* The REV of any string of L bits. */
+static FrbError rev_of_leaf(const FrbCompact *b, uint32_t leaf, RevGraph *g) {
+    FrbTopology t;
+    uint32_t colors = 0, flip = leaf >> (b->info.bits - 1);
+    FrbError e = stored_rev(b, flip ? leaf ^ b->mask : leaf, &t, &colors);
+    if (e != FRB_OK) {
+        g->node_count = 0;
+        return e;
+    }
+    if (flip) { /* the complement: the other colors, the two links of every node exchanged */
+        for (int i = 0; i < t.n; i++) {
+            uint8_t l0 = t.link[0][i];
+            t.link[0][i] = t.link[1][i];
+            t.link[1][i] = l0;
+        }
+        colors ^= (1u << t.n) - 1u;
+    }
+    frb_topology_to_graph(&t, colors, g);
+    return FRB_OK;
+}
+
+uint32_t frb_compact_extension(const FrbCompact *b, int bits, uint32_t value) { return leaf_of(b, bits, value); }
+
+int frb_compact_nodes(const FrbCompact *b, int bits, uint32_t value) {
+    uint32_t leaf = leaf_of(b, bits, value);
+    uint32_t flip = 0u - (leaf >> (b->info.bits - 1));
+    return (int)nodes_at(b->nodes, leaf ^ (flip & b->mask));
+}
+
+FrbError frb_compact_graph(const FrbCompact *b, int bits, uint32_t value, RevGraph *g) {
+    if (!b || !g || bits < 1 || bits > b->info.bits || value > (b->mask >> (b->info.bits - bits))) return FRB_ERR_ARG;
+    return rev_of_leaf(b, leaf_of(b, bits, value), g);
+}
+
+int frb_compact_compare(const FrbCompact *b, int bits, uint32_t value, int nodes[2]) {
+    int n0, n1;
+    if (!b || bits < 0 || bits >= b->info.bits || (uint64_t)value >> bits) return -1;
+    n0 = frb_compact_nodes(b, bits + 1, 2 * value);
+    n1 = frb_compact_nodes(b, bits + 1, 2 * value + 1);
+    if (nodes) nodes[0] = n0, nodes[1] = n1;
+    return n0 < n1 ? 0 : n1 < n0 ? 1 : FRB_COMPACT_TIE;
+}
+
+FrbError frb_compact_file_lookup(const char *path, int bits, uint32_t value, FrbCompactInfo *info,
+                                 RevGraph *g, uint32_t *extension) {
+    FrbCompact *b = NULL;
+    RevGraph graph;
+    uint32_t leaf;
+    FrbError e;
+    if (!g) g = &graph;
+    g->node_count = 0;
+    e = load(path, &b);
+    if (e != FRB_OK) {
+        if (info) memset(info, 0, sizeof *info);
+        return e;
+    }
+    if (info) *info = b->info;
+    if (bits < 1 || bits > b->info.bits || value > (b->mask >> (b->info.bits - bits))) {
+        frb_compact_close(b);
+        return FRB_ERR_ARG;
+    }
+    leaf = leaf_of(b, bits, value);
+    e = rev_of_leaf(b, leaf, g);
+    if (e == FRB_OK && ((leaf >> (b->info.bits - bits)) != value || frb_graph_output(g, b->info.bits) != leaf))
+        e = FRB_ERR_OUTPUT; /* not an extension of the string, or not the string of its REV */
+    if (e == FRB_OK && extension) *extension = leaf;
+    frb_compact_close(b);
+    return e;
+}
+
+FrbError frb_compact_file_compare(const char *path, int bits, uint32_t value, FrbCompactInfo *info, int *which,
+                                  int nodes[2]) {
+    FrbCompact *b = NULL;
+    int counts[2] = {0, 0}, answer;
+    FrbError e;
+    if (!which) return FRB_ERR_ARG;
+    e = load(path, &b);
+    if (e != FRB_OK) {
+        if (info) memset(info, 0, sizeof *info);
+        return e;
+    }
+    if (info) *info = b->info;
+    answer = frb_compact_compare(b, bits, value, counts);
+    if (answer < 0) e = FRB_ERR_ARG;
+    else if (counts[0] < 1 || counts[0] > b->info.max_nodes || counts[1] < 1 || counts[1] > b->info.max_nodes)
+        e = FRB_ERR_ENTRY; /* nothing was validated: a node count that is none */
+    if (e == FRB_OK) {
+        *which = answer;
+        if (nodes) nodes[0] = counts[0], nodes[1] = counts[1];
+    }
+    frb_compact_close(b);
+    return e;
+}
+
+static uint32_t crc_of(const uint8_t *p, uint64_t bytes) {
+    uint32_t crc = 0;
+    while (bytes) {
+        size_t now = bytes < (uint64_t)IO_CHUNK ? (size_t)bytes : (size_t)IO_CHUNK;
+        crc = frb_crc32(crc, p, now);
+        p += now;
+        bytes -= now;
+    }
+    return crc;
+}
+
+static int all_zero(const uint8_t *p, uint64_t bytes) {
+    for (uint64_t i = 0; i < bytes; i++)
+        if (p[i]) return 0;
+    return 1;
+}
+
+/* Everything after the header and directory. */
+static FrbError validate(const FrbCompact *b, uint32_t *bad_index) {
+    const FrbCompactInfo *info = &b->info;
+    uint32_t running[FRB_COMPACT_MAX_NODES + 1] = {0};
+    uint8_t waiting[FRB_MAX_BITS + 1]; /* [k]: fewest nodes under a string of k bits after the first that ends in 0 */
+    int L = info->bits, top = L - 1;   /* the stored strings without their first bit, 0, have L-1 bits */
+
+    if (crc_of(b->nav, info->class_offset[1] - info->nav_offset) != info->index_crc) return FRB_ERR_CHECKSUM;
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++)
+        if (crc_of(b->classes[n], info->class_bytes[n]) != info->class_crc[n]) return FRB_ERR_CHECKSUM;
+
+    /* What no string stands on is zero: place 0 of the navigation bits and the places after the
+     * last, the node counts after the last, the rows after the last, the bits after the last
+     * record of a class, the last 8 bytes. */
+    if (nav_bit(b->nav, 0)) return FRB_ERR_HEADER;
+    for (uint64_t place = info->stored; place < info->nav_bytes * 8u; place++)
+        if (nav_bit(b->nav, place)) return FRB_ERR_HEADER;
+    for (uint64_t s = info->stored; s < info->nodes_bytes * 2u; s++)
+        if (nodes_at(b->nodes, (uint32_t)s)) return FRB_ERR_HEADER;
+    {
+        uint64_t used = (uint64_t)info->block_rows * (uint64_t)info->max_nodes * 4u;
+        if (!all_zero(b->blocks + used, info->blocks_bytes - used)) return FRB_ERR_HEADER;
+    }
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) {
+        uint64_t used = (uint64_t)info->class_count[n] * info->class_bits[n];
+        if ((used & 7u) && (b->classes[n][used >> 3] >> (used & 7u)) != 0) return FRB_ERR_HEADER;
+        if (!all_zero(b->classes[n] + (used + 7u) / 8u, info->class_bytes[n] - (used + 7u) / 8u)) return FRB_ERR_HEADER;
+    }
+    if (!all_zero(b->base + info->file_bytes - TAIL_BYTES, TAIL_BYTES)) return FRB_ERR_HEADER;
+
+    /* The stored strings in order. */
+    for (uint32_t s = 0; s < info->stored; s++) {
+        unsigned n = nodes_at(b->nodes, s);
+        FrbTopology t;
+        uint32_t colors = 0, v = s;
+        uint8_t least;
+        FrbError e = FRB_OK;
+        int k;
+        if (n < 1 || n > (unsigned)info->max_nodes) e = FRB_ERR_ENTRY;
+        /* the row of its block: the strings of each node count so far */
+        for (int c = 1; e == FRB_OK && (s & (BLOCK - 1u)) == 0 && c <= info->max_nodes; c++)
+            if (get32(b->blocks + ((size_t)(s >> FRB_COMPACT_BLOCK_SHIFT) * (size_t)info->max_nodes + (size_t)(c - 1)) * 4u) !=
+                running[c])
+                e = FRB_ERR_ENTRY;
+        /* its REV: decoded, its colors found or, where they are stored, the REV run */
+        if (e == FRB_OK) e = stored_rev(b, s, &t, &colors);
+        if (e == FRB_OK && frb_topology_output(&t, colors, L) != s) e = FRB_ERR_OUTPUT;
+        if (e != FRB_OK) {
+            if (bad_index) *bad_index = s;
+            return e;
+        }
+        running[n]++;
+        /* A string that ends in 1 closes the strings it is the last extension of: for each, the
+         * bit says whether the half that ends in 1 needs fewer nodes than the half that waited. */
+        least = (uint8_t)n;
+        for (k = top; k > 0 && (v & 1u); k--) {
+            uint8_t zero = waiting[k];
+            v >>= 1;
+            if (nav_bit(b->nav, ((uint64_t)1 << (k - 1)) + v) != (unsigned)(least < zero)) {
+                if (bad_index) *bad_index = v << (top - (k - 1));
+                return FRB_ERR_ENTRY;
+            }
+            if (zero < least) least = zero;
+        }
+        waiting[k] = least;
+    }
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++)
+        if (running[n] != info->class_count[n]) return FRB_ERR_SUMMARY;
+    return FRB_OK;
+}
+
+FrbError frb_compact_open(const char *path, FrbCompact **bomb, uint32_t *bad_index) {
+    FrbCompact *b;
+    FrbError e;
+    if (!bomb) return FRB_ERR_ARG;
+    *bomb = NULL;
+    e = load(path, &b);
     if (e == FRB_OK) e = validate(b, bad_index);
     if (e != FRB_OK) {
         frb_compact_close(b);
@@ -567,73 +704,103 @@ FrbError frb_compact_open(const char *path, FrbCompact **bomb, uint32_t *bad_ind
     return FRB_OK;
 }
 
-FrbError frb_compact_check_symmetry(const FrbCompact *b, uint32_t *bad_index) {
-    uint32_t mask;
-    int L;
-    if (!b) return FRB_ERR_ARG;
-    L = b->info.bits;
-    mask = b->info.count - 1u;
-    for (uint32_t t = 0;; t++) {
-        RevGraph g, c;
-        FrbError e = frb_compact_graph(b, L, t, &g);
-        if (e == FRB_OK && frb_compact_nodes(b, L, t ^ mask) != g.node_count) e = FRB_ERR_EVIDENCE;
-        if (e == FRB_OK) {
-            frb_graph_complement(&g, &c);
-            if (rev_graph_validate(&c) != REV_OK || frb_graph_output(&c, L) != (t ^ mask)) e = FRB_ERR_EVIDENCE;
-        }
-        if (e != FRB_OK) {
-            if (bad_index) *bad_index = t;
-            return e;
-        }
-        if (t == mask) break;
-    }
-    return FRB_OK;
-}
-
 /* ---- to and from the fixed-width formats ---------------------------------- */
 
-FrbError frb_compact_equals_table(const FrbCompact *b, const FrbTable *table, uint32_t *bad_index) {
-    uint32_t waiting[FRB_MAX_BITS + 1]; /* [k]: the choice of a string of k bits ending in 0 */
+static int same_graph(const RevGraph *a, const RevGraph *b) {
+    if (a->node_count != b->node_count) return 0;
+    for (int i = 0; i < a->node_count; i++)
+        if (a->nodes[i].color != b->nodes[i].color || a->nodes[i].links[0] != b->nodes[i].links[0] ||
+            a->nodes[i].links[1] != b->nodes[i].links[1])
+            return 0;
+    return 1;
+}
+
+/* Bit L+1 of a REV of at most 12 nodes. */
+static unsigned next_bit(const RevGraph *g, int L) {
+    FrbTopology t;
+    uint32_t colors = 0;
+    if (!frb_topology_from_graph(g, &t, &colors)) return 0;
+    return frb_topology_output(&t, colors, L + 1) & 1u;
+}
+
+FrbError frb_compact_against_table(const FrbCompact *b, const FrbTable *table, FrbCompactDifference *difference,
+                                   uint32_t *bad_index) {
+    /* [k]: for the string of k bits ending in 0 that waits for its other half, the lowest and the
+     * highest of its extensions with the fewest nodes */
+    uint32_t waiting_low[FRB_MAX_BITS + 1], waiting_high[FRB_MAX_BITS + 1];
+    FrbCompactDifference d;
     int L;
+    memset(&d, 0, sizeof d);
+    if (difference) *difference = d;
     if (!b || !table || !table->entries || !table->format || table->bits != b->info.bits) return FRB_ERR_ARG;
     L = b->info.bits;
     for (uint32_t t = 0;; t++) {
-        /* String for string: the REV the table has. */
         RevGraph mine, theirs;
         FrbStatus status;
-        uint32_t chosen = t, v = t;
-        int bits;
-        int same = frb_entry_decode_as(table->format, frb_table_entry(table, t), &status, &theirs) == FRB_OK &&
-                   status == FRB_MINIMAL && frb_compact_graph(b, L, t, &mine) == FRB_OK &&
-                   mine.node_count == theirs.node_count;
-        for (int i = 0; same && i < mine.node_count; i++)
-            same = mine.nodes[i].color == theirs.nodes[i].color &&
-                   mine.nodes[i].links[0] == theirs.nodes[i].links[0] &&
-                   mine.nodes[i].links[1] == theirs.nodes[i].links[1];
-        if (!same) {
+        uint32_t low = t, high = t, v = t;
+        int bits, nodes[2];
+        /* String for string: the node count of the table, and a REV of that many nodes that emits it. */
+        int ok = frb_entry_decode_as(table->format, frb_table_entry(table, t), &status, &theirs) == FRB_OK &&
+                 status == FRB_MINIMAL && frb_compact_nodes(b, L, t) == theirs.node_count &&
+                 frb_compact_graph(b, L, t, &mine) == FRB_OK && mine.node_count == theirs.node_count &&
+                 rev_graph_validate(&mine) == REV_OK && frb_graph_output(&mine, L) == t;
+        if (!ok) {
             if (bad_index) *bad_index = t;
             return FRB_ERR_EVIDENCE;
         }
+        if (!same_graph(&mine, &theirs)) {
+            d.other_revs++;
+            if (L < 32 && next_bit(&mine, L) != next_bit(&theirs, L)) d.other_next_bit++;
+        }
         /*
-         * Shorter strings, worked out from the table alone: each is answered
-         * by its extension with the fewest nodes, the lowest index among
-         * equals.  A string ending in 1 closes the strings it is the last
-         * extension of: for each, the choice of the half ending in 0, which
-         * has waited, against the choice of the half that just closed.
+         * Shorter strings, worked out from the table alone.  A string ending
+         * in 1 closes the strings it is the last extension of: for each, the
+         * choices of the half ending in 0, which has waited, against those of
+         * the half that just closed.
          */
         for (bits = L; bits > 1 && (v & 1u); bits--) {
-            uint32_t zero = waiting[bits];
-            if (frb_table_nodes(table, chosen) >= frb_table_nodes(table, zero)) chosen = zero;
-            v >>= 1;
-            if (frb_compact_ordinal(b, bits - 1, v) != frb_compact_ordinal(b, L, chosen)) {
-                if (bad_index) *bad_index = v << (L - bits + 1);
+            uint32_t zero_low = waiting_low[bits], zero_high = waiting_high[bits], answer;
+            int n0 = frb_table_nodes(table, zero_low), n1 = frb_table_nodes(table, low), least = n0 < n1 ? n0 : n1;
+            if (n0 < n1) low = zero_low, high = zero_high;
+            else if (n0 == n1) low = zero_low; /* high stays: the highest under the half ending in 1 */
+            v >>= 1;                           /* the string of bits-1 bits */
+            answer = frb_compact_extension(b, bits - 1, v);
+            /* one of its extensions with the fewest nodes; the lowest, or for a string that starts
+             * with 1 the highest; and the comparison of its two halves */
+            if ((answer >> (L - (bits - 1))) != v || frb_table_nodes(table, answer) != least ||
+                frb_compact_nodes(b, bits - 1, v) != least || answer != (((v >> (bits - 2)) & 1u) ? high : low) ||
+                frb_compact_compare(b, bits - 1, v, nodes) != (n0 < n1 ? 0 : n1 < n0 ? 1 : FRB_COMPACT_TIE) ||
+                nodes[0] != n0 || nodes[1] != n1) {
+                if (bad_index) *bad_index = v << (L - (bits - 1));
                 return FRB_ERR_EVIDENCE;
             }
+            if (answer != low) d.other_extension++;
         }
-        waiting[bits] = chosen; /* a string of that many bits, ending in 0 unless it is the last of all */
-        if (t == table->count - 1) break;
+        if (t == b->mask) { /* the last string closes "1"; "0" waits: the two extensions of the empty string */
+            int n0 = L > 1 ? frb_table_nodes(table, waiting_low[1]) : frb_table_nodes(table, 0);
+            int n1 = frb_table_nodes(table, low);
+            if (frb_compact_compare(b, 0, 0, nodes) != (n0 < n1 ? 0 : n1 < n0 ? 1 : FRB_COMPACT_TIE) ||
+                nodes[0] != n0 || nodes[1] != n1) {
+                if (bad_index) *bad_index = 0;
+                return FRB_ERR_EVIDENCE;
+            }
+            break;
+        }
+        waiting_low[bits] = low; /* a string of that many bits, ending in 0 */
+        waiting_high[bits] = high;
     }
+    if (difference) *difference = d;
     return FRB_OK;
+}
+
+FrbError frb_compact_equals_table(const FrbCompact *b, const FrbTable *table, uint32_t *bad_index) {
+    FrbCompactDifference d;
+    FrbError e = frb_compact_against_table(b, table, &d, bad_index);
+    if (e == FRB_OK && d.other_revs != b->info.other_revs) {
+        if (bad_index) *bad_index = 0;
+        e = FRB_ERR_EVIDENCE; /* the header counts other REVs than there are */
+    }
+    return e;
 }
 
 static const FrbFormat *format_of(const FrbCompact *b, const FrbFormat *format) {
@@ -700,11 +867,13 @@ FrbError frb_compact_expand(const FrbCompact *b, const FrbFormat *format, const 
     }
     e = frb_writer_finish(writer, &summary, &crc);
     if (e != FRB_OK) return e;
-    /* What is on disk now, read as any reader would, against this Bomb. */
+    /* What is on disk now, read as any reader would, against this Bomb: every REV the one it returns. */
     e = frb_file_read(path, &back, &info, NULL);
     if (e == FRB_OK) {
+        FrbCompactDifference d;
         if (!info.complete || info.table_crc != crc || info.version != format->version) e = FRB_ERR_EVIDENCE;
-        else e = frb_compact_equals_table(b, &back, NULL);
+        else e = frb_compact_against_table(b, &back, &d, NULL);
+        if (e == FRB_OK && d.other_revs != 0) e = FRB_ERR_EVIDENCE;
         frb_table_destroy(&back);
     }
     if (e != FRB_OK) {
@@ -763,7 +932,7 @@ static FrbError image_close(Image *img, int keep) {
     }
 #endif
     if (!img->mapped && keep) {
-        ok = seek64(img->f, 0) == 0;
+        ok = seek_start(img->f) == 0;
         for (size_t done = 0; ok && done < img->size;) {
             size_t now = img->size - done < (size_t)IO_CHUNK ? img->size - done : (size_t)IO_CHUNK;
             ok = fwrite(img->bytes + done, 1, now, img->f) == now;
@@ -781,74 +950,129 @@ static FrbError image_close(Image *img, int keep) {
     return ok ? FRB_OK : FRB_ERR_IO;
 }
 
-FrbError frb_compact_write(const char *path, const FrbTable *table, int source_version,
-                           uint32_t source_table_crc, int index_bytes) {
-    uint32_t next[FRB_COMPACT_CLASSES + 1] = {0};
+/* One entry of the table as a graph and as links and colors: a certified minimum of at most 12 nodes. */
+static FrbError table_rev(const FrbTable *table, uint32_t index, RevGraph *g, FrbTopology *t, uint32_t *colors) {
+    FrbStatus status;
+    FrbError e = frb_entry_decode_as(table->format, frb_table_entry(table, index), &status, g);
+    if (e != FRB_OK) return e;
+    if (status != FRB_MINIMAL) return FRB_ERR_INCOMPLETE;
+    return frb_topology_from_graph(g, t, colors) ? FRB_OK : FRB_ERR_CAPACITY;
+}
+
+FrbError frb_compact_write(const char *path, const FrbTable *table, int source_version, uint32_t source_table_crc) {
+    uint32_t running[FRB_COMPACT_MAX_NODES + 1] = {0}, mask, others = 0;
+    uint8_t waiting[FRB_MAX_BITS + 1];
+    uint8_t *nav, *nodes, *blocks;
     FrbCompactInfo info;
     FrbCompact *check = NULL;
     FrbSummary summary;
     Image img;
     char *tmp;
-    size_t n;
-    int L;
+    size_t length;
+    int L, top;
     FrbError e;
 
     if (!path || !table || !table->entries || !table->format) return FRB_ERR_ARG;
     e = frb_table_validate(table, &summary, NULL); /* every witness run */
     if (e != FRB_OK) return e;
     if (!summary.complete) return FRB_ERR_INCOMPLETE;
+    for (int k = FRB_COMPACT_MAX_NODES + 1; k <= FRB_MAX_NODES; k++)
+        if (summary.minimal_by_nodes[k]) return FRB_ERR_CAPACITY;
     L = table->bits;
+    top = L - 1;
+    mask = table->count - 1u;
+    frb_topology_init();
+
+    /* The classes of the half that is stored; and the two strings of a pair need the same. */
     memset(&info, 0, sizeof info);
-    for (int k = 1; k <= FRB_MAX_NODES && k <= FRB_COMPACT_CLASSES; k++)
-        info.class_count[k] = summary.minimal_by_nodes[k];
-    e = frb_compact_layout(&info, L, index_bytes);
+    for (uint32_t s = 0; s < table->count / 2; s++) {
+        int n = frb_table_nodes(table, s);
+        if (n != frb_table_nodes(table, s ^ mask)) return FRB_ERR_EVIDENCE;
+        info.class_count[n]++;
+    }
+    e = frb_compact_layout(&info, L);
     if (e != FRB_OK) return e;
     info.source_version = source_version;
     info.source_table_crc = source_table_crc;
 
-    n = strlen(path);
-    tmp = malloc(n + 5);
+    length = strlen(path);
+    tmp = malloc(length + 5);
     if (!tmp) return FRB_ERR_MEMORY;
-    memcpy(tmp, path, n);
-    memcpy(tmp + n, ".tmp", 5);
+    memcpy(tmp, path, length);
+    memcpy(tmp + length, ".tmp", 5);
     e = image_open(&img, tmp, info.file_bytes);
     if (e != FRB_OK) {
         free(tmp);
         return e;
     }
+    nav = img.bytes + info.nav_offset;
+    nodes = img.bytes + info.nodes_offset;
+    blocks = img.bytes + info.blocks_offset;
 
-    /* The strings in order: each takes the next ordinal of its class, so
-     * every class fills from its start and the index from its start. */
-    for (uint32_t t = 0; e == FRB_OK; t++) {
-        RevGraph g;
-        FrbStatus status;
-        e = frb_entry_decode_as(table->format, frb_table_entry(table, t), &status, &g);
-        if (e == FRB_OK) {
-            int k = g.node_count;
-            uint32_t ordinal = info.class_start[k] + next[k]++;
-            put_ordinal(img.bytes + info.index_offset + index_place(L, t) * (uint64_t)info.index_bytes,
-                        info.index_bytes, ordinal);
-            e = frb_compact_pack(&g, img.bytes + info.class_offset[k] +
-                                         (uint64_t)(ordinal - info.class_start[k]) * info.class_stride[k]);
+    /* The stored strings in order: each takes the next place of its class. */
+    for (uint32_t s = 0; e == FRB_OK && s < info.stored; s++) {
+        RevGraph g, twin, returned, mirrored;
+        FrbTopology t, back;
+        uint32_t colors = 0, back_colors = 0, v = s;
+        uint64_t record;
+        uint8_t least;
+        int n, k;
+        if ((s & (BLOCK - 1u)) == 0)
+            for (int c = 1; c <= info.max_nodes; c++)
+                put32(blocks + ((size_t)(s >> FRB_COMPACT_BLOCK_SHIFT) * (size_t)info.max_nodes + (size_t)(c - 1)) * 4u,
+                      running[c]);
+        e = table_rev(table, s, &g, &t, &colors);
+        if (e != FRB_OK) break;
+        n = t.n;
+        nodes[s >> 1] |= (uint8_t)(n << (4u * (s & 1u)));
+        if (n <= FRB_COMPACT_PLAIN_NODES) {
+            record = plain_pack(&t, colors);
+            back = t;
+            back_colors = colors;
+        } else {
+            /* The graph in its canonical numbering, as its rank; and what a reader makes of that:
+             * the colors its search finds and the numbering that goes with them.  Every node must
+             * be reached: a node the string does not need means the REV is no minimum. */
+            FrbTopology canonical;
+            uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+            uint32_t found = 0;
+            if (frb_topology_canonical(&t, &canonical, NULL) != n ||
+                frb_topology_find_colors(&canonical, s, L, &found, order) != n) {
+                e = FRB_ERR_EVIDENCE;
+                break;
+            }
+            record = frb_topology_rank(&canonical);
+            frb_topology_renumber(&canonical, found, order, &back, &back_colors);
         }
-        if (t == info.count - 1) break;
-    }
-    for (int bits = L - 1; e == FRB_OK && bits >= 1; bits--) {
-        for (uint32_t v = 0; v < ((uint32_t)1 << bits); v++) {
-            const uint8_t *index = img.bytes + info.index_offset;
-            uint32_t zero = get_ordinal(index + index_place(bits + 1, 2 * v) * (uint64_t)info.index_bytes,
-                                        info.index_bytes);
-            uint32_t one = get_ordinal(index + index_place(bits + 1, 2 * v + 1) * (uint64_t)info.index_bytes,
-                                       info.index_bytes);
-            put_ordinal(img.bytes + info.index_offset + index_place(bits, v) * (uint64_t)info.index_bytes,
-                        info.index_bytes, one < zero ? one : zero);
+        record_put(img.bytes + info.class_offset[n], running[n]++, info.class_bits[n], record);
+        /* Is that the REV of the table, and its complement the REV the table has for the complement? */
+        frb_topology_to_graph(&back, back_colors, &returned);
+        frb_graph_complement(&returned, &mirrored);
+        others += !same_graph(&returned, &g);
+        {
+            FrbTopology unused;
+            uint32_t unused_colors = 0;
+            e = table_rev(table, s ^ mask, &twin, &unused, &unused_colors);
+            if (e != FRB_OK) break;
         }
+        others += !same_graph(&mirrored, &twin);
+        /* the navigation bits of the strings this one closes */
+        least = (uint8_t)n;
+        for (k = top; k > 0 && (v & 1u); k--) {
+            uint8_t zero = waiting[k];
+            uint64_t place;
+            v >>= 1;
+            place = ((uint64_t)1 << (k - 1)) + v;
+            if (least < zero) nav[place >> 3] |= (uint8_t)(1u << (place & 7u));
+            else least = zero;
+        }
+        waiting[k] = least;
     }
     if (e == FRB_OK) {
-        info.index_crc = crc_of(img.bytes + info.index_offset, info.index_entries * (uint64_t)info.index_bytes);
-        for (int k = 1; k <= FRB_COMPACT_CLASSES; k++)
-            info.class_crc[k] =
-                crc_of(img.bytes + info.class_offset[k], (uint64_t)info.class_count[k] * info.class_stride[k]);
+        info.other_revs = others;
+        info.index_crc = crc_of(nav, info.class_offset[1] - info.nav_offset);
+        for (int k = 1; k <= FRB_COMPACT_MAX_NODES; k++)
+            info.class_crc[k] = crc_of(img.bytes + info.class_offset[k], info.class_bytes[k]);
         write_header(&info, img.bytes);
     }
     if (e == FRB_OK) e = image_close(&img, 1);

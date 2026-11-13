@@ -69,11 +69,7 @@ static int in_range(const RevFixedBomb *b, int bits, uint32_t value) {
 }
 
 static uint32_t select_extension(const RevFixedBomb *b, int bits, uint32_t value) {
-    if (b->compact) { /* the string its REV goes on to emit */
-        RevGraph g;
-        if (bits == bomb_bits(b) || frb_compact_graph(b->compact, bits, value, &g) != FRB_OK) return value;
-        return frb_graph_output(&g, bomb_bits(b));
-    }
+    if (b->compact) return frb_compact_extension(b->compact, bits, value); /* where its navigation bits lead */
     return bits == b->table.bits ? value : best_of(b, ((uint32_t)1 << bits) + value);
 }
 
@@ -145,30 +141,22 @@ FrbError rev_fixed_bomb_from_table(FrbTable *table, RevFixedBomb **bomb, uint32_
     return adopt(table, 0, bomb, bad_index);
 }
 
-/* A compact file: validated in full by its own reader, then the one thing a
- * file cannot know about itself that a table's adoption checks too. */
+/* A compact file: validated in full by its own reader.  The one thing a table's
+ * adoption checks beyond that, that a string and its complement need the same
+ * number of nodes, a compact file cannot get wrong: it keeps one node count
+ * for the two. */
 static FrbError open_compact(const char *path, RevFixedBomb **bomb, uint32_t *bad_index) {
     FrbCompact *c = NULL;
     RevFixedBomb *b;
-    const FrbCompactInfo *info;
-    uint32_t mask;
     FrbError e = frb_compact_open(path, &c, bad_index);
     if (e != FRB_OK) return e;
-    info = frb_compact_info(c);
-    mask = info->count - 1u;
-    for (uint32_t t = 0; t <= mask / 2; t++) /* a string and its complement need the same number of nodes */
-        if (frb_compact_nodes(c, info->bits, t) != frb_compact_nodes(c, info->bits, t ^ mask)) {
-            if (bad_index) *bad_index = t;
-            frb_compact_close(c);
-            return FRB_ERR_EVIDENCE;
-        }
     b = calloc(1, sizeof *b);
     if (!b) {
         frb_compact_close(c);
         return FRB_ERR_MEMORY;
     }
     b->compact = c;
-    b->max_nodes = info->max_nodes;
+    b->max_nodes = frb_compact_info(c)->max_nodes;
     *bomb = b;
     return FRB_OK;
 }
@@ -299,10 +287,11 @@ RevFixedBombResult rev_fixed_bomb_solve(const RevFixedBomb *bomb, const char *ta
     bits = (int)target_len;
     if (bomb->compact) {
         /*
-         * The prefix index is in the file: one ordinal, one REV.  Running the
-         * REV for B bits gives the extension it stands for, and the string it
-         * emits is compared with the target as the caller wrote it, character
-         * by character.
+         * The file leads from the string to one of its B-bit extensions with
+         * the fewest nodes and gives that one's REV.  Running the REV for B
+         * bits gives the extension it stands for, and the string it emits is
+         * compared with the target as the caller wrote it, character by
+         * character.
          */
         int B = bomb_bits(bomb), ok;
         uint32_t emitted = 0;

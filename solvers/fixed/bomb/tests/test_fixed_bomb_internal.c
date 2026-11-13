@@ -19,14 +19,22 @@
 #include "minimal_solver.h"
 #include "test_util.h"
 
-enum { BITS = 8 };
+enum { BITS = 11 };
 
-static uint8_t *rev_bytes(RevFixedBomb *b, uint32_t string, int *stride) {
-    const FrbCompactInfo *info = &b->compact->info;
-    uint32_t ordinal = frb_compact_ordinal(b->compact, BITS, string);
-    int n = frb_compact_nodes_of_ordinal(b->compact, ordinal);
-    *stride = (int)info->class_stride[n];
-    return b->compact->heap + info->class_offset[n] + (uint64_t)(ordinal - info->class_start[n]) * info->class_stride[n];
+/* The record of a stored string (one that starts with 0), read and written in the Bomb's own memory. */
+static uint64_t record_get(RevFixedBomb *b, uint32_t string, unsigned *n) {
+    const FrbCompact *c = b->compact;
+    *n = nodes_at(c->nodes, string);
+    return record_at(c->classes[*n], rank_of(c, string, *n), c->info.class_bits[*n]);
+}
+
+static void record_set(RevFixedBomb *b, uint32_t string, uint64_t value) {
+    const FrbCompact *c = b->compact;
+    unsigned n = nodes_at(c->nodes, string), width = c->info.class_bits[n];
+    uint8_t *bytes = c->heap + c->info.class_offset[n];
+    uint64_t bit = (uint64_t)rank_of(c, string, n) * width;
+    for (unsigned k = 0; k < width; k++) bytes[(bit + k) >> 3] &= (uint8_t)~(1u << ((bit + k) & 7u));
+    record_put(bytes, rank_of(c, string, n), width, value);
 }
 
 int main(int argc, char **argv) {
@@ -35,81 +43,107 @@ int main(int argc, char **argv) {
     RevFixedBombInfo info;
     FrbTable t;
     RevGraph g;
-    const uint32_t at = 77; /* 01001101 */
-    uint32_t swap = 0, spare = 0;
-    int found = 0, with_spare = 0;
+    int refused = 0, classes = 0;
 
     snprintf(path, sizeof path, "%s_s.frb", argc > 1 ? argv[1] : "fixed_bomb_internal");
     CHECK(frb_table_create_as(&t, BITS, frb_format(1)) == FRB_OK);
-    for (uint32_t i = 0; i < t.count; i++) {
+    for (uint32_t i = 0; i < t.count / 2; i++) {
+        RevGraph c;
         frb_target_format(i, BITS, target);
         CHECK(rev_minimal_solve(target, (size_t)BITS, 0, NULL, &g, NULL) == REV_MIN_MINIMAL);
+        frb_graph_complement(&g, &c);
         CHECK(frb_table_put(&t, i, FRB_MINIMAL, &g) == FRB_OK);
+        CHECK(frb_table_put(&t, i ^ (t.count - 1u), FRB_MINIMAL, &c) == FRB_OK);
     }
-    CHECK(frb_compact_write(path, &t, 1, 0, 0) == FRB_OK);
+    CHECK(frb_compact_write(path, &t, 1, 0) == FRB_OK);
 
 #if !defined(_WIN32)
     setenv("CARLOBOMB_NO_MMAP", "1", 1); /* the Bomb in memory of its own, where it can be written to */
 #endif
     CHECK(rev_fixed_bomb_open(path, &b, NULL) == FRB_OK && b && b->compact && b->compact->heap);
     if (b && b->compact && b->compact->heap) {
-        uint8_t keep[64], *mine, *theirs;
-        int stride = 0, stride2 = 0;
-        frb_target_format(at, BITS, target);
-        CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL && info.extension == at);
+        /* One string of each node count from 3 on, with its REV kept as colors and links (up to 5
+         * nodes) or as the rank of its graph (6 and more). */
+        for (int n = 3; n <= b->compact->info.max_nodes; n++) {
+            uint32_t at = 0, swap = 0, mask = t.count - 1u;
+            uint64_t mine = 0, theirs = 0;
+            unsigned na = 0, nb = 0;
+            int found = 0;
+            /* a string of that many nodes, and another whose REV does not serve it as well */
+            for (uint32_t i = 0; i < t.count / 2 && !found; i++) {
+                if (frb_table_nodes(&t, i) != n) continue;
+                for (uint32_t j = 0; j < t.count / 2 && !found; j++) {
+                    FrbTopology graph;
+                    uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+                    uint32_t colors = 0;
+                    if (j == i || frb_table_nodes(&t, j) != n) continue;
+                    theirs = record_get(b, j, &nb);
+                    if (theirs == record_get(b, i, &na)) continue;
+                    /* a graph of 6 or more nodes that happens to emit this string as well, on all its
+                     * nodes, would be a good REV for it: not what is wanted here */
+                    if (n > FRB_COMPACT_PLAIN_NODES && frb_topology_unrank(n, theirs, &graph) &&
+                        frb_topology_find_colors(&graph, i, BITS, &colors, order) == n)
+                        continue;
+                    at = i, swap = j, found = 1;
+                }
+            }
+            if (!found) continue;
+            classes++;
+            mine = record_get(b, at, &na);
+            frb_target_format(at, BITS, target);
+            frb_target_format(at ^ mask, BITS, other);
+            CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL && info.extension == at);
 
-        /* Another string whose REV has as many nodes and is another REV. */
-        for (uint32_t j = 0; j < t.count && !found; j++) {
-            if (j == at || frb_table_nodes(&t, j) != frb_table_nodes(&t, at)) continue;
-            mine = rev_bytes(b, at, &stride);
-            theirs = rev_bytes(b, j, &stride2);
-            if (memcmp(mine, theirs, (size_t)stride) == 0) continue;
-            swap = j;
-            found = 1;
-        }
-        CHECK(found);
-        /* The REV of the one where the REV of the other was: valid, of the right size, and it
-         * emits another string.  No REV is returned for either; every other string is unharmed. */
-        mine = rev_bytes(b, at, &stride);
-        theirs = rev_bytes(b, swap, &stride2);
-        CHECK(stride == stride2 && stride <= (int)sizeof keep);
-        memcpy(keep, mine, (size_t)stride);
-        memcpy(mine, theirs, (size_t)stride);
-        g.node_count = 77;
-        CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_INTERNAL_ERROR);
-        CHECK(g.node_count == 0);
-        CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, NULL, NULL) == REV_FIXED_BOMB_INTERNAL_ERROR);
-        CHECK(rev_fixed_bomb_solve(b, target, BITS, 1, &g, &info) == REV_FIXED_BOMB_INTERNAL_ERROR);
-        frb_target_format(swap, BITS, other);
-        CHECK(rev_fixed_bomb_solve(b, other, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL && info.extension == swap);
-        memcpy(mine, keep, (size_t)stride);
-        CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL && info.extension == at);
+            /* The REV of the other string where the REV of this one was: valid, of the right size,
+             * and no REV of this string.  No REV is returned for it, nor for its complement, which
+             * is answered from the same record; every other string is unharmed. */
+            record_set(b, at, theirs);
+            g.node_count = 77;
+            CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_INTERNAL_ERROR);
+            CHECK(g.node_count == 0);
+            CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, NULL, NULL) == REV_FIXED_BOMB_INTERNAL_ERROR);
+            CHECK(rev_fixed_bomb_solve(b, target, BITS, 1, &g, &info) == REV_FIXED_BOMB_INTERNAL_ERROR);
+            CHECK(rev_fixed_bomb_solve(b, other, BITS, 0, &g, &info) == REV_FIXED_BOMB_INTERNAL_ERROR);
+            refused += 2;
+            frb_target_format(swap, BITS, other);
+            CHECK(rev_fixed_bomb_solve(b, other, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL && info.extension == swap);
+            record_set(b, at, mine);
+            CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL && info.extension == at);
 
-        /* A link to a node that is not there: a class of 3, 5, 6 or 7 nodes has link values to spare. */
-        for (uint32_t j = 0; j < t.count && !with_spare; j++) {
-            int n = frb_table_nodes(&t, j);
-            if (n == 3 || (n >= 5 && n <= 7)) {
-                spare = j;
-                with_spare = 1;
+            /* A record that is no REV: a link to a node that is not there (3 and 5 nodes have link
+             * values to spare), a rank beyond the last graph. */
+            if (n == 3 || n == 5 || n > FRB_COMPACT_PLAIN_NODES) {
+                unsigned w = (unsigned)link_bits(n);
+                uint64_t broken = n > FRB_COMPACT_PLAIN_NODES ? (((uint64_t)1 << b->compact->info.class_bits[n]) - 1u)
+                                                              : mine | ((((uint64_t)1 << w) - 1u) << n);
+                record_set(b, at, broken);
+                g.node_count = 5;
+                CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_INTERNAL_ERROR && g.node_count == 0);
+                record_set(b, at, mine);
+                CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL);
+                refused++;
+            }
+
+            /* Another node count for the string: the record of another class is taken for its REV. */
+            {
+                uint8_t *nodes = b->compact->heap + b->compact->info.nodes_offset;
+                unsigned wrong = n == 3 ? 4u : (unsigned)n - 1u;
+                RevFixedBombResult r;
+                nodes[at >> 1] ^= (uint8_t)(((unsigned)n ^ wrong) << (4u * (at & 1u)));
+                r = rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info);
+                /* no REV, unless the record found there happens to be one of this string */
+                CHECK(r == REV_FIXED_BOMB_INTERNAL_ERROR || (r == REV_FIXED_BOMB_MINIMAL && frb_graph_output(&g, BITS) == at));
+                nodes[at >> 1] ^= (uint8_t)(((unsigned)n ^ wrong) << (4u * (at & 1u)));
+                CHECK(rev_fixed_bomb_solve(b, target, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL && info.extension == at);
             }
         }
-        CHECK(with_spare);
-        if (with_spare) {
-            int n = frb_table_nodes(&t, spare), w = frb_compact_link_bits(n);
-            mine = rev_bytes(b, spare, &stride);
-            memcpy(keep, mine, (size_t)stride);
-            mine[0] |= (uint8_t)(((1u << w) - 1u) << 1); /* link 0 of node 0: all ones */
-            frb_target_format(spare, BITS, other);
-            g.node_count = 5;
-            CHECK(rev_fixed_bomb_solve(b, other, BITS, 0, &g, &info) == REV_FIXED_BOMB_INTERNAL_ERROR && g.node_count == 0);
-            memcpy(mine, keep, (size_t)stride);
-            CHECK(rev_fixed_bomb_solve(b, other, BITS, 0, &g, &info) == REV_FIXED_BOMB_MINIMAL);
-        }
+        CHECK(classes >= 4 && refused >= 10); /* 3, 4 and 5 nodes, and a class of ranks */
     }
     rev_fixed_bomb_close(b);
     frb_table_destroy(&t);
     remove(path);
     printf("internal: a compact Bomb changed in memory after it was opened gives no REV for the strings\n"
-           "          changed, and the others as before\n");
+           "          changed (%d cases in %d classes of node counts), and the others as before\n",
+           refused, classes);
     return t_report("test_fixed_bomb_internal");
 }

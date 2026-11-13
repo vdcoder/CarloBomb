@@ -96,6 +96,8 @@ static void test_variants(void) {
                           c.info.file_bytes == info.file_bytes && c.info.stored == (half ? t.count / 2 : t.count));
                     CHECK(cbx_check_against(&c, &t, &check) == CBX_OK);
                     CHECK(check.strings == t.count && check.shorter == t.count - 2);
+                    if (!half) CHECK(check.not_lowest == 0); /* a whole file answers as PR 8's compact file does */
+                    else if (bits >= 4) CHECK(check.not_lowest > 0 && check.not_lowest < t.count / 2);
                     CHECK_MSG(check.wrong_nodes == 0 && check.not_emitting == 0 && check.not_minimal == 0 &&
                                   check.wrong_extension == 0 && check.wrong_comparison == 0,
                               "%d bits %s colors %d half %d: %llu wrong nodes, %llu not emitting, %llu not minimal, "

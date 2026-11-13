@@ -1,5 +1,23 @@
 # The v4 candidates, measured
 
+> **Added 13 November 2026, after this report was read.** The CTO decided to
+> store one navigation bit for every stored shorter string instead of the
+> two bits of section 3, and to work out "which extension needs fewer nodes,
+> or neither" on demand from the node counts of the two. The approved design
+> with its validation and measurements is in [DESIGN.md](DESIGN.md). What
+> the decision changes in this report:
+>
+> - every halved candidate is 1 MiB smaller at 24 bits than in the tables
+>   below, every whole one 2 MiB;
+> - the times of section 3 are those of the stored two bits; on demand the
+>   comparison takes COMPARE_NS;
+> - among equally small extensions of a string that starts with 1, a halved
+>   file now answers with the highest, the complement of its complement's
+>   answer, where it answered with the lowest.
+>
+> The rest stands. The tables below are of the two-bit prototype (commit
+> `aa075b9`), whose outputs are kept in `results/two-bit/`.
+
 **What was asked (13 November 2026).** The owner: uncolored REVs are a
 compression feature of v4 and the default; no list of exceptions, since two
 colorings of the same graph are equally good answers; no deduplication of
@@ -230,7 +248,7 @@ code outside the reader, the same for every file.
 | **rank,colorless,half** | **578** | **538** | **784** | **934** | **766** | **724** | **977** | **1,131** |
 
 Read with this in mind: between the three rounds the mean of a row moved by
-up to 15% (`results/matrix-24.txt`, table 3, last columns), and single runs
+up to 15% (`results/two-bit/matrix-24.txt`, table 3, last columns), and single runs
 at other times of the day lay as far apart. Differences of less than about
 40 ns between two rows mean nothing.
 
@@ -399,6 +417,9 @@ colorings, or anything during construction.
 - **More than four readers**, and a disk other than this container's.
 
 ## Reproducing
+
+With the prototype as it was when these tables were made (`git checkout
+aa075b9`; the tool has since changed to one navigation bit):
 
 ```bash
 build/v4_matrix run --bomb BOMB --scratch SCRATCH --compact COMPACT --variants all > matrix-24.txt

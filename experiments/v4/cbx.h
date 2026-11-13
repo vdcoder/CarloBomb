@@ -166,6 +166,7 @@ typedef struct {
     uint64_t shorter;          /* strings of 1 to L-1 bits */
     uint64_t not_minimal;      /* answered by a string that is no extension of theirs with the fewest nodes */
     uint64_t wrong_extension;  /* by another such extension than the rule gives (lowest; highest in the mirror) */
+    uint64_t not_lowest;       /* no error: by another one than the lowest, as the mirror has it */
     uint64_t wrong_comparison; /* strings of 0 to L-1 bits: cbx_compare other than the table says */
 } CbxCheck;
 

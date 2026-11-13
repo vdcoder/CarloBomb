@@ -504,6 +504,7 @@ CbxError cbx_check_against(const Cbx *c, const FrbTable *table, CbxCheck *check)
                 check->not_minimal++;
             /* and which one: the lowest; in a halved file the highest for a string that starts with 1 */
             if (answer != (halved && ((v >> (bits - 2)) & 1u) ? hi : lo)) check->wrong_extension++;
+            if (answer != lo) check->not_lowest++; /* where PR 8's compact file answers with another one */
             if (cbx_compare(c, bits - 1, v, NULL) != (n0 < n1 ? 0 : n1 < n0 ? 1 : CBX_TIE)) check->wrong_comparison++;
         }
         if (t == c->mask) { /* the last string closes "1"; "0" is waiting: the two extensions of the empty string */

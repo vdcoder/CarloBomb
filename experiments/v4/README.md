@@ -1,10 +1,13 @@
 # The v4 candidates, as files
 
-The candidate layouts for the compact Bomb, built as real files and measured
-side by side: uncolored REVs, the index that answers "which extension needs
-fewer nodes" in one read, complement halving, and the three ways of writing
-a REV's links. The results and what follows from them are in
-[REPORT.md](REPORT.md).
+The compact Bomb of v4 as real files: the approved design, and the candidate
+layouts it was chosen from, each made from a Bomb, checked for every string
+and measured.
+
+- [DESIGN.md](DESIGN.md): the approved design, what it stores and what it
+  derives, with its validation and its measurements.
+- [REPORT.md](REPORT.md): the twelve candidates side by side, as measured
+  before the design was decided.
 
 **This is a prototype, not format version 4.** The files it writes (`.cbx`)
 have their own magic, are laid out for the machine they are made on, and
@@ -25,12 +28,14 @@ are given.
 
 For a Bomb of L-bit strings:
 
-- **A, the choice.** Two bits for every string of 0 to L-1 bits: which of
-  its two extensions by one bit needs fewer nodes, 0 or 1, or 2 if they need
-  the same. One read answers the question the Bomb is asked. Followed from a
-  string, taking 0 among equals, the records lead to its L-bit extension
-  with the fewest nodes, the lowest among equals; that is the rule of PR 8,
-  so shorter strings get the same REV as there.
+- **A, the navigation bits.** One bit for every stored string of 1 to L-1
+  bits: 0 if an extension with the fewest nodes lies under its extension by
+  0, 1 if only under its extension by 1. Followed from a string, the bits
+  lead to an L-bit extension of it with the fewest nodes, the lowest of
+  them. Nothing else is stored about shorter strings: their node count is
+  read where the bits lead, and which of the two extensions of a string
+  needs fewer nodes, or neither, is worked out on demand by following both
+  and comparing.
 - **B, the node counts.** Four bits for every stored string of L bits, and
   for every 256th string the number of earlier strings of each node count.
   The REVs are kept by node count in the order of their strings, so the
@@ -45,9 +50,11 @@ and three switches:
 |---|---|---|
 | links | `fields`, `base-n`, `rank` | 2N numbers of ⌈log2 N⌉ bits; the 2N links as one number in base N; the rank of the canonical topology among all canonical topologies of N nodes |
 | colors | `colors`, `colorless` | N bits with each REV; or none, the colors being found from the links and the string when the REV is asked for |
-| strings | `whole`, `half` | every string; or only those that start with 0, a string that starts with 1 being answered from its complement |
+| strings | `whole`, `half` | every string; or only those that start with 0, a string that starts with 1 being answered by the complement of the answer of its complement |
 
-A candidate is named by its three values, for example `rank,colorless,half`.
+A candidate is named by its three values. **The approved design is
+`rank,colorless,half`**; the others are kept as references to measure
+against.
 
 ### Uncolored REVs
 
@@ -86,8 +93,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 
 Then one command. `BOMB` is a complete fixed-width Bomb, for example
 `~/frb24/fixed-run-24.frb`; `SCRATCH` is an existing directory with room for
-the candidate files, which are all there until the end: at most 1.1 times
-the size of the Bomb for the shortlist and 1.7 times for all twelve. Under
+the files made, which are all there until the end: a fourteenth of the size
+of the Bomb for the approved design, at most 1.7 times for all twelve. Under
 WSL take a directory on the Linux side (under your home directory), not
 under `/mnt/c`: files there are not mapped and cached the way the
 measurement assumes.
@@ -96,11 +103,12 @@ measurement assumes.
 build/v4_matrix run --bomb BOMB --scratch SCRATCH > matrix.txt
 ```
 
-It measures the fixed-width Bomb itself and the nine candidates of the
-shortlist. `--variants all` takes all twelve combinations,
-`--variants "rank,colorless,half;fields,colors,whole"` any list. To have the
-compact file of PR 8 in the comparison, make one first (a new file of your
-choosing; the Bomb is not touched) and name it:
+It measures the fixed-width Bomb itself and the approved design, which it
+makes from the Bomb and checks for every string of every length.
+`--variants all` takes all twelve combinations, `--variants short` the nine
+that were on the shortlist, `--variants "rank,colorless,half;fields,colors,whole"`
+any list. To have the compact file of PR 8 in the comparison, make one first
+(a new file of your choosing; the Bomb is not touched) and name it:
 
 ```bash
 build/carlobomb bomb compact --file BOMB --output COMPACT
@@ -117,11 +125,11 @@ that is busy with something else.
 
 What it needs, measured at 24 bits and scaled by the size of the Bomb:
 
-| Bomb | Fixed-width file | Memory at the peak | Scratch, all twelve | Time, all twelve |
-|---|---|---|---|---|
-| 24 bits | 0.57 GB | about 1.3 GB | 1.0 GB | a quarter of an hour |
-| 25 bits | 1.5 GB | about 3.3 GB | 2.5 GB | about half an hour |
-| 26 bits | 3.0 GB | about 6.5 GB | 5 GB | about an hour |
+| Bomb | Fixed-width file | Memory at the peak | Time, approved design | Time, all twelve | Scratch, all twelve |
+|---|---|---|---|---|---|
+| 24 bits | 0.57 GB | about 1.3 GB | FINAL_MINUTES | a quarter of an hour | 1.0 GB |
+| 25 bits | 1.5 GB | about 3.3 GB | twice that | about half an hour | 2.5 GB |
+| 26 bits | 3.0 GB | about 6.5 GB | four times | about an hour | 5 GB |
 
 The rows for 25 and 26 bits are scaled from the first and not measured.
 
@@ -147,13 +155,20 @@ file alone (seconds):
 build/v4_matrix choices --bomb BOMB
 ```
 
-A single file, to look at or to keep:
+A single file, to look at or to keep, and one string asked of it:
 
 ```bash
 build/v4_matrix convert --bomb BOMB --output FILE.cbx --variant rank,colorless,half
 ```
 
-An existing file is never replaced.
+```bash
+build/v4_matrix ask --file FILE.cbx --target 0101010
+```
+
+An existing file is never replaced. `ask` prints the node count of the
+string, the extension the navigation bits lead to, the node counts of its
+two extensions by one bit and which needs fewer, and the REV with its
+verification.
 
 ## What the output says
 
@@ -168,12 +183,14 @@ then the matrix: six tables with a row for each file. For each candidate:
 - **every string**: of all 2^L strings, how many get a wrong node count,
   how many get no REV that emits them, how many get a REV other than the
   stored one and how many of those predict another next bit; of all shorter
-  strings, how many are answered by another extension than the
-  fewest-nodes, lowest one, and how many get another answer to "which
-  extension needs fewer nodes". The expected values are taken from the
-  fixed-width table alone;
-- **node count** and **smaller extension**: the two questions answered by
-  the index alone, without reading a REV;
+  strings, how many are not answered by an extension with the fewest nodes,
+  how many by another such extension than the rule gives (the lowest; in a
+  halved file the highest for a string that starts with 1), and how many
+  get another answer to "which extension needs fewer nodes, or neither".
+  The expected values are taken from the fixed-width table alone;
+- **node count** and **comparison**: the two questions answered by the
+  index alone, without reading a REV; the comparison is worked out on
+  demand from the node counts of the two extensions;
 - **REV**: the REV of a string as the reader of the file returns it, its
   colors found if they are not stored; and **verified REV**: that REV then
   run against the string by code outside the reader, the same for every

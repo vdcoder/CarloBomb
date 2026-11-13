@@ -758,10 +758,13 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
                "                       %s with a REV other than the stored one (%s of them predict another next bit);\n"
                "                       %s shorter strings: %s not answered by an extension with the fewest nodes,\n"
                "                       %s by another such extension than the rule gives, %s with another answer to\n"
-               "                       \"which extension needs fewer nodes, or neither\"\n",
+               "                       \"which extension needs fewer nodes, or neither\";\n"
+               "                       %s answered by another extension than the lowest of the equals (no error:\n"
+               "                       the rule for strings that start with 1 in a halved file)\n",
                commas(r->check.strings), L, commas(r->check.wrong_nodes), commas(r->check.not_emitting),
                commas(r->check.not_stored), commas(r->check.next_bit_differs), commas(r->check.shorter),
-               commas(r->check.not_minimal), commas(r->check.wrong_extension), commas(r->check.wrong_comparison));
+               commas(r->check.not_minimal), commas(r->check.wrong_extension), commas(r->check.wrong_comparison),
+               commas(r->check.not_lowest));
     if (r->checked && r->check.not_stored) {
         printf("                       REVs other than the stored one, by node count:");
         for (int n = 1; n < CBX_CLASSES; n++)

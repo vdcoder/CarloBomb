@@ -12,6 +12,10 @@ cases. Development container: Intel Xeon 2.1 GHz under KVM, 4 virtual CPUs,
 GCC 13.3 `-O3`. Nothing was converted, migrated or written next to a Bomb:
 the tools read a fixed-width file and keep everything else in memory.
 
+The 24-bit Bomb is the one built in the development container. The owner's
+`fixed-run-24.frb` is the same Bomb, and these counts hold for it, if its
+SHA-256 is the one above.
+
 ## Findings
 
 1. **Topologies are not shared.** 14,112,223 different canonical topologies
@@ -55,7 +59,7 @@ root: **none of the 16,777,216 REVs has an unreachable node**, and none has
 a node the machine does not reach within its 24 bits. Links the machine
 never follows are 1.12% of all links, and every one of them is 0.
 
-| Nodes | Strings | Topologies | Strings per topology | Used once | Most used | Bits to name one in use | + its share of the dictionary | Rank of any topology |
+| Nodes | Strings | Topologies | Strings per topology | Used once | Most used | Bits to name one in use | With its share of the dictionary | Rank of any topology |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | 5 | 18,082 | 11,331 | 1.60 | 71.2% | 16 | 14 | 25.3 | 18 |
 | 6 | 418,502 | 262,706 | 1.59 | 73.3% | 26 | 19 | 33.4 | 23 |
@@ -66,7 +70,7 @@ never follows are 1.12% of all links, and every one of them is 0.
 
 A topology in use is cheap to name (23 bits) only because there are few
 strings; the dictionary it points into then costs 20 to 33 bits a string
-more. The last column needs no dictionary: there are 256,182,290 canonical
+more (the next column is the two together). The last column needs no dictionary: there are 256,182,290 canonical
 topologies of 7 nodes and 12,665,445,248 of 8, so 28 and 34 bits name any
 of them. The ratio does not move with the length: 1.14 strings per topology
 at 16 bits, 1.16 at 20, 1.19 at 24.
@@ -292,6 +296,18 @@ where the last 16% of size matters more than lookup time.
   to 24 bits. What changes at 25 bits is the index as built (4-byte
   ordinals), which A + B replace.
 
+## Tests
+
+`test_colorless` (3.8 million checks): the machine against the reference
+interpreter; canonical numbering under random renumberings, and the 1, 12,
+216 and 5,248 canonical topologies of 1 to 4 nodes by enumeration;
+recoloring against brute force on random REVs, including strings no
+coloring emits; rank and its inverse for every topology of up to 5 nodes;
+the numbering rule on fresh LevelSolver witnesses. `colorless_smoke` runs
+the tools on a 13-bit Bomb. The whole suite passes with GCC and Clang (25
+tests), under AddressSanitizer and UndefinedBehaviorSanitizer (24) and
+without the assembly engine (22).
+
 ## Not done
 
 Complement symmetry as a built layout; a multi-word base-N code (not needed
@@ -300,6 +316,12 @@ fit 128 bits; with colors mixed into the same number 9 nodes already need
 128 bits and decode in 95 ns, so colors are better kept as bits beside it); per-class bitmaps as an alternative to B (18.9 MB against 8.4 MB of
 node counts at 24 bits); the candidate layouts as files read cold. No format
 was defined, and PR 8 is untouched.
+
+One question the data raises and does not answer: sharing is low among the
+witnesses the search happens to return. A string often has several
+minimum-node REVs; whether choosing among them for a common topology would
+share more is another experiment, and it would mean a new construction, not
+a conversion.
 
 ## Reproducing
 

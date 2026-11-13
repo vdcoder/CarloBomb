@@ -1040,6 +1040,16 @@ static int verify_compact(const BombArgs *a) {
                     frb_compact_close(c);
                     return X_FAIL;
                 }
+                /* The same answers, and yet not the file the header names: said, not failed. */
+                if (info->source_version && (other_info.version != info->source_version ||
+                                             other_info.table_crc != info->source_table_crc))
+                    printf("  note: that file is format version %d with table CRC-32 %08x; the file this one was\n"
+                           "  made from is version %d with table CRC-32 %08x%s\n",
+                           other_info.version, (unsigned)other_info.table_crc, info->source_version,
+                           (unsigned)info->source_table_crc,
+                           d.other_revs == 0 && other_info.version != info->source_version
+                               ? ": the same REVs in another fixed-width format"
+                               : "");
             }
         } else if (other_info.bits < info->bits) { /* a complete Bomb for fewer bits */
             e = frb_compact_to_table(c, NULL, &mine);

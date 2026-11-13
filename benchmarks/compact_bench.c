@@ -12,9 +12,10 @@
  * the opened Bomb, for random strings of the full length and of every
  * length, as a node count alone and as the REV from rev_fixed_bomb_solve,
  * which runs it against the target before returning it.  For the compact
- * file also the comparison of the two extensions of a string, which it works
- * out on demand.  Then lookups without opening anything: one answer read
- * from the file.
+ * file also the REV from its reader alone, without that run, and the
+ * comparison of the two extensions of a string, which it works out on
+ * demand.  Then lookups without opening anything: one answer read from the
+ * file.
  *
  * Unless --no-check is given, every string of every length is first asked of
  * both files.  The node counts must agree, and every comparison must be what
@@ -143,6 +144,25 @@ static double time_compare(const FrbCompact *c, const Query *q, size_t n, unsign
     return best / (double)n * 1e9;
 }
 
+/* The REV as the reader of the compact format hands it over: found by its navigation bits,
+ * decoded, its colors found, its nodes numbered; not run again against the target. */
+static double time_graph(const FrbCompact *c, const Query *q, size_t n, unsigned long long *sum) {
+    double best = 1e30;
+    for (int run = 0; run < RUNS; run++) {
+        unsigned long long s = 0;
+        double t0 = cb_now(), t;
+        for (size_t i = 0; i < n; i++) {
+            RevGraph g;
+            if (frb_compact_graph(c, q[i].bits, q[i].value, &g) != FRB_OK) g.node_count = 0;
+            s += (unsigned)g.node_count;
+        }
+        t = cb_now() - t0;
+        if (t < best) best = t;
+        *sum = s;
+    }
+    return best / (double)n * 1e9;
+}
+
 static int cmp_double(const void *a, const void *b) {
     double x = *(const double *)a, y = *(const double *)b;
     return (x > y) - (x < y);
@@ -195,8 +215,8 @@ int main(int argc, char **argv) {
     FrbCompact *compact = NULL;
     FrbCompactInfo cinfo;
     FrbFileInfo finfo;
-    double open_s[2] = {0}, ns[2][4], compare_ns[2] = {0}, *seconds;
-    unsigned long long sums[2][4], compare_sum[2] = {0};
+    double open_s[2] = {0}, ns[2][4], compare_ns[2] = {0}, reader_ns[2] = {0}, *seconds;
+    unsigned long long sums[2][4], compare_sum[2] = {0}, reader_sum[2] = {0};
     long anon_kb[2] = {0}, mapped_kb[2] = {0};
     char (*text)[FRB_MAX_BITS + 1];
     Query *exact, *any, *shorter;
@@ -344,6 +364,8 @@ int main(int argc, char **argv) {
             else p_any[f] = single_solves(bombs[f], q, text, singles, seconds);
         }
     }
+    reader_ns[0] = time_graph(compact, exact, queries, &reader_sum[0]);
+    reader_ns[1] = time_graph(compact, any, queries, &reader_sum[1]);
     compare_ns[0] = time_compare_nodes(bombs[0], shorter, queries, &compare_sum[0]);
     compare_ns[1] = time_compare(compact, shorter, queries, &compare_sum[1]);
     p_compare = single_compares(compact, shorter, singles, seconds);
@@ -354,6 +376,10 @@ int main(int argc, char **argv) {
     for (int f = 0; f < 2; f++)
         printf("  %-12s %14.1f %14.1f %14.1f %14.1f %14.1f\n", names[f], ns[f][0], ns[f][1], ns[f][2], ns[f][3],
                compare_ns[f]);
+    printf("  %-12s %14s %14s %14.1f %14.1f %14s   (its reader alone)\n", "", "", "", reader_ns[0], reader_ns[1], "");
+    printf("  REV: from rev_fixed_bomb_solve, which runs every REV against the target before it returns it,\n"
+           "  whichever file it came from.  Its reader alone: frb_compact_graph, the REV found, decoded,\n"
+           "  colored and numbered, without that run.\n");
     printf("  comparison: which of the two extensions of a string of 1 to %d bits needs fewer nodes.  The compact\n"
            "  file works it out on demand; for the fixed-width Bomb it is two node counts from the index the\n"
            "  solver builds in memory when it opens the file.\n",
@@ -369,6 +395,7 @@ int main(int argc, char **argv) {
     /* Node counts and comparisons are the same from both; so are the REVs of L-bit strings, if the
      * compact file has no other REVs.  The REVs of shorter strings differ by the rule, and are not compared. */
     failed |= sums[1][0] != sums[0][0] || sums[1][1] != sums[0][1] || compare_sum[1] != compare_sum[0];
+    failed |= reader_sum[0] != sums[0][0] || reader_sum[1] != sums[0][1]; /* the node counts of its REVs */
     if (cinfo.other_revs == 0) failed |= sums[1][2] != sums[0][2];
     printf("  what the lookups returned, added up: %s\n",
            failed ? "DIFFERS between the files" : "the same from both files where it has to be");

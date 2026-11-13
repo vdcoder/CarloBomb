@@ -281,6 +281,15 @@ if(MODE STREQUAL "small")
   run(1 "every comparison of two extensions [.]+ PASS.*REVs that are not the ones of that file: [1-9][0-9,]*[^\n]*FAIL \\(the header says otherwise\\).*was not made from that file.*Verification: FAIL"
       bomb verify --file ${W}/c10.frb --against ${W}/b.frb)
   run(0 "REVs that are not the ones of that file: 0 [.]+ PASS" bomb verify --file ${W}/c11.frb --against ${W}/lad3/fixed-run-11.frb)
+  # The same REVs in another fixed-width format: right in every answer, and said
+  # not to be the file the compact one names as its source.
+  run(0 "REVs that are not the ones of that file: 0 [.]+ PASS.*note: that file is format version 1 with table CRC-32 [0-9a-f]+; the file this one was\n  made from is version 3 with table CRC-32 [0-9a-f]+: the same REVs in another fixed-width format.*Verification: PASS"
+      bomb verify --file ${W}/c13.frb --against ${W}/lad/fixed-run-13.frb)
+  execute_process(COMMAND ${CLI} bomb verify --file ${W}/c13.frb --against ${W}/lad3/fixed-run-13.frb
+                  OUTPUT_VARIABLE own_source ERROR_VARIABLE own_source RESULT_VARIABLE own_code)
+  if(NOT own_code EQUAL 0 OR own_source MATCHES "note: that file")
+    message(FATAL_ERROR "a compact file checked against its own source: ${own_source}")
+  endif()
   # b.frb was built without the symmetry: the REV of a string that starts with 1
   # is not the complement of its complement's.  Its compact file keeps the half
   # that starts with 0, says how many strings get another REV for it, and

@@ -198,6 +198,156 @@ static void test_lies(const FrbTable *t, const char *prefix) {
            "      each found before a file gets its name, and nothing left behind\n");
 }
 
+/* The navigation bits that lead from every shorter beginning of stored string s, from `from` bits
+ * on, to s. */
+static void lead_to(uint8_t *nav, int L, uint32_t s, int from) {
+    for (int k = from; k < L; k++) {
+        uint64_t place = ((uint64_t)1 << (k - 1)) + (s >> (L - k));
+        if ((s >> (L - 1 - k)) & 1u) nav[place >> 3] |= (uint8_t)(1u << (place & 7u));
+        else nav[place >> 3] &= (uint8_t)~(1u << (place & 7u));
+    }
+}
+
+/* Stored string s has n nodes, and `before` stored strings of n nodes come before its block. */
+static void place_string(FrbCompact *b, uint8_t *image, uint32_t s, unsigned n, uint32_t before) {
+    uint8_t *row = image + b->info.blocks_offset +
+                   ((size_t)(s >> FRB_COMPACT_BLOCK_SHIFT) * (size_t)b->info.max_nodes + (n - 1u)) * 4u;
+    image[b->info.nodes_offset + (s >> 1)] |= (uint8_t)(n << (4u * (s & 1u)));
+    put32(row, before);
+}
+
+/*
+ * The far end of the format: a Bomb of 31 bits, as far as lookups go.
+ *
+ * No table of 31 bits exists to make one from, and its file would be several
+ * gigabytes.  The lookups, though, only ever touch the few bytes a string
+ * stands on, so a file of that size that is empty but for three strings can
+ * be laid out in memory nobody has to provide: an anonymous mapping whose
+ * pages come into being when they are written.  What is checked is the
+ * arithmetic where the numbers are large: a navigation bit at a place beyond
+ * 2^30, a node count half a gigabyte into its part, a record whose first bit
+ * is beyond bit 2^32 of its class, and a class that begins beyond byte 2^32
+ * of the file.
+ */
+static void test_far_end(const FrbTable *t) {
+#if defined(_WIN32) || SIZE_MAX < UINT64_MAX
+    (void)t;
+    printf("far end: not run here (it takes a sparse mapping of 5 GB)\n");
+#else
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+#ifndef MAP_NORESERVE
+#define MAP_NORESERVE 0
+#endif
+    enum { L = 31 };
+    const uint32_t mask = 0x7FFFFFFFu;
+    FrbCompact b;
+    FrbTopology topology, canonical, numbered;
+    RevGraph small, ring, expected, g;
+    FrbStatus status;
+    uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+    uint8_t *image;
+    uint32_t s = 0, r = 0, colors = 0, found = 0, numbered_colors = 0, at = 0;
+    uint64_t small_bit, ring_byte;
+    int have = 0, shared, nodes[2];
+
+    /* The REV of 6 nodes of the highest stored string of the table that has one, and the string of
+     * 31 bits it goes on to emit: a REV of that string, on all its nodes. */
+    for (uint32_t i = t->count / 2; i-- > 0 && !have;)
+        if (frb_table_nodes(t, i) == 6 && frb_table_get(t, i, &status, &small) == FRB_OK) at = i, have = 1;
+    CHECK(have);
+    if (!have) return;
+    s = frb_graph_output(&small, L);
+    CHECK((s >> (L - t->bits)) == at && s < ((uint32_t)1 << (L - 1)));
+
+    /* A Bomb of 2^30 stored strings: half of them of 6 nodes, all but two of the rest of 8, one of 1
+     * and one of 12. */
+    memset(&b, 0, sizeof b);
+    b.info.class_count[1] = 1;
+    b.info.class_count[6] = (uint32_t)1 << 29;
+    b.info.class_count[8] = ((uint32_t)1 << 29) - 2u;
+    b.info.class_count[12] = 1;
+    CHECK(frb_compact_layout(&b.info, L) == FRB_OK);
+    CHECK(b.info.stored == (uint32_t)1 << 30 && b.info.file_bytes > ((uint64_t)1 << 32) &&
+          b.info.class_offset[12] > ((uint64_t)1 << 32));
+    image = mmap(NULL, (size_t)b.info.file_bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1,
+                 0);
+    if (image == MAP_FAILED) {
+        printf("far end: not run here (no mapping of %llu bytes to be had)\n", (unsigned long long)b.info.file_bytes);
+        return;
+    }
+    b.base = image;
+    b.nav = image + b.info.nav_offset;
+    b.nodes = image + b.info.nodes_offset;
+    b.blocks = image + b.info.blocks_offset;
+    for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) b.classes[n] = image + b.info.class_offset[n];
+    b.mask = mask;
+    frb_topology_init();
+
+    /* The string of 6 nodes is the last of its class: its record ends the class. */
+    CHECK(frb_topology_from_graph(&small, &topology, &colors) && frb_topology_canonical(&topology, &canonical, NULL) == 6);
+    place_string(&b, image, s, 6, b.info.class_count[6] - 1u);
+    record_put(image + b.info.class_offset[6], b.info.class_count[6] - 1u, b.info.class_bits[6], frb_topology_rank(&canonical));
+    small_bit = (uint64_t)(b.info.class_count[6] - 1u) * b.info.class_bits[6];
+    CHECK(small_bit > ((uint64_t)1 << 32));
+    lead_to(image + b.info.nav_offset, L, s, 1);
+
+    CHECK(frb_compact_nodes(&b, L, s) == 6 && frb_compact_nodes(&b, L, s ^ mask) == 6);
+    CHECK(frb_compact_graph(&b, L, s, &g) == FRB_OK && same_graph(&g, &small) && frb_graph_output(&g, L) == s);
+    frb_graph_complement(&small, &expected);
+    CHECK(frb_compact_graph(&b, L, s ^ mask, &g) == FRB_OK && same_graph(&g, &expected) &&
+          frb_graph_output(&g, L) == (s ^ mask));
+    for (int k = 1; k <= L; k++) { /* every beginning of the string, and of its complement, leads to it */
+        uint32_t v = s >> (L - k), all = mask >> (L - k);
+        CHECK(frb_compact_extension(&b, k, v) == s && frb_compact_extension(&b, k, v ^ all) == (s ^ mask));
+        CHECK(frb_compact_nodes(&b, k, v) == 6 && frb_compact_nodes(&b, k, v ^ all) == 6);
+    }
+    /* its neighbour, the string that differs in the last bit, needs 9, say: the comparison of the two */
+    place_string(&b, image, s ^ 1u, 9, 0);
+    CHECK(frb_compact_compare(&b, L - 1, s >> 1, nodes) == (int)(s & 1u) && nodes[s & 1u] == 6 && nodes[(s & 1u) ^ 1u] == 9);
+    CHECK(frb_compact_compare(&b, L - 1, (s ^ mask) >> 1, nodes) == (int)((s ^ mask) & 1u) &&
+          nodes[(s ^ mask) & 1u] == 6 && nodes[((s ^ mask) & 1u) ^ 1u] == 9);
+
+    /* A ring of 12 nodes, the only REV of its class: its record is the first thing beyond byte 2^32. */
+    have = 0;
+    for (uint32_t q = 1; q < 2048 && !have; q++) {
+        frb_ring_witness(q, 12, &ring);
+        r = frb_graph_output(&ring, L);
+        if (r == s || (r >> 1) == (s >> 1) || !frb_topology_from_graph(&ring, &topology, &colors) ||
+            frb_topology_canonical(&topology, &canonical, NULL) != 12)
+            continue;
+        have = frb_topology_find_colors(&canonical, r, L, &found, order) == 12;
+    }
+    CHECK(have);
+    if (have) {
+        frb_topology_renumber(&canonical, found, order, &numbered, &numbered_colors);
+        frb_topology_to_graph(&numbered, numbered_colors, &expected);
+        CHECK(frb_graph_output(&expected, L) == r);
+        place_string(&b, image, r, 12, 0);
+        record_put(image + b.info.class_offset[12], 0, b.info.class_bits[12], frb_topology_rank(&canonical));
+        ring_byte = b.info.class_offset[12];
+        CHECK(ring_byte > ((uint64_t)1 << 32));
+        for (shared = 0; shared < L && ((r ^ s) >> (L - 1 - shared)) == 0;) shared++; /* bits the two begin with alike */
+        lead_to(image + b.info.nav_offset, L, r, shared + 1);
+        CHECK(frb_compact_nodes(&b, L, r) == 12 && frb_compact_graph(&b, L, r, &g) == FRB_OK && same_graph(&g, &expected));
+        frb_graph_complement(&expected, &ring);
+        CHECK(frb_compact_graph(&b, L, r ^ mask, &g) == FRB_OK && same_graph(&g, &ring) &&
+              frb_graph_output(&g, L) == (r ^ mask));
+        for (int k = shared + 1; k <= L; k++)
+            CHECK(frb_compact_extension(&b, k, r >> (L - k)) == r && frb_compact_nodes(&b, k, r >> (L - k)) == 12);
+        /* and the first string is where it was */
+        CHECK(frb_compact_graph(&b, L, s, &g) == FRB_OK && same_graph(&g, &small));
+        CHECK(frb_compact_extension(&b, 1, 0) == s && frb_compact_extension(&b, 1, 1) == (s ^ mask));
+    }
+    munmap(image, (size_t)b.info.file_bytes);
+    printf("far end: a Bomb of 31 bits laid out in %llu bytes of empty memory: a string at place %u of 2^30,\n"
+           "         its record at bit %llu of its class, and a class that begins at byte %llu, each found\n",
+           (unsigned long long)b.info.file_bytes, (unsigned)s, (unsigned long long)small_bit,
+           (unsigned long long)b.info.class_offset[12]);
+#endif
+}
+
 /* The checksum of the index made right after its bytes were changed. */
 static void seal_index(FrbCompact *b) {
     b->info.index_crc = crc_of(b->nav, b->info.class_offset[1] - b->info.nav_offset);
@@ -364,6 +514,7 @@ int main(int argc, char **argv) {
 
     free(image);
     remove(path);
+    test_far_end(&t);
     test_lies(&t, argc > 1 ? argv[1] : "compact_internal");
     frb_table_destroy(&t);
     printf("internal: %d wrong navigation bits (%d of them between halves that need the same), each refused by\n"

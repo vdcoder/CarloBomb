@@ -1,8 +1,9 @@
 # FixedRunBomb
 
 A FixedRunBomb is a table with one entry for every binary string of one fixed
-length L (1 to 24 bits). Each entry holds a REV that emits the string, packed
-into 19 bytes (up to 16 bits) or 34 bytes (17 to 24 bits), and says whether
+length L (1 to 31 bits). Each entry holds a REV that emits the string, packed
+into 19 bytes (up to 16 bits), 34 bytes (17 to 24 bits) or 44 bytes (25 to
+31 bits), and says whether
 its node count is certified to be the minimum. The entry of a string is
 found by arithmetic on the string alone.
 
@@ -14,7 +15,7 @@ every one of its entries is a certified minimum, and the largest is 7 nodes.
 The measurements, and the commands to reproduce the table, are in
 [`benchmarks/FIXED_RUN_16.md`](../../benchmarks/FIXED_RUN_16.md).
 
-Tables for 17 to 24 bits are built as a **ladder**, each from the complete
+Tables for 17 bits and more are built as a **ladder**, each from the complete
 table for one bit fewer ([below](#longer-tables-the-ladder)). How to run the
 ladder to 24 bits, and how to check the result, is in
 [`OVERNIGHT.md`](OVERNIGHT.md); what it costs, in
@@ -32,6 +33,7 @@ ladder to 24 bits, and how to check the result, is in
 | `tests/test_fixed_run.c` | Tests of all of the above |
 | `tests/test_fixed_run_ladder.c` | Tests of format version 2 and of the ladder |
 | [`OVERNIGHT.md`](OVERNIGHT.md) | Running the ladder to 24 bits unattended, and checking the result |
+| [`BEYOND_24.md`](BEYOND_24.md) | The next stage: 25 and 26 bits on a finished 24-bit Bomb, and what 27 to 31 would take |
 | `MULTI_SEARCH_SIMD.md` | Design note on a possible vectorized search. Not implemented |
 
 ## Building the 16-bit table
@@ -101,9 +103,9 @@ Settings of `build`:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--bits L` | required | Target length, 1..24 |
+| `--bits L` | required | Target length, 1..31 |
 | `--base FILE` | none | Build on this complete table for fewer bits; turns enumeration off |
-| `--max-nodes N` | 16, or 24 above 16 bits | Largest node budget searched. Changeable on resume |
+| `--max-nodes N` | 16, 24 or 31: all an entry of the table's format holds | Largest node budget searched. Changeable on resume |
 | `--engine E` | `amd64-auto`, else `c` | LevelSolver engine. Changeable on resume |
 | `--workers W` | 1 | Worker processes. Changeable on resume |
 | `--enumerate-max K` | 5 | Exhaustive enumeration for node counts 1..K; 0 = none, 6 is the most allowed |
@@ -280,9 +282,14 @@ interruptions (`OVERNIGHT.md` lists their checksums).
 
 Workers take jobs from a counter they share, a few at a time, so a slower
 processor core does fewer jobs and delays nothing. The state of a
-24-bit construction is 1.2 GB in the coordinating process while it plans
-and replays, and is released before the workers start; a worker holds the
-job list and little else.
+construction is held by the coordinating process while it plans and
+replays, and is released before the workers start; a worker holds the job
+list and little else. That state is 73 bytes per string up to 24 bits and
+83 above: 1.2 GB at 24 bits, 5.3 GB at 26, 21 GB at 28. A machine that has
+less is told so before anything is started. Tables themselves are not held
+in memory: one is written entry by entry and read back through a mapping of
+its file, so a table may be larger than memory
+([`BEYOND_24.md`](BEYOND_24.md) has the numbers for every length).
 
 ## Using a table
 
@@ -293,9 +300,11 @@ prefixes built when the table is opened.
 
 ## Limits
 
-- L is at most 24: an entry of format version 2 holds 24 nodes, which is
-  what the ring needs at 24 bits, and the table is 544 MiB. Version 1, for
-  up to 16 bits, is unchanged (`FORMAT.md`).
+- L is at most 31: an entry of format version 3 holds 31 nodes, which is
+  what the ring needs at 31 bits, and a table index and the number of
+  entries fit 32-bit fields. Versions 1 and 2, for up to 16 and 24 bits,
+  are unchanged (`FORMAT.md`). What the format allows and what a machine
+  can compute are different things: see [`BEYOND_24.md`](BEYOND_24.md).
 - `--recertify` runs in one process. For a table of more than about 18 bits
   use `--sample`.
 - Building needs POSIX (fork, flock). Reading, validating and looking up

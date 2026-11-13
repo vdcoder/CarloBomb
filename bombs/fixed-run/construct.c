@@ -1489,12 +1489,12 @@ static void moved_put(Moved *map, size_t mask, uint32_t place, uint32_t value) {
     map[h].value = value;
 }
 
-static uint32_t *choose_sample(uint32_t count, uint32_t todo, uint64_t seed) {
-    uint32_t *chosen = malloc((size_t)todo * sizeof *chosen);
+uint32_t *frb_choose_sample(uint32_t count, uint32_t todo, uint64_t seed) {
+    uint32_t *chosen = todo && todo <= count ? malloc((size_t)todo * sizeof *chosen) : NULL;
     size_t cap = 16;
     Moved *map;
     while (cap < (size_t)todo * 4) cap *= 2; /* two places change per step: at most half full */
-    map = calloc(cap, sizeof *map);
+    map = chosen ? calloc(cap, sizeof *map) : NULL;
     if (!chosen || !map) {
         free(chosen);
         free(map);
@@ -1522,7 +1522,7 @@ FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t ma
     todo = table->count;
     if (sample && sample < todo) {
         todo = sample;
-        chosen = choose_sample(table->count, (uint32_t)todo, seed);
+        chosen = frb_choose_sample(table->count, (uint32_t)todo, seed);
         if (!chosen) return FRB_ERR_MEMORY;
     }
     for (uint64_t k = 0; k < todo && e == FRB_OK; k++)

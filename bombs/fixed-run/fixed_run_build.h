@@ -327,6 +327,14 @@ FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t ma
                        uint64_t sample, uint64_t seed, FrbRecertify *out);
 
 /*
+ * The sample frb_recertify takes: `todo` different indices below `count`,
+ * the first places of a Fisher-Yates shuffle of 0 .. count-1 driven by the
+ * seed, found without the array of count numbers.  The caller frees the
+ * result; NULL if todo is 0 or more than count, or memory ran out.
+ */
+uint32_t *frb_choose_sample(uint32_t count, uint32_t todo, uint64_t seed);
+
+/*
  * The same for exactly the entries that decide the table's headline number:
  * those certified at the largest minimum in it.  All of them in table order,
  * or the first `limit` (0 = all).  That no string needs more is shown by the

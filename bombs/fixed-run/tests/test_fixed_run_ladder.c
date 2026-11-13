@@ -1244,6 +1244,75 @@ static void test_writer_and_mapping(void) {
            getenv("CARLOBOMB_NO_MMAP") ? "into memory (CARLOBOMB_NO_MMAP)" : "through a private mapping of the file");
 }
 
+/* The sample of --recertify is the one a shuffle of all indices would take,
+ * and the memory a construction needs is a number known beforehand. */
+static void test_sample_and_memory(void) {
+    static const struct { uint32_t count, todo; } cases[] = {
+        {1, 1}, {2, 1}, {2, 2}, {16, 5}, {1000, 999}, {1000, 1000}, {65536, 300}, {65536, 40000}};
+    char err[FRB_ERR_TEXT] = "";
+    FrbConfig cfg;
+    for (size_t k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+        for (uint64_t seed = 0; seed < 4; seed++) {
+            uint32_t count = cases[k].count, todo = cases[k].todo;
+            uint32_t *dense = malloc(count * sizeof *dense), *got = frb_choose_sample(count, todo, seed * 77 + k);
+            uint64_t state = seed * 77 + k; /* the shuffle itself, with the array */
+            int same = got != NULL;
+            for (uint32_t i = 0; i < count; i++) dense[i] = i;
+            for (uint32_t i = 0; i < todo; i++) {
+                uint64_t z = (state += 0x9E3779B97F4A7C15ull);
+                uint32_t j, tmp;
+                z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+                z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+                z ^= z >> 31;
+                j = i + (uint32_t)(z % (uint64_t)(count - i));
+                tmp = dense[i];
+                dense[i] = dense[j];
+                dense[j] = tmp;
+            }
+            for (uint32_t i = 0; same && i < todo; i++) same = got[i] == dense[i];
+            CHECK_MSG(same, "sample of %u from %u, seed %llu", (unsigned)todo, (unsigned)count,
+                      (unsigned long long)seed);
+            free(dense);
+            free(got);
+        }
+    }
+    CHECK(frb_choose_sample(10, 0, 1) == NULL && frb_choose_sample(10, 11, 1) == NULL);
+    {   /* far beyond any array: 100 of 2^31, all different and all in range */
+        uint32_t *got = frb_choose_sample(0x80000000u, 100, 5);
+        int ok = got != NULL;
+        for (int i = 0; ok && i < 100; i++) {
+            ok = got[i] < 0x80000000u;
+            for (int j = 0; ok && j < i; j++) ok = got[j] != got[i];
+        }
+        CHECK(ok);
+        free(got);
+    }
+
+    /* 40 bytes and the packed witness per string. */
+    CHECK(frb_state_bytes(16, frb_format(1)) == ((uint64_t)(40 + 18) << 16));
+    CHECK(frb_state_bytes(24, frb_format(2)) == ((uint64_t)(40 + 33) << 24));
+    CHECK(frb_state_bytes(26, frb_format(3)) == ((uint64_t)(40 + 43) << 26));
+    CHECK(frb_state_bytes(31, frb_format(3)) == ((uint64_t)83 << 31));
+    CHECK(frb_state_bytes(25, frb_format(2)) == 0 && frb_state_bytes(0, frb_format(3)) == 0 &&
+          frb_state_bytes(8, NULL) == 0);
+    CHECK(frb_journal_record_bytes(frb_format(1)) == 64 && frb_journal_record_bytes(frb_format(2)) == 80 &&
+          frb_journal_record_bytes(frb_format(3)) == 96 && frb_journal_record_bytes(NULL) == 0);
+    frb_config_default(&cfg, 12);
+    CHECK(frb_check_memory(&cfg, NULL, err, sizeof err) == FRB_OK);
+    /* 166 GB for 31 bits: refused wherever these tests are likely to run,
+     * with the numbers in the message. */
+    frb_config_default(&cfg, 31);
+    {
+        long pages = sysconf(_SC_PHYS_PAGES), size = sysconf(_SC_PAGESIZE);
+        FrbError e = frb_check_memory(&cfg, NULL, err, sizeof err);
+        if (pages > 0 && size > 0 && (uint64_t)pages * (uint64_t)size < ((uint64_t)83 << 31)) {
+            CHECK(e == FRB_ERR_MEMORY && strstr(err, "31-bit construction") != NULL && strstr(err, "166.0 GB") != NULL);
+        } else {
+            CHECK(e == FRB_OK);
+        }
+    }
+}
+
 /* The strings that decide a table's largest minimum, solved again. */
 static void test_recertify_hardest(void) {
     FrbTable t;
@@ -1382,6 +1451,7 @@ int main(int argc, char **argv) {
     /* Each of these builds on files the one before left: stop at the first
      * that fails rather than report its consequences. */
     test_recertify_hardest();
+    test_sample_and_memory();
     test_writer_and_mapping();
     if (!t_failures) test_config_layouts();
     if (!t_failures) test_ladder_basic();

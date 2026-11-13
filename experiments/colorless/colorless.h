@@ -271,14 +271,14 @@ static inline int cl_recolor(const ClTopo *t, uint32_t target, int L, unsigned f
 }
 
 /*
- * cl_recolor with color 0 first, which also says in which order the machine
- * reaches the nodes on the way to the coloring it finds: perm[node] = place.
+ * cl_recolor, which also says in which order the machine reaches the nodes
+ * on the way to the coloring it finds: perm[node] = place.
  * That order is the numbering of a LevelSolver witness, so the search gives
  * the stored REV's numbering without another run.  (A node gets its color
  * exactly when the machine first reaches it: the root at bit 0, a node fp
  * moves to at the next bit, a node cp moves to at once.)
  */
-static inline int cl_recolor_order(const ClTopo *t, uint32_t target, int L, uint32_t *colors,
+static inline int cl_recolor_order(const ClTopo *t, uint32_t target, int L, unsigned first, uint32_t *colors,
                                    uint8_t perm[CL_MAX_NODES]) {
     struct {
         uint32_t known, col;
@@ -292,12 +292,13 @@ static inline int cl_recolor_order(const ClTopo *t, uint32_t target, int L, uint
         if (!((known >> fp) & 1u)) {
             perm[fp] = (uint8_t)__builtin_popcount(known);
             stack[sp].known = known | (1u << fp);
-            stack[sp].col = col | (1u << fp);
+            stack[sp].col = col | ((first ^ 1u) << fp);
             stack[sp].k = (uint8_t)k;
             stack[sp].fp = (uint8_t)fp;
             stack[sp].cp = (uint8_t)cp;
             sp++;
             known |= 1u << fp;
+            col |= first << fp;
         }
         c = (col >> fp) & 1u;
         to = t->link[c][cp];

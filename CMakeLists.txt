@@ -376,6 +376,24 @@ if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_S
     target_include_directories(colorless_cold PRIVATE benchmarks)
     target_link_libraries(colorless_cold PRIVATE carlobomb_fixed_run)
   endif()
+  if(UNIX)
+    # Candidate layouts for the compact Bomb (v4) as prototype files, and the
+    # matrix that measures them.  Not a format: see experiments/v4/cbx.h.
+    find_package(Threads REQUIRED)
+    add_library(carlobomb_cbx STATIC experiments/v4/cbx.c)
+    target_include_directories(carlobomb_cbx PUBLIC experiments/v4)
+    target_link_libraries(carlobomb_cbx PUBLIC carlobomb_colorless carlobomb_fixed_run)
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+      target_compile_options(carlobomb_cbx PUBLIC -mpopcnt)
+    endif()
+    add_executable(v4_matrix experiments/v4/v4_matrix.c)
+    target_include_directories(v4_matrix PRIVATE benchmarks)
+    target_link_libraries(v4_matrix PRIVATE carlobomb_cbx Threads::Threads m)
+    add_executable(test_cbx experiments/v4/test_cbx.c)
+    target_include_directories(test_cbx PRIVATE tests)
+    target_link_libraries(test_cbx PRIVATE carlobomb_cbx carlobomb_minimal)
+    add_test(NAME test_cbx COMMAND test_cbx ${CMAKE_CURRENT_BINARY_DIR}/cbx_test)
+  endif()
   if(CARLOBOMB_HAVE_BOMB_BUILD)
     # The tools on a 13-bit Bomb built for the occasion.
     add_test(NAME colorless_smoke

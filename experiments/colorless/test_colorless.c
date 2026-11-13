@@ -222,11 +222,19 @@ static void test_recolor(void) {
         {   /* the same search, noting the order in which the machine reaches the nodes */
             uint8_t order[CL_MAX_NODES], want[CL_MAX_NODES];
             uint32_t co = 0, visited;
-            int all_reached = cl_recolor_order(&t, target, L, &co, order);
+            int all_reached = cl_recolor_order(&t, target, L, 0, &co, order);
             cl_trace(&t, c0, L, &visited, NULL);
             CHECK(co == c0 && all_reached == (visited == (1u << n) - 1u));
             if (all_reached) {
                 CHECK(cl_execution_order(&t, c0, L, want) == n);
+                for (int i = 0; i < n; i++) CHECK(order[i] == want[i]);
+            }
+            /* and with the other color tried first */
+            all_reached = cl_recolor_order(&t, target, L, 1, &co, order);
+            cl_trace(&t, c1, L, &visited, NULL);
+            CHECK(co == c1 && all_reached == (visited == (1u << n) - 1u));
+            if (all_reached) {
+                CHECK(cl_execution_order(&t, c1, L, want) == n);
                 for (int i = 0; i < n; i++) CHECK(order[i] == want[i]);
             }
         }
@@ -313,7 +321,7 @@ static void test_witness_numbering(void) {
         {
             uint8_t found_perm[CL_MAX_NODES];
             uint32_t found = 0, first = 0;
-            CHECK(cl_recolor_order(&canon, value, L, &found, found_perm));
+            CHECK(cl_recolor_order(&canon, value, L, 0, &found, found_perm));
             CHECK(cl_recolor(&canon, value, L, 0, &first, NULL) && first == found);
             CHECK(cl_execution_order(&canon, found, L, perm) == t.n);
             for (int i = 0; i < t.n; i++) CHECK(found_perm[i] == perm[i]);

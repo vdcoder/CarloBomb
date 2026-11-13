@@ -339,7 +339,7 @@ static inline uint32_t lookup_X_search_only(const Layouts *y, int bits, uint32_t
         uint8_t perm[CL_MAX_NODES];
         uint32_t found = 0, other;
         cl_canon_unrank((int)n, get_packed(y->ranked[n], r, y->rank_bits[n]), &canon);
-        if (!cl_recolor_order(&canon, leaf, y->L, &found, perm)) {
+        if (!cl_recolor_order(&canon, leaf, y->L, 0, &found, perm)) {
             t->n = 0;
             return leaf;
         }

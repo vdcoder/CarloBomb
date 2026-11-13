@@ -340,3 +340,18 @@ add_test(NAME cli_smoke
   COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
           -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM}
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
+
+# ---- experiments -----------------------------------------------------------
+# Measurements for a design decision; no format, solver or Bomb depends on
+# them.  GCC or Clang on x86-64 or any 64-bit target with __int128.
+option(CARLOBOMB_EXPERIMENTS "Build the experiments under experiments/" ON)
+if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+  # Colorless REVs (PR 8): canonical topologies, recoloring, topology codes.
+  add_library(carlobomb_colorless STATIC experiments/colorless/colorless.c)
+  target_include_directories(carlobomb_colorless PUBLIC experiments/colorless)
+  target_link_libraries(carlobomb_colorless PUBLIC carlobomb_rev)
+  add_executable(test_colorless experiments/colorless/test_colorless.c)
+  target_include_directories(test_colorless PRIVATE tests)
+  target_link_libraries(test_colorless PRIVATE carlobomb_colorless carlobomb_fixed_run carlobomb_level)
+  add_test(NAME test_colorless COMMAND test_colorless)
+endif()

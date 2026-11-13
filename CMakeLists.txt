@@ -402,5 +402,13 @@ if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_S
               -DWORK=${CMAKE_CURRENT_BINARY_DIR}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/experiments/colorless/smoke.cmake)
     set_tests_properties(colorless_smoke PROPERTIES TIMEOUT 600)
+    if(UNIX)
+      # The twelve v4 candidates made, checked and measured on a 13-bit Bomb.
+      add_test(NAME v4_smoke
+        COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DMATRIX=$<TARGET_FILE:v4_matrix>
+                -DWORK=${CMAKE_CURRENT_BINARY_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/experiments/v4/smoke.cmake)
+      set_tests_properties(v4_smoke PROPERTIES TIMEOUT 600)
+    endif()
   endif()
 endif()

@@ -5,6 +5,7 @@
  *   v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]
  *                 [--queries N] [--threads 1,2,4] [--cold N] [--checkpoint B] [--keep] [--no-verify]
  *   v4_matrix convert --bomb FILE --output FILE --variant NAME [--checkpoint B]
+ *   v4_matrix choices --bomb FILE
  *
  * FILE of --bomb is a complete fixed-width Bomb.  It is opened for reading
  * and never written.  For each variant `run` makes a prototype file (CBX,
@@ -884,6 +885,72 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
     return failed;
 }
 
+/* ---- what the Bomb says about the next bit ------------------------------------------ */
+
+/*
+ * For every length k below L: of the strings of k bits, how many have one
+ * extension by a bit that needs fewer nodes than the other, and by how many
+ * nodes.  From the fixed-width table alone.  The minimum over the L-bit
+ * extensions of a string is the minimum of the string itself, so the rows
+ * are the same whatever complete Bomb they are taken from.
+ */
+static int cmd_choices(const char *bomb) {
+    FrbFileInfo finfo;
+    FrbTable table;
+    uint64_t (*rows)[5], total[5] = {0};
+    uint32_t bad = 0;
+    uint8_t *below;
+    FrbError fe;
+    int L;
+    if (!bomb) {
+        fprintf(stderr, "usage: v4_matrix choices --bomb FILE\n");
+        return 2;
+    }
+    fe = frb_file_read(bomb, &table, &finfo, &bad);
+    if (fe != FRB_OK || !finfo.complete) {
+        fprintf(stderr, "v4_matrix: %s is not a complete fixed-width Bomb (%s)\n", bomb,
+                fe == FRB_OK ? "it is partial" : frb_error_str(fe));
+        return 1;
+    }
+    L = table.bits;
+    below = malloc(table.count);
+    rows = calloc((size_t)L, sizeof *rows);
+    if (!below || !rows) return 1;
+    for (uint32_t t = 0;; t++) {
+        below[t] = (uint8_t)frb_table_nodes(&table, t);
+        if (t == table.count - 1u) break;
+    }
+    for (int k = L - 1; k >= 0; k--) { /* [0] the same, [1] to [3] fewer by 1, 2, 3 or more; [4] the larger count summed */
+        for (uint32_t v = 0; v < ((uint32_t)1 << k); v++) {
+            int zero = below[2 * v], one = below[2 * v + 1], d = zero < one ? one - zero : zero - one;
+            rows[k][d > 3 ? 3 : d]++;
+            below[v] = (uint8_t)(one < zero ? one : zero);
+        }
+    }
+    printf("Bomb: FixedRunBomb(%d), %s strings, table CRC-32 %08x\n\n", L, commas(table.count), (unsigned)finfo.table_crc);
+    printf("Of the strings of k bits, how many have one extension by a bit that needs fewer nodes than the other\n"
+           "(the next bit the Bomb picks), and by how many nodes; and how many have two that need the same.\n\n");
+    printf("   k %14s %14s %8s %14s %12s %12s %14s\n", "strings", "one is smaller", "share", "by 1 node", "by 2",
+           "by 3 or more", "the same");
+    for (int k = 0; k < L; k++) {
+        uint64_t clear = rows[k][1] + rows[k][2] + rows[k][3], all = clear + rows[k][0];
+        printf("  %2d %14s %14s %7.2f%% %14s %12s %12s %14s\n", k, commas(all), commas(clear),
+               100.0 * (double)clear / (double)all, commas(rows[k][1]), commas(rows[k][2]), commas(rows[k][3]),
+               commas(rows[k][0]));
+        for (int i = 0; i < 4; i++) total[i] += rows[k][i];
+    }
+    {
+        uint64_t clear = total[1] + total[2] + total[3], all = clear + total[0];
+        printf("  %2s %14s %14s %7.2f%% %14s %12s %12s %14s\n", "", commas(all), commas(clear),
+               100.0 * (double)clear / (double)all, commas(total[1]), commas(total[2]), commas(total[3]),
+               commas(total[0]));
+    }
+    free(below);
+    free(rows);
+    frb_table_destroy(&table);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     const char *bomb = NULL, *scratch = NULL, *compact = NULL, *variants = NULL, *output = NULL, *variant = NULL;
     char self[4096];
@@ -926,6 +993,7 @@ int main(int argc, char **argv) {
     if (queries < 1000) queries = 1000;
     if (cold > queries / 2) cold = queries / 2; /* the shorter strings of the cold lookups are taken from the others */
     if (!strcmp(argv[1], "convert")) return cmd_convert(bomb, output, variant, checkpoint_shift);
+    if (!strcmp(argv[1], "choices")) return cmd_choices(bomb);
     if (!strcmp(argv[1], "run")) {
         len = readlink("/proc/self/exe", self, sizeof self - 1);
         if (len > 0) self[len] = '\0';
@@ -936,6 +1004,7 @@ int main(int argc, char **argv) {
 usage:
     fprintf(stderr, "usage: v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]\n"
                     "                     [--queries N] [--threads 1,2,4] [--cold N] [--checkpoint B] [--keep] [--no-verify]\n"
-                    "       v4_matrix convert --bomb FILE --output FILE --variant fields|base-n|rank[,colors|colorless][,whole|half]\n");
+                    "       v4_matrix convert --bomb FILE --output FILE --variant fields|base-n|rank[,colors|colorless][,whole|half]\n"
+                    "       v4_matrix choices --bomb FILE\n");
     return 2;
 }

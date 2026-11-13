@@ -430,6 +430,7 @@ CbxError cbx_open(const char *path, Cbx *c) {
             return CBX_ERR_FORMAT;
         }
     }
+    (void)cl_canon_count(1); /* the tables of the rank are filled here, before there can be several readers */
     c->base = map;
     c->mapped = (size_t)st.st_size;
     c->choice = (const uint64_t *)(const void *)(c->base + h.choice_offset);

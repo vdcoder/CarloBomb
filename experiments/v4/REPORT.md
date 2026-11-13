@@ -120,9 +120,10 @@ With the length:
 | 20 bits | 35,651,648 | 13,278,592 | 2,204,320 | 16.8 |
 | 24 bits | 570,425,408 | 217,653,502 | 39,907,200 | 19.0 |
 
-The bits a string grow with the node counts. If the growth goes on at this
-rate, the 26-bit Bomb comes to about 170 MB against 2.95 GB fixed-width.
-That is an extrapolation; the matrix run on the real Bomb replaces it.
+The bits a string grow with the node counts. If they go on growing as from
+20 to 24 bits, the 26-bit Bomb comes to about 170 MB against 2.95 GB
+fixed-width. That is an extrapolation; the matrix run on the real Bomb
+replaces it.
 
 ## 2. What comes back
 
@@ -188,7 +189,7 @@ Times in nanoseconds, 24 bits, a million random strings of 1 to 23 bits:
 
 | | In a row | One at a time: mean | p50 | p95 | p99 |
 |---|---:|---:|---:|---:|---:|
-| compact file of PR 8 (two walks of its index) | 39.6 | 62 | 35 | 162 | 300 |
+| compact file of PR 8 (two lookups in its index) | 39.6 | 62 | 35 | 162 | 300 |
 | any halved candidate | 3.6 to 4.0 | 13 to 15 | 10 | 36 to 42 | 45 to 57 |
 | any whole candidate | 2.2 to 2.4 | 12 to 14 | 6 to 7 | 38 to 43 | 48 to 101 |
 
@@ -350,7 +351,7 @@ Two choices the numbers do not make by themselves:
 | | Option | 24-bit file | REV as returned | For it |
 |---|---|---:|---:|---|
 | Links, without colors | rank | 39.9 MB | 578 ns | a quarter smaller |
-| | bit fields | 54.5 MB | 512 ns | 66 ns faster, and no table of counts of graphs to carry |
+| | bit fields | 54.5 MB | 512 ns | 66 ns faster, and a simpler reader |
 | Switches | fields of the header | | | one reader for all; a file with colors stays possible |
 | | one combination, fixed | | | less to specify and to test |
 
@@ -376,6 +377,9 @@ colorings, or anything during construction.
   occasion; the Bomb's SHA-256 before and after; no file left behind.
 - The whole suite passes with GCC and with Clang, with the assembly turned
   off, and under the address, undefined-behaviour and leak sanitizers.
+- Once, outside the suite: the matrix of all twelve candidates on the
+  16-bit Bomb under the thread sanitizer, with 1, 2 and 4 readers. No race
+  was reported.
 - The timings: the answers of every timed loop are added up and must agree
   between all files, or the program fails; see the README.
 

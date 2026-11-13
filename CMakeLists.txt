@@ -376,9 +376,10 @@ if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_S
     target_include_directories(colorless_cold PRIVATE benchmarks)
     target_link_libraries(colorless_cold PRIVATE carlobomb_fixed_run)
   endif()
-  if(UNIX)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Candidate layouts for the compact Bomb (v4) as prototype files, and the
     # matrix that measures them.  Not a format: see experiments/v4/cbx.h.
+    # Linux: the matrix drops files from the page cache and reads /proc.
     find_package(Threads REQUIRED)
     add_library(carlobomb_cbx STATIC experiments/v4/cbx.c)
     target_include_directories(carlobomb_cbx PUBLIC experiments/v4)
@@ -402,7 +403,7 @@ if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_S
               -DWORK=${CMAKE_CURRENT_BINARY_DIR}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/experiments/colorless/smoke.cmake)
     set_tests_properties(colorless_smoke PROPERTIES TIMEOUT 600)
-    if(UNIX)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
       # The twelve v4 candidates made, checked and measured on a 13-bit Bomb.
       add_test(NAME v4_smoke
         COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DMATRIX=$<TARGET_FILE:v4_matrix>

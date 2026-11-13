@@ -77,7 +77,8 @@ for every string.
 ## Running it
 
 Build as usual; the experiment is part of the default build with GCC or
-Clang on a 64-bit Unix (`-DCARLOBOMB_EXPERIMENTS=OFF` leaves it out).
+Clang on 64-bit Linux, WSL included (`-DCARLOBOMB_EXPERIMENTS=OFF` leaves it
+out).
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
@@ -86,7 +87,10 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 Then one command. `BOMB` is a complete fixed-width Bomb, for example
 `~/frb24/fixed-run-24.frb`; `SCRATCH` is an existing directory with room for
 the candidate files, which are all there until the end: at most 1.1 times
-the size of the Bomb for the shortlist and 1.7 times for all twelve.
+the size of the Bomb for the shortlist and 1.7 times for all twelve. Under
+WSL take a directory on the Linux side (under your home directory), not
+under `/mnt/c`: files there are not mapped and cached the way the
+measurement assumes.
 
 ```bash
 build/v4_matrix run --bomb BOMB --scratch SCRATCH > matrix.txt

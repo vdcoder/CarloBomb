@@ -16,11 +16,14 @@ build it restartably and in parallel and to check it. Milestone 3 adds the
 solver that reads it: for any target of 1 to 16 bits it returns the certified
 minimum-node REV by lookup, with no search. Every string of L ≤ 16 bits
 needs at most ⌈2√L⌉ − 1 nodes, 7 at 16 bits (`benchmarks/FIXED_RUN_16.md`,
-`benchmarks/FIXED_BOMB_SOLVER.md`). The table format and the constructor now
-reach 24 bits: a longer table is built as a ladder, each length from the
-complete table for one bit fewer (`bombs/fixed-run/OVERNIGHT.md`,
-`benchmarks/FIXED_RUN_24_FEASIBILITY.md`). No neural guidance and no
-LevelSearchBomb yet.
+`benchmarks/FIXED_BOMB_SOLVER.md`). A longer table is built as a ladder,
+each length from the complete table for one bit fewer: to 24 bits in format
+version 2 (`bombs/fixed-run/OVERNIGHT.md`,
+`benchmarks/FIXED_RUN_24_FEASIBILITY.md`), and from 25 to 31 bits in format
+version 3 (`bombs/fixed-run/BEYOND_24.md`,
+`benchmarks/FIXED_RUN_31_FEASIBILITY.md`). The format reaches 31 bits; what
+one machine can compute is 26 in a day and 28 in a week. No neural guidance
+and no LevelSearchBomb yet.
 
 ## Build and test
 
@@ -110,10 +113,11 @@ file format: `bombs/fixed-run/FORMAT.md`.
 ./build/carlobomb bomb verify --file ladder/fixed-run-20.frb --work-dir ladder/work-20 --against fixed-run-16.frb
 ```
 
-Longer tables, up to 24 bits, are built one length at a time on the table
+Longer tables, up to 31 bits, are built one length at a time on the table
 below; each finished length is a complete certified Bomb, and the command
-continues where it stopped. To 20 bits takes about a minute; to 24, hours:
-`bombs/fixed-run/OVERNIGHT.md`.
+continues where it stopped. To 20 bits takes about a minute; to 24, hours
+(`bombs/fixed-run/OVERNIGHT.md`); 25 and 26 on a finished 24-bit Bomb, a
+night and a day (`bombs/fixed-run/BEYOND_24.md`).
 
 ### Bomb-backed FixedSolver
 
@@ -210,8 +214,9 @@ tests and wins a reproducible benchmark.
    MinimalSolver, interrupt and kill constructions and resume them, damage
    and forge journal records, feed in engines that lie, and build the whole
    16-bit table and compare a checksum of the file.
-   `tests/test_fixed_run_ladder.c` does the same for format version 2 and
-   the ladder: every level of small ladders against the MinimalSolver string
+   `tests/test_fixed_run_ladder.c` does the same for format versions 2 and
+   3 and the ladder, levels of one version built on tables of another
+   included: every level of small ladders against the MinimalSolver string
    by string, stopped and resumed, on base tables that are partial, missing,
    exchanged or forged; and one level above the 16-bit table, whose checksum
    is compared.

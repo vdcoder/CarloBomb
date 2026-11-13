@@ -16,6 +16,7 @@
 #include <string.h>
 
 #if !defined(_WIN32)
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <unistd.h>
 #endif
@@ -347,6 +348,8 @@ FrbError frb_table_create_as(FrbTable *t, int bits, const FrbFormat *format) {
     t->count = 0;
     t->entries = NULL;
     t->format = NULL;
+    t->mapping = NULL;
+    t->mapping_bytes = 0;
     if (!format || bits < 1 || bits > format->max_bits) return FRB_ERR_ARG;
     /* A table that does not fit the address space is not a table in memory. */
     if (frb_file_bytes(format, bits) > (uint64_t)SIZE_MAX) return FRB_ERR_MEMORY;
@@ -366,6 +369,8 @@ FrbError frb_table_create(FrbTable *t, int bits) {
             t->count = 0;
             t->entries = NULL;
             t->format = NULL;
+            t->mapping = NULL;
+            t->mapping_bytes = 0;
         }
         return FRB_ERR_ARG;
     }
@@ -374,11 +379,17 @@ FrbError frb_table_create(FrbTable *t, int bits) {
 
 void frb_table_destroy(FrbTable *t) {
     if (!t) return;
-    free(t->entries);
+#if !defined(_WIN32)
+    if (t->mapping) munmap(t->mapping, t->mapping_bytes);
+    else
+#endif
+        free(t->entries);
     t->entries = NULL;
     t->count = 0;
     t->bits = 0;
     t->format = NULL;
+    t->mapping = NULL;
+    t->mapping_bytes = 0;
 }
 
 static int table_ok(const FrbTable *t) {
@@ -422,6 +433,18 @@ FrbError frb_table_get(const FrbTable *t, uint32_t index, FrbStatus *status, Rev
     return check_entry(t->format, frb_table_entry(t, index), t->bits, index, status, g);
 }
 
+/* One more entry in a summary. */
+static void summary_add(FrbSummary *s, FrbStatus st, int nodes) {
+    s->by_status[st]++;
+    if (st == FRB_MINIMAL) {
+        s->minimal_by_nodes[nodes]++;
+        if (nodes > s->max_minimal_nodes) s->max_minimal_nodes = nodes;
+    } else if (st == FRB_WITNESS) {
+        s->witness_by_nodes[nodes]++;
+    }
+    if (nodes > s->max_witness_nodes) s->max_witness_nodes = nodes;
+}
+
 FrbError frb_table_validate(const FrbTable *t, FrbSummary *summary, uint32_t *bad_index) {
     FrbSummary s;
     RevGraph g;
@@ -435,14 +458,7 @@ FrbError frb_table_validate(const FrbTable *t, FrbSummary *summary, uint32_t *ba
             if (bad_index) *bad_index = i;
             return e;
         }
-        s.by_status[st]++;
-        if (st == FRB_MINIMAL) {
-            s.minimal_by_nodes[g.node_count]++;
-            if (g.node_count > s.max_minimal_nodes) s.max_minimal_nodes = g.node_count;
-        } else if (st == FRB_WITNESS) {
-            s.witness_by_nodes[g.node_count]++;
-        }
-        if (g.node_count > s.max_witness_nodes) s.max_witness_nodes = g.node_count;
+        summary_add(&s, st, g.node_count);
     }
     s.complete = s.by_status[FRB_MINIMAL] == s.count;
     if (summary) *summary = s;
@@ -522,17 +538,25 @@ FrbError frb_table_check_chain(const FrbTable *longer, const FrbTable *shorter, 
 
 /* ---- header ------------------------------------------------------------- */
 
+static void header_of(const FrbFormat *format, int bits, const FrbSummary *s, uint32_t table_crc,
+                      uint8_t h[FRB_HEADER_BYTES]);
+
 static void build_header(const FrbTable *t, const FrbSummary *s, uint32_t table_crc,
                          uint8_t h[FRB_HEADER_BYTES]) {
+    header_of(t->format, t->bits, s, table_crc, h);
+}
+
+static void header_of(const FrbFormat *format, int bits, const FrbSummary *s, uint32_t table_crc,
+                      uint8_t h[FRB_HEADER_BYTES]) {
     memset(h, 0, FRB_HEADER_BYTES);
     memcpy(h + H_MAGIC, frb_magic, sizeof frb_magic);
-    put16(h + H_VERSION, (unsigned)t->format->version);
+    put16(h + H_VERSION, (unsigned)format->version);
     put16(h + H_HEADER_SIZE, FRB_HEADER_BYTES);
-    h[H_BITS] = (uint8_t)t->bits;
-    h[H_CAPACITY] = (uint8_t)t->format->node_capacity;
-    h[H_NODE_BITS] = (uint8_t)t->format->node_bits;
-    h[H_ENTRY_SIZE] = (uint8_t)t->format->entry_bytes;
-    put32(h + H_COUNT, t->count);
+    h[H_BITS] = (uint8_t)bits;
+    h[H_CAPACITY] = (uint8_t)format->node_capacity;
+    h[H_NODE_BITS] = (uint8_t)format->node_bits;
+    h[H_ENTRY_SIZE] = (uint8_t)format->entry_bytes;
+    put32(h + H_COUNT, (uint32_t)1 << bits);
     put32(h + H_FLAGS, s->complete ? FRB_FLAG_COMPLETE : 0u);
     put32(h + H_WITNESSES, s->by_status[FRB_WITNESS] + s->by_status[FRB_MINIMAL]);
     put32(h + H_MINIMAL, s->by_status[FRB_MINIMAL]);
@@ -632,6 +656,8 @@ FrbError frb_image_parse(const uint8_t *image, size_t size, FrbTable *t, FrbFile
         t->count = 0;
         t->entries = NULL;
         t->format = NULL;
+        t->mapping = NULL;
+        t->mapping_bytes = 0;
     }
     if (!image) return FRB_ERR_ARG;
     if (!info) info = &local;
@@ -704,6 +730,164 @@ FrbError frb_file_write(const char *path, const FrbTable *t) {
     return write_parts(path, header, sizeof header, t->entries, table_bytes(t));
 }
 
+/* ---- writing a table entry by entry ------------------------------------- */
+
+struct FrbWriter {
+    FILE *f;
+    char *path, *tmp;
+    const FrbFormat *format;
+    int bits;
+    uint32_t count, next, crc;
+    FrbSummary summary;
+    uint8_t *buffer;
+    size_t used, capacity;
+};
+
+void frb_writer_abort(FrbWriter *w) {
+    if (!w) return;
+    if (w->f) fclose(w->f);
+    if (w->tmp) remove(w->tmp);
+    free(w->path);
+    free(w->tmp);
+    free(w->buffer);
+    free(w);
+}
+
+FrbError frb_writer_open(const char *path, int bits, const FrbFormat *format, FrbWriter **writer) {
+    uint8_t placeholder[FRB_HEADER_BYTES] = {0};
+    FrbWriter *w;
+    size_t n;
+    if (!writer) return FRB_ERR_ARG;
+    *writer = NULL;
+    if (!path || !format || bits < 1 || bits > format->max_bits) return FRB_ERR_ARG;
+    w = calloc(1, sizeof *w);
+    if (!w) return FRB_ERR_MEMORY;
+    n = strlen(path);
+    w->path = malloc(n + 1);
+    w->tmp = malloc(n + 5);
+    w->capacity = (size_t)IO_CHUNK - (size_t)IO_CHUNK % (size_t)format->entry_bytes;
+    w->buffer = malloc(w->capacity);
+    if (!w->path || !w->tmp || !w->buffer) {
+        free(w->path);
+        free(w->tmp);
+        w->tmp = NULL;
+        frb_writer_abort(w);
+        return FRB_ERR_MEMORY;
+    }
+    memcpy(w->path, path, n + 1);
+    memcpy(w->tmp, path, n);
+    memcpy(w->tmp + n, ".tmp", 5);
+    w->format = format;
+    w->bits = bits;
+    w->count = (uint32_t)1 << bits;
+    w->summary.count = w->count;
+    w->f = fopen(w->tmp, "wb");
+    /* The header is not known until the last entry has passed: its place is
+     * kept, and nothing reads a file under this name. */
+    if (!w->f || fwrite(placeholder, 1, sizeof placeholder, w->f) != sizeof placeholder) {
+        frb_writer_abort(w);
+        return FRB_ERR_IO;
+    }
+    *writer = w;
+    return FRB_OK;
+}
+
+FrbError frb_writer_put(FrbWriter *w, FrbStatus status, const RevGraph *g) {
+    uint8_t *entry;
+    RevGraph back;
+    FrbStatus st;
+    FrbError e;
+    if (!w || !w->f) return FRB_ERR_ARG;
+    if (w->next >= w->count) return FRB_ERR_SIZE; /* more entries than the table has */
+    entry = w->buffer + w->used;
+    e = frb_entry_encode_as(w->format, status, g, entry);
+    /* What goes into a file has been decoded and run from the bytes that go. */
+    if (e == FRB_OK) e = check_entry(w->format, entry, w->bits, w->next, &st, &back);
+    if (e != FRB_OK) return e;
+    summary_add(&w->summary, st, back.node_count);
+    w->used += (size_t)w->format->entry_bytes;
+    w->next++;
+    if (w->used == w->capacity || w->next == w->count) {
+        w->crc = frb_crc32(w->crc, w->buffer, w->used);
+        if (fwrite(w->buffer, 1, w->used, w->f) != w->used) return FRB_ERR_IO;
+        w->used = 0;
+    }
+    return FRB_OK;
+}
+
+FrbError frb_writer_finish(FrbWriter *w, FrbSummary *summary, uint32_t *table_crc) {
+    uint8_t header[FRB_HEADER_BYTES];
+    int ok;
+    if (!w || !w->f) return FRB_ERR_ARG;
+    if (w->next != w->count) {
+        frb_writer_abort(w);
+        return FRB_ERR_SIZE;
+    }
+    w->summary.complete = w->summary.by_status[FRB_MINIMAL] == w->count;
+    header_of(w->format, w->bits, &w->summary, w->crc, header);
+    ok = fflush(w->f) == 0 && seek64(w->f, 0) == 0 && fwrite(header, 1, sizeof header, w->f) == sizeof header &&
+         fflush(w->f) == 0;
+#if !defined(_WIN32)
+    ok = ok && fsync(fileno(w->f)) == 0; /* the data is on disk before the name changes */
+#endif
+    ok = (fclose(w->f) == 0) && ok;
+    w->f = NULL;
+#if defined(_WIN32)
+    if (ok) remove(w->path);
+#endif
+    ok = ok && rename(w->tmp, w->path) == 0;
+    if (ok) {
+        if (summary) *summary = w->summary;
+        if (table_crc) *table_crc = w->crc;
+        free(w->tmp);
+        w->tmp = NULL; /* it has its name now: nothing to remove */
+    }
+    frb_writer_abort(w);
+    return ok ? FRB_OK : FRB_ERR_IO;
+}
+
+/*
+ * The entries of an open, checked file as a table: a private mapping of the
+ * file where that can be had, else a copy on the heap.  CARLOBOMB_NO_MMAP in
+ * the environment asks for the copy (the tests run both ways).
+ */
+static FrbError table_of_file(FILE *f, const FrbFormat *format, int bits, FrbTable *table) {
+    size_t bytes;
+    FrbError e;
+    table->bits = 0;
+    table->count = 0;
+    table->entries = NULL;
+    table->format = NULL;
+    table->mapping = NULL;
+    table->mapping_bytes = 0;
+    if (frb_file_bytes(format, bits) > (uint64_t)SIZE_MAX) return FRB_ERR_MEMORY;
+    bytes = (size_t)format->entry_bytes << bits;
+#if !defined(_WIN32)
+    if (!getenv("CARLOBOMB_NO_MMAP")) {
+        void *map = mmap(NULL, FRB_HEADER_BYTES + bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE, fileno(f), 0);
+        if (map != MAP_FAILED) {
+            table->bits = bits;
+            table->count = (uint32_t)1 << bits;
+            table->entries = (uint8_t *)map + FRB_HEADER_BYTES;
+            table->format = format;
+            table->mapping = map;
+            table->mapping_bytes = FRB_HEADER_BYTES + bytes;
+            return FRB_OK;
+        }
+    }
+#endif
+    e = frb_table_create_as(table, bits, format);
+    if (e != FRB_OK) return e;
+    if (seek64(f, FRB_HEADER_BYTES) != 0) e = FRB_ERR_IO;
+    for (size_t done = 0; e == FRB_OK && done < bytes;) { /* in pieces */
+        size_t now = bytes - done < (size_t)IO_CHUNK ? bytes - done : (size_t)IO_CHUNK;
+        if (fread(table->entries + done, 1, now, f) != now) e = FRB_ERR_IO;
+        done += now;
+    }
+    if (e != FRB_OK) frb_table_destroy(table);
+    return e;
+}
+
 /* Header, length, table bytes and checksum; entries are decoded only if asked. */
 static FrbError load_file(const char *path, FrbTable *t, FrbFileInfo *info, uint32_t *bad_index,
                           int validate) {
@@ -721,6 +905,8 @@ static FrbError load_file(const char *path, FrbTable *t, FrbFileInfo *info, uint
         t->count = 0;
         t->entries = NULL;
         t->format = NULL;
+        t->mapping = NULL;
+        t->mapping_bytes = 0;
     }
     if (!path) return FRB_ERR_ARG;
     if (!info) info = &local;
@@ -734,21 +920,16 @@ static FrbError load_file(const char *path, FrbTable *t, FrbFileInfo *info, uint
     }
     if (length64(f, &length) != 0) e = FRB_ERR_IO;
     else if (length != frb_file_bytes(format, info->bits)) e = FRB_ERR_SIZE;
-    if (e == FRB_OK) e = frb_table_create_as(&table, info->bits, format);
-    if (e != FRB_OK) {
-        fclose(f);
-        return e;
-    }
+    if (e == FRB_OK) e = table_of_file(f, format, info->bits, &table);
+    fclose(f); /* a mapping outlives the descriptor it was made from */
+    if (e != FRB_OK) return e;
     bytes = table_bytes(&table);
-    if (seek64(f, FRB_HEADER_BYTES) != 0) e = FRB_ERR_IO;
-    for (size_t done = 0; e == FRB_OK && done < bytes;) { /* in pieces, the checksum with them */
+    for (size_t done = 0; done < bytes;) { /* the checksum, piece by piece */
         size_t now = bytes - done < (size_t)IO_CHUNK ? bytes - done : (size_t)IO_CHUNK;
-        if (fread(table.entries + done, 1, now, f) != now) e = FRB_ERR_IO;
-        else crc = frb_crc32(crc, table.entries + done, now);
+        crc = frb_crc32(crc, table.entries + done, now);
         done += now;
     }
-    fclose(f);
-    if (e == FRB_OK && crc != info->table_crc) e = FRB_ERR_CHECKSUM;
+    if (crc != info->table_crc) e = FRB_ERR_CHECKSUM;
     if (e == FRB_OK && validate) {
         FrbSummary s;
         e = frb_table_validate(&table, &s, bad_index);

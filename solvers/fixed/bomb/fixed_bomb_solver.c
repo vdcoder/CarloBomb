@@ -105,8 +105,10 @@ static FrbError adopt(FrbTable *table, int validated, RevFixedBomb **out, uint32
     }
     b->entry_bytes = entry_bytes;
     b->graph_bytes = graph_bytes;
-    b->table = *table; /* the storage changes hands */
+    b->table = *table; /* the storage changes hands, heap or mapping */
     table->entries = NULL;
+    table->mapping = NULL;
+    table->mapping_bytes = 0;
     table->count = 0;
     table->bits = 0;
     build_index(b);

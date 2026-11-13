@@ -168,6 +168,17 @@ typedef struct {
     uint32_t count;   /* 2^L */
     uint8_t *entries; /* count * format->entry_bytes bytes, exactly as in the file */
     const FrbFormat *format;
+    /*
+     * A table read from a file is, where the system can do it, a private
+     * mapping of the file and not a copy on the heap: the bytes stay the
+     * file's, are paged in as they are used and can be dropped again, so a
+     * table larger than memory can still be read.  It behaves as a copy
+     * does (a change stays in this process and never reaches the file).
+     * mapping is then the address of the mapping and frb_table_destroy
+     * releases it; NULL for a table on the heap.
+     */
+    void *mapping;
+    size_t mapping_bytes;
 } FrbTable;
 
 /* Every entry FRB_EMPTY.  The format is version 1 for up to 16 bits and
@@ -251,6 +262,21 @@ FrbError frb_image_parse(const uint8_t *image, size_t size, FrbTable *t, FrbFile
 /* Write through a temporary file and a rename, so that `path` is either the
  * old file or the complete new one. */
 FrbError frb_file_write(const char *path, const FrbTable *t);
+
+/*
+ * Write a table entry by entry, in index order, without holding it: for
+ * tables too large to build in memory first.  Every witness is run before
+ * its entry is written, the summary and the table checksum are kept as the
+ * entries pass, and the header is written last.  As with frb_file_write,
+ * `path` is the old file or the complete new one: the entries go to a
+ * temporary file that is renamed by frb_writer_finish, which fails unless
+ * exactly 2^bits entries were put.
+ */
+typedef struct FrbWriter FrbWriter;
+FrbError frb_writer_open(const char *path, int bits, const FrbFormat *format, FrbWriter **writer);
+FrbError frb_writer_put(FrbWriter *writer, FrbStatus status, const RevGraph *g); /* the next index */
+FrbError frb_writer_finish(FrbWriter *writer, FrbSummary *summary, uint32_t *table_crc);
+void frb_writer_abort(FrbWriter *writer); /* nothing is left behind */
 FrbError frb_file_read(const char *path, FrbTable *t, FrbFileInfo *info, uint32_t *bad_index);
 
 /*

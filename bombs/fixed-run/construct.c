@@ -1257,46 +1257,88 @@ FrbError frb_work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions
 
 /* ---- finalization and deep checks --------------------------------------- */
 
-/* The table a state amounts to, validated, written and read back.  Frees
- * the state as soon as the table has been made from it. */
+/* What the table holds for one target of a state: its status and, if it has
+ * a witness, the graph (the ring is made here; nothing stored it). */
+static FrbError state_entry(const FrbState *state, uint32_t i, FrbStatus *status, RevGraph *g) {
+    const FrbTargetState *ts = &state->targets[i];
+    *status = (FrbStatus)ts->status;
+    g->node_count = 0;
+    if (!ts->nodes) return FRB_OK;
+    if (ts->source == FRB_SRC_RING) {
+        frb_ring_witness(i, state->bits, g);
+        return FRB_OK;
+    }
+    return frb_graph_unpack_as(state->format, frb_state_graph(state, i), ts->nodes, g);
+}
+
+/*
+ * The table a state amounts to, written, read back and compared.  Frees the
+ * state.  The table is never held in memory beside the state: it is written
+ * entry by entry (each witness run as it goes), then read back as a stranger
+ * would read it, through a mapping of the file, validated in full and
+ * compared entry for entry with what the state says.
+ */
 static FrbError finalize_state(FrbState *state, const char *output, int allow_partial,
                                FrbSummary *summary, char *err, size_t errlen) {
-    FrbTable table, back;
+    uint8_t entry[FRB_MAX_ENTRY_BYTES];
+    FrbWriter *writer = NULL;
+    FrbFileInfo info;
+    FrbTable back;
+    uint32_t crc = 0, missing;
     FrbError e = first_conflict(state, err, errlen);
     if (e != FRB_OK) {
         frb_state_free(state);
         return e;
     }
-    e = frb_state_table(state, &table);
-    frb_state_free(state);
-    if (e != FRB_OK) {
-        set_err(err, errlen, "the journal does not amount to a valid table: %s", frb_error_str(e));
-        return e;
-    }
-    e = frb_table_validate(&table, summary, NULL);
-    if (e == FRB_OK && !summary->complete && !allow_partial) {
+    missing = state->count - state->by_status[FRB_MINIMAL];
+    if (missing && !allow_partial) { /* nothing is written, not even a temporary file */
+        memset(summary, 0, sizeof *summary);
+        summary->count = state->count;
+        for (int st = 0; st < 5; st++) summary->by_status[st] = state->by_status[st];
         set_err(err, errlen,
                 "%u of %u targets have no certified minimum; a complete table cannot be written",
-                (unsigned)(summary->count - summary->by_status[FRB_MINIMAL]),
-                (unsigned)summary->count);
-        e = FRB_ERR_INCOMPLETE;
+                (unsigned)missing, (unsigned)state->count);
+        frb_state_free(state);
+        return FRB_ERR_INCOMPLETE;
     }
-    if (e == FRB_OK) {
-        e = frb_file_write(output, &table);
-        if (e != FRB_OK) set_err(err, errlen, "cannot write %s", output);
-    }
-    if (e == FRB_OK) { /* read it back as a stranger would */
-        e = frb_file_read(output, &back, NULL, NULL);
-        if (e == FRB_OK) {
-            if (back.count != table.count || back.format != table.format ||
-                memcmp(back.entries, table.entries,
-                       (size_t)table.count * (size_t)table.format->entry_bytes) != 0)
-                e = FRB_ERR_IO;
-            frb_table_destroy(&back);
+    e = frb_writer_open(output, state->bits, state->format, &writer);
+    for (uint32_t i = 0; e == FRB_OK && i < state->count; i++) {
+        FrbStatus status;
+        RevGraph g;
+        e = state_entry(state, i, &status, &g);
+        if (e == FRB_OK) e = frb_writer_put(writer, status, g.node_count ? &g : NULL); /* runs it */
+        if (e != FRB_OK && e != FRB_ERR_IO) {
+            set_err(err, errlen, "the journal does not amount to a valid table: %s", frb_error_str(e));
+            frb_writer_abort(writer);
+            frb_state_free(state);
+            return e;
         }
-        if (e != FRB_OK) set_err(err, errlen, "%s does not read back as written", output);
     }
-    frb_table_destroy(&table);
+    if (e == FRB_OK) e = frb_writer_finish(writer, summary, &crc);
+    else frb_writer_abort(writer);
+    if (e != FRB_OK) {
+        set_err(err, errlen, "cannot write %s", output);
+        frb_state_free(state);
+        return e;
+    }
+    e = frb_file_read(output, &back, &info, NULL); /* every check a reader makes */
+    if (e == FRB_OK) {
+        size_t bytes = (size_t)state->format->entry_bytes;
+        if (back.count != state->count || back.format != state->format || info.table_crc != crc ||
+            info.complete != summary->complete)
+            e = FRB_ERR_IO;
+        for (uint32_t i = 0; e == FRB_OK && i < state->count; i++) {
+            FrbStatus status;
+            RevGraph g;
+            if (state_entry(state, i, &status, &g) != FRB_OK ||
+                frb_entry_encode_as(state->format, status, g.node_count ? &g : NULL, entry) != FRB_OK ||
+                memcmp(entry, frb_table_entry(&back, i), bytes) != 0)
+                e = FRB_ERR_IO;
+        }
+        frb_table_destroy(&back);
+    }
+    if (e != FRB_OK) set_err(err, errlen, "%s does not read back as written", output);
+    frb_state_free(state);
     return e;
 }
 

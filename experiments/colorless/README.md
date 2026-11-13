@@ -2,7 +2,9 @@
 
 Research code for the question raised in PR 8: can a compact Bomb store
 uncolored, canonically numbered topologies and find the colors again from
-the string? The findings are in [REPORT.md](REPORT.md).
+the string? The findings are in [REPORT.md](REPORT.md). What was built on
+them, the candidates for v4 as files and their measurements, is in
+[../v4](../v4/README.md).
 
 This directory defines no format. The tools open a complete fixed-width
 Bomb for reading, validate it with the ordinary reader, and keep everything

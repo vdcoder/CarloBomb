@@ -16,7 +16,7 @@ are given.
 | File | What it is |
 |---|---|
 | `cbx.h`, `cbx.c` | The prototype container: writer, reader, lookups, and the check of a file against the Bomb it was made from |
-| `v4_matrix.c` | Makes each candidate from a Bomb, checks it for every string of every length, and measures it |
+| `v4_matrix.c` | Makes each candidate from a Bomb, checks it for every string of every length, and measures it; and counts how often a Bomb picks a next bit |
 | `test_cbx.c` | Tests of the container (`ctest -R test_cbx`): 84,762 checks |
 | `smoke.cmake` | The twelve candidates on a 13-bit Bomb built for the occasion (`ctest -R v4_smoke`) |
 | `results/` | The output of every run the report quotes |
@@ -85,7 +85,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 
 Then one command. `BOMB` is a complete fixed-width Bomb, for example
 `~/frb24/fixed-run-24.frb`; `SCRATCH` is an existing directory with room for
-one candidate file at a time (a fifth of the Bomb at most).
+the candidate files, which are all there until the end: at most 1.1 times
+the size of the Bomb for the shortlist and 1.7 times for all twelve.
 
 ```bash
 build/v4_matrix run --bomb BOMB --scratch SCRATCH > matrix.txt
@@ -112,20 +113,35 @@ that is busy with something else.
 
 What it needs, measured at 24 bits and scaled by the size of the Bomb:
 
-| Bomb | Fixed-width file | Memory at the peak | Time, twelve candidates |
-|---|---|---|---|
-| 24 bits | 0.57 GB | about 1.2 GB | 5 minutes |
-| 25 bits | 1.5 GB | about 3 GB | twice that or more |
-| 26 bits | 3.0 GB | about 6 GB | four times or more |
+| Bomb | Fixed-width file | Memory at the peak | Scratch, all twelve | Time, all twelve |
+|---|---|---|---|---|
+| 24 bits | 0.57 GB | about 1.3 GB | 1.0 GB | a quarter of an hour |
+| 25 bits | 1.5 GB | about 3.3 GB | 2.5 GB | about half an hour |
+| 26 bits | 3.0 GB | about 6.5 GB | 5 GB | about an hour |
+
+The rows for 25 and 26 bits are scaled from the first and not measured.
 
 The Bomb is read into memory once by the program and once more by each
 conversion, which runs as a process of its own so that its time and memory
-can be read off. Each candidate file is removed after it has been measured
-(`--keep` leaves them). `--no-verify` skips the check of every string,
-`--queries N` sets the number of lookups per measurement (a million),
-`--threads 1,2,4` the numbers of concurrent readers, `--cold N` the number
-of lookups with the file out of the page cache (0 leaves them out),
-`--checkpoint B` the spacing of the stored counts in B (256).
+can be read off. The lookups are measured in three rounds (`--rounds R`),
+each going through all files in turn, and of every timing the quietest
+round is kept: a minute in which the machine was busy with something else
+then costs every file one round, and no file its place in the table. The
+candidate files are removed at the end (`--keep` leaves them).
+
+`--no-verify` skips the check of every string, `--queries N` sets the number
+of lookups per measurement (a million), `--threads 1,2,4` the numbers of
+concurrent readers, `--cold N` the number of lookups with the file out of
+the page cache (0 leaves them out), `--checkpoint B` the spacing of the
+stored counts in B (256); a variant written `rank,colorless,half,c64` has
+its own.
+
+How often the Bomb picks a next bit, length by length, from the fixed-width
+file alone (seconds):
+
+```bash
+build/v4_matrix choices --bomb BOMB
+```
 
 A single file, to look at or to keep:
 
@@ -137,7 +153,8 @@ An existing file is never replaced.
 
 ## What the output says
 
-For each candidate:
+A line as each candidate is made and checked, then a paragraph for each,
+then the matrix: six tables with a row for each file. For each candidate:
 
 - **size**, and the share of the fixed-width file;
 - **conversion**: wall time from the fixed-width file, of which the full
@@ -153,12 +170,13 @@ For each candidate:
   fixed-width table alone;
 - **node count** and **smaller extension**: the two questions answered by
   the index alone, without reading a REV;
-- **verified REV**: the REV of a string fetched, its colors found if they
-  are not stored, and run against the string; one lookup at a time, each
-  timed by itself: mean, median, 95th and 99th percentile; for strings of L
-  bits and for strings of 1 to L-1 bits;
-- **readers**: the same with 1, 2 and 4 threads on one mapping of the file:
-  lookups per second in all, and the percentiles of a single lookup;
+- **REV**: the REV of a string as the reader of the file returns it, its
+  colors found if they are not stored; and **verified REV**: that REV then
+  run against the string by code outside the reader, the same for every
+  file. One lookup at a time, each timed by itself: mean, median, 95th and
+  99th percentile; for strings of L bits and for strings of 1 to L-1 bits;
+- **readers**: verified REVs with 1, 2 and 4 threads on one mapping of the
+  file: lookups per second in all, and the percentiles of a single lookup;
 - **out of the cache**: lookups after the file has been dropped from the
   page cache, with nothing in memory and with the index read in.
 
@@ -178,4 +196,4 @@ every timed loop are added up and the sums compared between the files (they
 must agree, and the program fails if they do not), and a single timed
 question is hidden from the compiler until the clock has been read. An
 earlier version of the program lacked this and reported 0.3 ns for a node
-count; those figures were never published.
+count, which is the time of doing nothing.

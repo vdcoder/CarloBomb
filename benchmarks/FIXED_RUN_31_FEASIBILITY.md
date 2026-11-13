@@ -24,8 +24,8 @@ GB of 2^30 bytes.
   machine.
 - **29 bits is the last length the present storage strategy reaches** (42 GB
   of state on a 64 GB machine) and takes about three weeks.
-- **30 and 31 bits need the state on disk instead of in memory**, and one to
-  six months of search on one machine. The format is ready for them; the
+- **30 and 31 bits need the state on disk instead of in memory**, and two to
+  five months of search on one machine. The format is ready for them; the
   search time, not the storage, is what would have to change first.
 
 ## 2. Search effort, 24 to 30 bits
@@ -80,8 +80,8 @@ the smaller budgets empty takes the rest.
 **The hardest strings.** Of the structured families of the 24-bit study the
 costliest at 25 bits is `0…011` at 4.2·10^7 steps (9 nodes); at 26 bits it
 is `0…01`, which needs **10 nodes** there, 4.25·10^8 steps, 0.43 s. That is
-⌈2√26⌉ − 1. Random strings reached 1.6·10^8 steps. Nothing seen costs more
-than half a second.
+⌈2√26⌉ − 1. Random strings reached 1.6·10^8 steps. Nothing seen at these two
+lengths costs more than half a second.
 
 ## 3. Time
 
@@ -100,13 +100,13 @@ rate directly; before it is in, the two rates used in the 24-bit study:
 | 31 | about 7·10^16 | 5 months | 4 months |
 
 Level 31 is extrapolated at the growth of the last two levels measured. Each
-level costs about as much as everything below it three times over, so a
-ladder to L is 1.3 to 1.5 times its last level.
+level costs two to three times as much as all the levels below it together,
+so a ladder to L is 1.3 to 1.5 times its last level.
 
 Simplest rule: **level 25 takes three times as long as level 24 took on the
-same machine, level 26 twelve and a half times.** To this come, per level, a
-minute or two to replay the journal and run the REVs of the table below, and
-two to five minutes to write, read back and validate the table.
+same machine, level 26 twelve and a half times.** To this come, per level,
+about a minute to replay the journal and run the REVs of the table below,
+and a minute or two to write, read back and validate the table.
 
 ## 4. Memory
 
@@ -122,20 +122,21 @@ verified:
 
 | | 25 bits | 26 bits |
 |---|---:|---:|
-| State in a session | 2.8 GB | 5.3 GB |
-| Finalization, before this work | 4.0 GB | 7.9 GB |
-| Finalization, now | 2.8 GB | 5.2 GB |
-| Verifying a table by itself, before | 1.4 GB | 2.8 GB |
-| Verifying a table by itself, now | none to speak of | none to speak of |
-| Verifying a table against its journal | 2.8 GB | 5.2 GB |
-| Time to write, read back and validate the table | 66 s | 102 s |
-| Time to verify it in full | 81 s | 139 s |
+| A session: state and job list | 2.7 GB | 5.6 GB |
+| Writing the table, program of the 24-bit run | 4.0 GB, 66 s | 7.9 GB, 138 s |
+| Writing the table, now | 2.6 GB, 43 s | 5.2 GB, 102 s |
+| Verifying a table against its journal, program of the 24-bit run | 4.0 GB, 81 s | 7.9 GB, 168 s |
+| Verifying a table against its journal, now | 2.6 GB, 70 s | 5.2 GB, 167 s |
+| Verifying a table by itself, every REV run, now | none to speak of, 57 s | none to speak of, 139 s |
 
-"Before" is the program of the 24-bit run, which built the table in memory
-beside the state and read it back into memory again. Now a table is written
-entry by entry from the state and read back through a mapping of its file
-(section 6); the pages of a mapped file are the system's to keep or drop
-and are not counted here.
+Memory is what the process itself holds (its heap), at the peak. The program
+of the 24-bit run built the table in memory beside the state and read it
+back into memory again. Now a table is written entry by entry from the
+state and read back through a mapping of its file (section 6); the pages of
+a mapped file are the system's to keep or drop, and with them the largest
+figure was 4.0 GB at 25 bits and 7.9 GB at 26. These constructions had no
+table below them, so their job lists were twice those of a ladder level
+(0.25 GB at 26 bits instead of 0.13).
 
 For any length, in advance:
 
@@ -191,8 +192,8 @@ are done; the rest is listed with the reason it was left.
    32-bit, which holds 31 bits and 2^31. Verified on a 2,952,790,080-byte
    file, with lookups at both ends.
 3. *No table in memory beside the state.* Finalization built the table in
-   memory and read it back into memory: three times the table at the peak,
-   on top of the state. Now a streaming writer (`FrbWriter`) takes the
+   memory beside the state and then read it back into memory a second
+   time. Now a streaming writer (`FrbWriter`) takes the
    entries one at a time, runs each witness, keeps the summary and the
    checksum as they pass and writes the header last. And a table that is
    read is a private mapping of its file, not a copy: every reader
@@ -208,11 +209,11 @@ journal.
 
 | Question | Finding |
 |---|---|
-| Bounded-memory journal replay | Replay already reads one record at a time; its memory is the state it builds, not the journal. Level 22 (1.4 million records and 2.1 million base REVs) replays in 2.5 s; level 26 is 16 times that, under a minute; level 31 would be half an hour |
-| Checkpoints, so as not to replay everything | Replay is run when a session starts and ends. At under a minute against hours of search, and half an hour against months, it is below a thousandth of the work at every length. A checkpoint would be a second record of the state to keep in step with the journal, which the design avoids on purpose. Not worth it |
+| Bounded-memory journal replay | Replay already reads one record at a time; its memory is the state it builds, not the journal. Level 22 (1.4 million records and 2.1 million base REVs) replays in 2.5 s; level 26 is 16 times that, under a minute; level 31 would be about twenty minutes |
+| Checkpoints, so as not to replay everything | Replay is run when a session starts and ends. At under a minute against hours of search, and twenty minutes against months, it is below a thousandth of the work at every length. A checkpoint would be a second record of the state to keep in step with the journal, which the design avoids on purpose. Not worth it |
 | Incremental checksums | The table checksum is taken piece by piece on the way in and on the way out; nothing needs the table in one piece. One CRC-32 over 88 GB is a weak guard by itself, but it is not by itself: every entry is run and must emit its own index. A list of checksums per block beside the file would let a damaged block be located; optional |
 | Random-access reads | One seek, 44 bytes, one run of the REV: `bomb lookup` on the 2.95 GB file takes as long as on a small one. Nothing to do |
-| Smaller state | 28 of the 40 bookkeeping bytes per string are statistics of its own searches (count, steps, time), kept for `bomb status`. Dropping them from the state would bring 83 bytes to 55: a third less memory, 29 bits in 28 GB. It moves no length from impossible to possible on the machine at hand. Optional |
+| Smaller state | 28 of the 40 bookkeeping bytes per string describe its own searches (count, steps, time, the step limit that stopped one), most of it kept for `bomb status`. Dropping them from the state would bring 83 bytes to 55: a third less memory, 29 bits in 28 GB. It moves no length from impossible to possible on the machine at hand. Optional |
 | Smaller journal records | A record carries a 43-byte graph of which a 9-node REV uses 13. A record of 64 bytes would hold every REV of up to 13 nodes and cut the journal by a third. It needs a second record size for larger REVs. Optional; worth having from 28 bits |
 | Prefix index above 16 bits | The FixedSolver's index is one table index per prefix: 2 bytes up to 16 bits, 4 above. That is 256 MB at 26 bits and 8 GB at 31. One bit per prefix (which of the two extensions leads to the fewest nodes) is 8 MB and 256 MB, at the price of following up to L bits per question. In a ladder directory no index is needed at all: a string of ℓ bits is one entry of the ℓ-bit table. Optional; not needed for 25 and 26 |
 

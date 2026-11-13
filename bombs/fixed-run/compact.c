@@ -313,6 +313,8 @@ static FrbError parse_header(const uint8_t *h, size_t available, FrbCompactInfo 
         return FRB_ERR_HEADER;
     info->source_version = (int)get16(h + C_SOURCE_VERSION);
     if (info->source_version > 3) return FRB_ERR_HEADER;
+    /* A source that could not have held strings of this length is no source. */
+    if (info->source_version && info->bits > frb_format(info->source_version)->max_bits) return FRB_ERR_HEADER;
     info->directory_crc = get32(h + C_DIRECTORY_CRC);
     info->index_crc = get32(h + C_INDEX_CRC);
     info->source_table_crc = get32(h + C_SOURCE_CRC);

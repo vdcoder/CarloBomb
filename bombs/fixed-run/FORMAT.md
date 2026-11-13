@@ -686,7 +686,7 @@ is a 64-bit number.
 | 28 | 4 | 2^L (entries with status MINIMAL) |
 | 32 | 1 | Largest node count of any REV: the last class that is not empty |
 | 33 | 1 | The same |
-| 34 | 2 | Version of the fixed-width file this was made from: 1, 2 or 3; 0 if it was made from a table that never was a file |
+| 34 | 2 | Version of the fixed-width file this was made from: 1, 2 or 3, and one that holds L bits; 0 if it was made from a table that never was a file |
 | 36 | 4 | CRC-32 of the class directory: the 992 bytes from offset 64 |
 | 40 | 4 | CRC-32 of the prefix index: I · (2^(L+1) − 2) bytes from offset 1056 |
 | 44 | 4 | Table CRC-32 of the fixed-width file this was made from (its header field at offset 36) |
@@ -801,8 +801,8 @@ failure (`frb_compact_open`):
    empty class has checksum 0;
 4. count, flags and the two totals are 2^L, 1, 2^L and 2^L; the two largest
    node counts are the last class that is not empty; the source version is
-   0..3; the length field is the length section 12.2 computes, and the file
-   has that length;
+   0, or a fixed-width version that holds strings of L bits; the length
+   field is the length section 12.2 computes, and the file has that length;
 5. the checksum of the prefix index; the bytes between the index and the
    first class are zero; the checksum of every class;
 6. **the entries of the L-bit strings, taken in the order of the strings:**

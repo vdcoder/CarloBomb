@@ -11,14 +11,192 @@
  * is why it cannot be tested from outside: here each is shown to refuse, on
  * its own, an index that the other is not asked about.
  *
+ * The same goes for what a conversion does after it has written: the new
+ * file is opened and compared with the table before it gets its name, and an
+ * expanded file is read back.  With a correct writer and a working disk
+ * those checks pass, always.  Here two functions of the fixed-width library
+ * that compact.c calls are replaced by ones that can be told to lie, the way
+ * a broken writer or a bad disk would: a REV other than the table's while
+ * the file is written, another file than the one written when it is read
+ * back.  Each lie must be found, and nothing may be left behind.
+ *
  * Usage: test_compact_internal [prefix-for-scratch-files]
  */
+#if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64
+#endif
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
+
+#include "fixed_run.h"
+
+static FrbError lying_entry_decode_as(const FrbFormat *format, const uint8_t *in, FrbStatus *status, RevGraph *g);
+static FrbError lying_file_read(const char *path, FrbTable *t, FrbFileInfo *info, uint32_t *bad_index);
+
+#define frb_entry_decode_as lying_entry_decode_as
+#define frb_file_read lying_file_read
 #include "../compact.c"
+#undef frb_entry_decode_as
+#undef frb_file_read
 
 #include "minimal_solver.h"
 #include "test_util.h"
 
 enum { BITS = 8 };
+
+/* ---- the two functions that can be told to lie ---------------------------- */
+
+typedef enum {
+    HONEST = 0,
+    WRITE_ANOTHER_REV,   /* while writing: for one string, another REV of the same size that emits it too */
+    WRITE_A_WRONG_REV,   /* while writing: for one string, the REV of another string of the same size */
+    READ_ANOTHER_SUM,    /* reading back: the file has another table checksum than was written */
+    READ_ANOTHER_TABLE,  /* reading back: one entry is another REV */
+    READ_NOT_COMPLETE    /* reading back: the file does not say it is complete */
+} Lie;
+
+static struct {
+    Lie lie;
+    uint32_t calls;       /* of lying_entry_decode_as since the lie was set */
+    uint32_t count;       /* entries of the table: the first `count` calls are the writer's */
+    uint32_t at;          /* the string lied about */
+    RevGraph instead;     /* the REV given for it */
+} liar;
+
+static void tell(Lie lie, uint32_t count, uint32_t at, const RevGraph *instead) {
+    memset(&liar, 0, sizeof liar);
+    liar.lie = lie;
+    liar.count = count;
+    liar.at = at;
+    if (instead) liar.instead = *instead;
+}
+
+static FrbError lying_entry_decode_as(const FrbFormat *format, const uint8_t *in, FrbStatus *status, RevGraph *g) {
+    FrbError e = frb_entry_decode_as(format, in, status, g);
+    uint32_t call = liar.calls++;
+    /* frb_compact_write decodes every entry once to write it, in order, and
+     * frb_compact_equals_table decodes every entry again to compare. */
+    if (e == FRB_OK && (liar.lie == WRITE_ANOTHER_REV || liar.lie == WRITE_A_WRONG_REV) && call == liar.at &&
+        call < liar.count)
+        *g = liar.instead;
+    return e;
+}
+
+static FrbError lying_file_read(const char *path, FrbTable *t, FrbFileInfo *info, uint32_t *bad_index) {
+    FrbError e = frb_file_read(path, t, info, bad_index);
+    if (e != FRB_OK) return e;
+    if (liar.lie == READ_ANOTHER_SUM) info->table_crc ^= 0x00000100u;
+    if (liar.lie == READ_NOT_COMPLETE) info->complete = 0;
+    if (liar.lie == READ_ANOTHER_TABLE && frb_table_put(t, liar.at, FRB_MINIMAL, &liar.instead) != FRB_OK)
+        return FRB_ERR_ARG;
+    return e;
+}
+
+static int exists(const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (f) fclose(f);
+    return f != NULL;
+}
+
+/* The same REV with two of its nodes exchanged: it emits the same string. */
+static void relabel(const RevGraph *in, int a, int b, RevGraph *out) {
+    *out = *in;
+    for (int i = 0; i < in->node_count; i++) {
+        int to = i == a ? b : i == b ? a : i;
+        out->nodes[to].color = in->nodes[i].color;
+        for (int k = 0; k < 2; k++) {
+            int link = in->nodes[i].links[k];
+            out->nodes[to].links[k] = link == a ? b : link == b ? a : link;
+        }
+    }
+}
+
+static int same_rev(const RevGraph *a, const RevGraph *b) {
+    if (a->node_count != b->node_count) return 0;
+    for (int i = 0; i < a->node_count; i++)
+        if (a->nodes[i].color != b->nodes[i].color || a->nodes[i].links[0] != b->nodes[i].links[0] ||
+            a->nodes[i].links[1] != b->nodes[i].links[1])
+            return 0;
+    return 1;
+}
+
+/* What a conversion does when what it wrote, or what it reads back, is not the table. */
+static void test_lies(const FrbTable *t, const char *prefix) {
+    char path[1200], tmp[1300], out[1200], out_tmp[1300];
+    FrbCompact *c = NULL;
+    FrbStatus status;
+    RevGraph g, other, wrong;
+    uint32_t at = 0, from = 0, crc = 0;
+    int found = 0;
+
+    snprintf(path, sizeof path, "%s_lie.frb", prefix);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    snprintf(out, sizeof out, "%s_lie_fixed.frb", prefix);
+    snprintf(out_tmp, sizeof out_tmp, "%s.tmp", out);
+    remove(path);
+    remove(out);
+
+    /* A string with a REV that has another numbering, and a second string of the same size. */
+    for (uint32_t i = 0; i < t->count && !found; i++) {
+        CHECK(frb_table_get(t, i, &status, &g) == FRB_OK);
+        if (g.node_count < 3) continue;
+        relabel(&g, 1, 2, &other);
+        if (same_rev(&g, &other) || frb_graph_output(&other, t->bits) != i) continue;
+        for (uint32_t j = 0; j < t->count && !found; j++) {
+            if (j == i || frb_table_nodes(t, j) != g.node_count) continue;
+            CHECK(frb_table_get(t, j, &status, &wrong) == FRB_OK);
+            at = i;
+            from = j;
+            found = 1;
+        }
+    }
+    CHECK(found);
+    if (!found) return;
+    (void)from;
+
+    /* Honest: the file is written, and nothing temporary stays. */
+    tell(HONEST, t->count, 0, NULL);
+    CHECK(frb_compact_write(path, t, 1, 0, 0) == FRB_OK && exists(path) && !exists(tmp));
+    CHECK(liar.calls == 2 * t->count); /* once to write, once to compare: the lies below are told to the first */
+    remove(path);
+
+    /* The writer puts another REV of the string into the file.  The file is valid in every byte,
+     * and it is not the table: found by the comparison, and no file gets the name. */
+    tell(WRITE_ANOTHER_REV, t->count, at, &other);
+    CHECK(frb_compact_write(path, t, 1, 0, 0) == FRB_ERR_EVIDENCE);
+    CHECK(!exists(path) && !exists(tmp));
+
+    /* The writer puts the REV of another string there.  The file does not open. */
+    tell(WRITE_A_WRONG_REV, t->count, at, &wrong);
+    CHECK(frb_compact_write(path, t, 1, 0, 0) == FRB_ERR_OUTPUT);
+    CHECK(!exists(path) && !exists(tmp));
+
+    /* Expanding: the file read back is not the one written. */
+    tell(HONEST, t->count, 0, NULL);
+    CHECK(frb_compact_write(path, t, 1, 0, 0) == FRB_OK);
+    CHECK(frb_compact_open(path, &c, NULL) == FRB_OK);
+    if (c) {
+        CHECK(frb_compact_expand(c, NULL, out, &crc) == FRB_OK && exists(out) && !exists(out_tmp));
+        remove(out);
+        tell(READ_ANOTHER_SUM, t->count, 0, NULL);
+        CHECK(frb_compact_expand(c, NULL, out, &crc) == FRB_ERR_EVIDENCE && !exists(out) && !exists(out_tmp));
+        tell(READ_NOT_COMPLETE, t->count, 0, NULL);
+        CHECK(frb_compact_expand(c, NULL, out, &crc) == FRB_ERR_EVIDENCE && !exists(out) && !exists(out_tmp));
+        tell(READ_ANOTHER_TABLE, t->count, at, &other);
+        CHECK(frb_compact_expand(c, NULL, out, &crc) == FRB_ERR_EVIDENCE && !exists(out) && !exists(out_tmp));
+        tell(HONEST, t->count, 0, NULL);
+        CHECK(frb_compact_expand(c, NULL, out, &crc) == FRB_OK && exists(out));
+        remove(out);
+    }
+    frb_compact_close(c);
+    remove(path);
+    printf("lies: a writer that writes another REV, or a wrong one, and a file that reads back as another:\n"
+           "      each found before a file gets its name, and nothing left behind\n");
+}
 
 int main(int argc, char **argv) {
     char path[1200], target[FRB_MAX_BITS + 1];
@@ -93,9 +271,50 @@ int main(int argc, char **argv) {
     CHECK(validate(&b, &bad) == FRB_ERR_ENTRY);
     CHECK(frb_compact_equals_table(&b, &t, &bad) == FRB_ERR_EVIDENCE);
 
+    /* The fixed-width version a Bomb expands to: the one asked for if it can hold the length,
+     * else none; unasked, the one it was made from, or the one its length calls for. */
+    {
+        FrbCompact c;
+        memset(&c, 0, sizeof c);
+        for (int bits = 1; bits <= 31; bits++) {
+            int least = bits <= 16 ? 1 : bits <= 24 ? 2 : 3;
+            c.info.bits = bits;
+            for (int source = 0; source <= 3; source++) {
+                c.info.source_version = source;
+                for (int version = 1; version <= 3; version++) {
+                    const FrbFormat *chosen = format_of(&c, frb_format(version));
+                    CHECK(version >= least ? chosen == frb_format(version) : chosen == NULL);
+                }
+                /* a source version that could not have held the length is no version to expand to */
+                CHECK(format_of(&c, NULL) ==
+                      (source == 0 ? frb_format(least) : source >= least ? frb_format(source) : NULL));
+            }
+        }
+    }
+
+    /* A header that names a source which could not have held strings of its length: for every
+     * length and version, written by the writer's own header code with a made-up layout. */
+    {
+        static uint8_t h[FRB_COMPACT_INDEX_OFFSET];
+        for (int bits = 1; bits <= 31; bits++) {
+            int least = bits <= 16 ? 1 : bits <= 24 ? 2 : 3;
+            for (int source = 0; source <= 3; source++) {
+                FrbCompactInfo made, read;
+                memset(&made, 0, sizeof made);
+                made.class_count[bits] = (uint32_t)1 << bits; /* every REV a ring, say */
+                CHECK(frb_compact_layout(&made, bits, 0) == FRB_OK);
+                made.source_version = source;
+                write_header(&made, h);
+                CHECK(parse_header(h, sizeof h, &read) ==
+                      (source == 0 || source >= least ? FRB_OK : FRB_ERR_HEADER));
+            }
+        }
+    }
+
     free(image);
-    frb_table_destroy(&t);
     remove(path);
+    test_lies(&t, argc > 1 ? argv[1] : "compact_internal");
+    frb_table_destroy(&t);
     printf("internal: %d wrong answers for shorter strings, each refused by the reader and, independently,\n"
            "          by the comparison with the fixed-width table\n",
            refused_by_both);

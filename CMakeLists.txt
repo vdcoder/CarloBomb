@@ -289,6 +289,13 @@ add_test(NAME test_fixed_bomb_solver
   COMMAND test_fixed_bomb_solver ${CMAKE_CURRENT_BINARY_DIR}/fixed_bomb_test_work
           --cross-bits ${CARLOBOMB_FIXED_CROSS_BITS})
 set_tests_properties(test_fixed_bomb_solver PROPERTIES TIMEOUT 900)
+# The solver and the compact reader compiled into the test, to change the
+# bytes of an opened compact Bomb.
+add_executable(test_fixed_bomb_internal solvers/fixed/bomb/tests/test_fixed_bomb_internal.c)
+target_include_directories(test_fixed_bomb_internal PRIVATE tests solvers/fixed/bomb bombs/fixed-run)
+target_link_libraries(test_fixed_bomb_internal PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_fixed_bomb_internal
+  COMMAND test_fixed_bomb_internal ${CMAKE_CURRENT_BINARY_DIR}/fixed_bomb_internal)
 
 if(CARLOBOMB_HAVE_BOMB_BUILD)
   # The bomb commands end to end.  bomb_16 builds the whole 16-bit table with

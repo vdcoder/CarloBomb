@@ -760,7 +760,13 @@ static void test_refusals(void) {
 
     CHECK(frb_compact_file_info(path, &info) == FRB_OK && info.source_table_crc == 0xCAFEF00Du);
     image = slurp(path, &size);
-    CHECK(image != NULL && size == info.file_bytes);
+    CHECK(image != NULL && size == info.file_bytes && size > 1056);
+    if (!image || size != info.file_bytes || size <= 1056) { /* nothing to damage: the failure is counted */
+        free(image);
+        frb_table_destroy(&t);
+        remove(path);
+        return;
+    }
     copy = malloc(size + 8);
     w = (size_t)info.index_bytes;
 

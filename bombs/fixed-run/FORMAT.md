@@ -622,8 +622,8 @@ fewer and fit in 7 bytes. A compact file holds the same REVs in the space they n
 what a fixed-width file does not have: the answer for every string of fewer
 than L bits.
 
-    fixed-width, 23 bits      285,212,736 bytes
-    compact, 23 bits          108,606,260 bytes     38.1%
+    fixed-width, 24 bits      570,425,408 bytes
+    compact, 24 bits          217,653,502 bytes     38.2%
 
 What it is and is not:
 
@@ -947,6 +947,7 @@ bits, 3 from 17):
 | 21 | 71,303,232 | 26,865,794 | 37.7% | 14,281,826 | 12,582,906 |
 | 22 | 142,606,400 | 54,099,256 | 37.9% | 28,932,376 | 25,165,818 |
 | 23 | 285,212,736 | 108,606,260 | 38.1% | 58,273,556 | 50,331,642 |
+| 24 | 570,425,408 | 217,653,502 | 38.2% | 116,989,150 | 100,663,290 |
 
 The REVs themselves take a fifth of what they take in a fixed-width file;
 the prefix index, which the fixed-width file does not have at all, is nearly

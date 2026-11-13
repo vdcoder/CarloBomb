@@ -20,14 +20,14 @@ with any other copy.
 | | 23 bits | 24 bits |
 |---|---:|---:|
 | Fixed-width file (version 2) | 285,212,736 bytes | 570,425,408 bytes |
-| Compact file (version 4, 3-byte index) | 108,606,260 bytes, 38.1% | TBD24 |
-| of which REVs / prefix index | 58,273,556 / 50,331,642 | TBD24 |
-| Compact, 4-byte index | 125,383,468 bytes, 44.0% | TBD24 |
-| Open with full validation, fixed-width / compact | 3.23 s / 2.68 s | TBD24 |
-| Memory of its own while open, fixed-width / compact | 32 MiB / 0 | TBD24 |
-| Node count of an L-bit string, fixed-width / compact | 27 ns / 25 ns | TBD24 |
-| REV of a 1..L-bit string, verified, fixed-width / compact | 314 ns / 468 ns | TBD24 |
-| REV of an L-bit string, verified, fixed-width / compact | 468 ns / 717 ns | TBD24 |
+| Compact file (version 4, 3-byte index) | 108,606,260 bytes, 38.1% | 217,653,502 bytes, 38.2% |
+| of which REVs / prefix index | 58,273,556 / 50,331,642 | 116,989,150 / 100,663,290 |
+| Compact, 4-byte index | 125,383,468 bytes, 44.0% | 251,207,926 bytes, 44.0% |
+| Open with full validation, fixed-width / compact | 3.23 s / 2.68 s | 6.58 s / 5.49 s |
+| Memory of its own while open, fixed-width / compact | 32 MiB / 0 | 64 MiB / 0 |
+| Node count of an L-bit string, fixed-width / compact | 27 ns / 25 ns | 29 ns / 33 ns |
+| REV of a 1..L-bit string, verified, fixed-width / compact | 314 ns / 468 ns | 336 ns / 504 ns |
+| REV of an L-bit string, verified, fixed-width / compact | 468 ns / 717 ns | 477 ns / 757 ns |
 
 - **The design is correct**, and was built as approved: every one of the
   real Bombs of 16 to 24 bits converts, every converted REV emits its
@@ -41,11 +41,11 @@ with any other copy.
 - **A compact file is 38% of a fixed-width one, and nearly half of it is the
   prefix index.** The REVs alone shrink to a fifth.
 - **A lookup of a REV costs one more memory access** than in a fixed-width
-  file, about 0.2 microseconds on this machine. Node counts cost the same
+  file, 0.2 to 0.3 microseconds on this machine. Node counts cost the same
   or less.
 - **The design leaves more on the table than it takes.** Three changes that
-  were measured but are outside what was approved would bring the 23-bit
-  file from 108.6 MB to 39 MB. They are listed under "Beyond the approved
+  were measured but are outside what was approved would bring the 24-bit
+  file from 217.7 MB to 80.6 MB. They are listed under "Beyond the approved
   design" for a decision; none of them is in this code.
 
 ## Review of the design
@@ -129,16 +129,17 @@ is published and expensive after.
 
 ### Beyond the approved design
 
-Measured on the real 23-bit Bomb, and not adopted, because each changes the
-layout that was approved. Sizes are exact, from the class counts.
+Measured on the real 23- and 24-bit Bombs, and not adopted, because each
+changes the layout that was approved. Sizes are exact, from the class
+counts.
 
-| | 23-bit file | of fixed-width |
-|---|---:|---:|
-| As approved and built | 108,606,260 | 38.1% |
-| A. One bit per shorter string instead of an ordinal | 84,489,012 | 29.6% |
-| D. Complement symmetry: half the REVs, half the index | 54,303,655 | 19.0% |
-| A + D | 42,245,034 | 14.8% |
-| A + D + C (links in base N) | 39,252,387 | 13.8% |
+| | 23-bit file | 24-bit file | of fixed-width |
+|---|---:|---:|---:|
+| As approved and built | 108,606,260 | 217,653,502 | 38.2% |
+| A. One bit per shorter string instead of an ordinal | 84,489,012 | 169,419,006 | 29.7% |
+| D. Complement symmetry: half the REVs, half the index | 54,303,655 | 108,827,276 | 19.1% |
+| A + D | 42,245,034 | 84,710,031 | 14.9% |
+| A + D + C (links in base N) | 39,252,387 | 80,584,149 | 14.1% |
 
 **A. One bit per shorter string.** The index entries of the strings of
 fewer than L bits are half the index. Each could be one bit instead of an
@@ -147,22 +148,24 @@ from the string down to its L-bit extension, one bit per step, and reads
 that string's ordinal. `compact_bench --alternatives` builds this index in
 memory from the compact file and measures it against the one in the format:
 
-| 23 bits | Index, bytes | Node count, 1..L | REV with its extension, 1..L |
+| | Index, bytes | Node count, 1..L | REV with its extension, 1..L |
 |---|---:|---:|---:|
-| An ordinal for every string | 50,331,642 | 26 ns | 352 ns |
-| Ordinals for L bits, a bit for shorter | 26,214,400 | 81 ns | 357 ns |
+| 23 bits, an ordinal for every string | 50,331,642 | 26 ns | 352 ns |
+| 23 bits, ordinals for L bits, a bit for shorter | 26,214,400 | 81 ns | 357 ns |
+| 24 bits, an ordinal for every string | 100,663,290 | 27 ns | 382 ns |
+| 24 bits, ordinals for L bits, a bit for shorter | 52,428,800 | 107 ns | 422 ns |
 
-Half the index for 55 ns on a node count of a shorter string, and nothing
-measurable on a REV: the walk ends at the L-bit string, so the extension is
-known without running the REV on, which pays for the walk. The walk reaches
-the REV the ordinal names for every one of the 8,388,606 shorter strings.
-From 25 bits, where an ordinal is 4 bytes, this saves nearly 2^(L+2) bytes:
-130 MB at 25 bits, 260 MB at 26.
+Half the index for 55 to 80 ns on a node count of a shorter string, and
+between nothing and 10% on a REV: the walk ends at the L-bit string, so the
+extension is known without running the REV on, which pays for most of the
+walk. The walk reaches the REV the ordinal names for every one of the
+16,777,214 shorter strings. From 25 bits, where an ordinal is 4 bytes, this
+saves nearly 2^(L+2) bytes: 130 MB at 25 bits, 260 MB at 26.
 
 **D. Complement symmetry.** In every Bomb the ladder has built, the REV of
 a string's complement is exactly the complement of the string's REV, node
-for node: 4,194,304 of 4,194,304 pairs at 23 bits, and the same at 16, 17,
-18 and 20. Half the REVs can therefore be derived from the other half by
+for node: 8,388,608 of 8,388,608 pairs at 24 bits, and all pairs at every
+length from 16 to 23. Half the REVs can therefore be derived from the other half by
 exchanging the colors, and the file needs only the strings that start with
 0. It also brings the ordinals of a 25-bit Bomb back to 3 bytes. The price
 is in the rule for equals: the mirror image of "lowest string" is "highest
@@ -176,8 +179,9 @@ exactly symmetric, which then stay as they are.
 has 7 values. Colors and links as one number of N + 2N·log2 N bits need 4,
 5, 6, 9 and 10 bytes for N = 5, 6, 7, 9 and 10 where the format takes 5, 6,
 7, 11 and 12 (8 nodes are exact at 7 bytes). On the 23-bit Bomb: 52,288,262
-bytes of REVs instead of 58,273,556, 10% less, for a division per link when
-a REV is read.
+bytes of REVs instead of 58,273,556, 10% less; on the 24-bit Bomb, where
+more REVs have 8 nodes, 108,737,386 instead of 116,989,150, 7% less; for a
+division per link when a REV is read.
 
 **B. Ordinals of L-bit strings by counting** (not measured). A string's
 entry could be its node count alone, 4 bits, with its position in the class
@@ -214,7 +218,7 @@ same after as before.
 | 21 | 71,303,232 | 26,865,794 | 37.7% | 9 | 2.2 / 2.2 / 2.7 s |
 | 22 | 142,606,400 | 54,099,256 | 37.9% | 9 | 4.7 / 4.6 / 5.4 s |
 | 23 | 285,212,736 | 108,606,260 | 38.1% | 9 | 9.3 / 9.7 / 11.1 s |
-| 24 | 570,425,408 | TBD24 | TBD24 | TBD24 | TBD24 |
+| 24 | 570,425,408 | 217,653,502 | 38.2% | 9 | 19.4 / 20.2 / 23.3 s |
 
 The 16-bit file is version 1 (19 bytes an entry), the others version 2 (34
 bytes), which is why the ratio drops between 16 and 17 bits and then rises
@@ -233,26 +237,33 @@ from the same table, so these can be compared with a conversion anywhere:
 | 21 | `1581fb018ee718e77fd77311eaba41a7304219b54cba4235c551dcdc920ed8cb` | `0e3db6319b79323c50b2b05a26ca7e7c28be0dd9d7e450e0d67cd409282b9f62` |
 | 22 | `189e6ea0cf71cbcadb1765a017bf0e611027c64684f7b53ce34165d5811dcb98` | `474574cc992ba6dfc81f8785dcfbc247d424336bac65d5a8531f09c3b17a5365` |
 | 23 | `61ee0779edc76e83da984d6970607cc3f5e333bdec267ca88209467daf491088` | `6a6661305e1456f1b290901589467570245c2c3b23b3e6d6b3d2aeadf6dceebc` |
-| 24 | TBD24 | TBD24 |
+| 24 | `3f99769699e24d97d7c15a3b305c3d47f1cb0496978ac71ef086c91457ecd0c1` | `e02693113ea7c89054ef14dfd3bd74f503b50202f141b0d76920163e77502384` |
 
-Where the bytes go, at 23 bits:
+The 24-bit Bomb was finished in the container on 13 November: 1,886 strings
+need 9 nodes, none more, in 20,867,501,480,268 search steps. Its fixed-width
+file must be the same bytes as the owner's `fixed-run-24.frb`, and a
+conversion of that file must give the compact checksum above.
+
+Where the bytes go, at 24 bits:
 
     Nodes   Link bits   Bytes per REV          REVs            Bytes
         1           0               1             2                2
         2           1               1             6                6
         3           2               2            64              128
         4           2               3           968            2,904
-        5           3               5        18,024           90,120
-        6           3               6       406,588        2,439,528
-        7           3               7     5,560,594       38,924,158
-        8           3               7     2,402,318       16,816,226
-        9           4              11            44              484
-    REVs                      58,273,556 bytes
-    prefix index              50,331,642 bytes (16,777,214 strings of 1 to 23 bits, 3 bytes each)
+        5           3               5        18,082           90,410
+        6           3               6       418,502        2,511,012
+        7           3               7     7,811,408       54,679,856
+        8           3               7     8,526,298       59,684,086
+        9           4              11         1,886           20,746
+    REVs                     116,989,150 bytes
+    prefix index             100,663,290 bytes (33,554,430 strings of 1 to 24 bits, 3 bytes each)
     header, directory              1,062 bytes (with the padding before the REVs)
-    file                     108,606,260 bytes
+    file                     217,653,502 bytes
 
-TBD24-LAYOUT
+A REV takes 7.0 bytes on average where the fixed-width entry has 34, and
+the index 6 bytes a string.
+
 
 ## Opening and looking up
 
@@ -270,9 +281,9 @@ Opening is a full validation either way: every REV is run.
 | 23 bits, fixed-width | 3.23 s | 32.0 MiB | 272 MiB |
 | 23 bits, compact | 2.68 s | 0 | 104 MiB |
 | 23 bits, compact, 4-byte index | 2.74 s | 0 | 120 MiB |
-| 24 bits, fixed-width | TBD24 | TBD24 | TBD24 |
-| 24 bits, compact | TBD24 | TBD24 | TBD24 |
-| 24 bits, compact, 4-byte index | TBD24 | TBD24 | TBD24 |
+| 24 bits, fixed-width | 6.58 s | 64.0 MiB | 544 MiB |
+| 24 bits, compact | 5.49 s | 0 | 208 MiB |
+| 24 bits, compact, 4-byte index | 5.62 s | 0 | 240 MiB |
 
 The memory of its own of the fixed-width solver is the prefix index it
 builds at every opening, 4 bytes a string. The compact file brings its
@@ -294,9 +305,9 @@ FixedSolver is.
 | 23 bits, fixed-width | 27.0 | 35.3 | 468.3 | 314.1 |
 | 23 bits, compact | 24.7 | 25.5 | 717.3 | 467.8 |
 | 23 bits, compact, 4-byte index | 30.6 | 29.6 | 700.3 | 477.1 |
-| 24 bits, fixed-width | TBD24 | TBD24 | TBD24 | TBD24 |
-| 24 bits, compact | TBD24 | TBD24 | TBD24 | TBD24 |
-| 24 bits, compact, 4-byte index | TBD24 | TBD24 | TBD24 | TBD24 |
+| 24 bits, fixed-width | 28.9 | 41.7 | 477.4 | 335.8 |
+| 24 bits, compact | 32.8 | 26.5 | 757.3 | 503.9 |
+| 24 bits, compact, 4-byte index | 35.5 | 34.3 | 779.6 | 496.0 |
 
 What the numbers are made of, from the same lookups in sorted order, where
 nothing misses the cache: decoding a REV from the compact file takes 32 ns
@@ -306,11 +317,12 @@ is memory: a random access into a file of 100 to 300 MB costs 150 to 200 ns
 on this virtual machine, the fixed-width lookup of an L-bit string makes
 one, and the compact lookup two.
 
-- **Node counts cost the same, and for shorter strings less.** One access:
-  the compact index entry, or the metadata byte of the fixed-width entry,
-  which for a shorter string comes after the solver's own index.
-- **A REV costs one more access from the compact file**, 0.2 microseconds
-  here. For a shorter string the compact lookup also runs the REV for all L
+- **Node counts cost about the same for an L-bit string, and less for a
+  shorter one.** One access: the compact index entry, or the metadata byte
+  of the fixed-width entry, which for a shorter string comes after the
+  solver's own index.
+- **A REV costs one more access from the compact file**, 0.2 to 0.3
+  microseconds here. For a shorter string the compact lookup also runs the REV for all L
   bits, to say which extension it stands for, where the fixed-width solver
   runs it for the length asked.
 - **3 or 4 bytes per index entry makes no difference to the time of a REV**
@@ -329,8 +341,8 @@ bomb lookup` does it (microseconds, 20,000 lookups):
 | 16 bits, compact | 5.7 | 5.6 |
 | 23 bits, fixed-width | 3.3 | not possible: open the Bomb, 3.23 s |
 | 23 bits, compact | 7.0 | 6.2 |
-| 24 bits, fixed-width | TBD24 | TBD24 |
-| 24 bits, compact | TBD24 | TBD24 |
+| 24 bits, fixed-width | 3.3 | not possible: open the Bomb, 6.58 s |
+| 24 bits, compact | 7.3 | 6.1 |
 
 The compact lookup reads and checks 1,056 bytes of header and directory,
 one index entry and one REV. A fixed-width file answers an L-bit string

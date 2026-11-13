@@ -310,8 +310,8 @@ A complete table can be written a second time in the compact format, format
 version 4 ([`FORMAT.md`](FORMAT.md), section 12): the same REVs, each in the
 bytes its node count needs instead of the 19, 34 or 44 of a fixed-width
 entry, sorted by node count, with an index that gives the REV of every
-string of 1 to L bits. The 23-bit table is 285,212,736 bytes fixed-width and
-108,606,260 compact. Measurements are in
+string of 1 to L bits. The 24-bit table is 570,425,408 bytes fixed-width and
+217,653,502 compact. Measurements are in
 [`benchmarks/COMPACT_FORMAT.md`](../../benchmarks/COMPACT_FORMAT.md).
 
 ```

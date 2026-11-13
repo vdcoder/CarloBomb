@@ -537,6 +537,9 @@ int main(int argc, char **argv) {
         printf("\n");
     }
     if (data) fclose(data);
+    free(slots);
+    free(states0_hist);
+    free(states_all_hist);
     frb_table_destroy(&table);
     return 0;
 }

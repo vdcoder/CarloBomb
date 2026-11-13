@@ -533,6 +533,21 @@ static void build(Layouts *y, const FrbTable *table, int block_shift) {
     }
 }
 
+static void destroy(Layouts *y) {
+    free(y->direction);
+    free(y->classes);
+    free(y->checkpoint);
+    free(y->ordinal);
+    for (int n = 0; n < CLASSES; n++) {
+        free(y->fields[n]);
+        free(y->ranked[n]);
+        free(y->ranked_colors[n]);
+    }
+    free(y->other_string);
+    free(y->other_rank);
+    memset(y, 0, sizeof *y);
+}
+
 /* ---- measuring -------------------------------------------------------------------- */
 
 typedef struct {
@@ -794,6 +809,9 @@ int main(int argc, char **argv) {
         }
     }
     printf("\n%s\n", failed ? "FAIL" : "PASS: every layout gives the stored REVs");
+    free(exact);
+    free(any);
+    destroy(&y);
     frb_table_destroy(&table);
     return failed;
 }

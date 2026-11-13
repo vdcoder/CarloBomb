@@ -353,6 +353,10 @@ int main(int argc, char **argv) {
     printf("\n  mean*: one clock around a whole pass, no timer inside.  The other columns: the time stamp\n"
            "  counter around one call, median of %d passes for each REV.  (check %08x)\n",
            passes, (unsigned)check);
+    for (int n = 0; n < CLASSES; n++) {
+        free(sample[n]);
+        free(hard[n]);
+    }
     frb_table_destroy(&table);
     return 0;
 }

@@ -53,11 +53,12 @@ about a fifth.
 **The 24-bit baseline.** The pilot of the 24-bit study projected levels 20
 and 22 at 1.43·10^11 and 2.35·10^12 steps; the constructions measured
 1.428·10^11 and 2.356·10^12. Level 23, built here since, cost
-7,720,456,914,039 steps. For level 24 two independent samples give
-2.11·10^13 and 2.10·10^13. Step counts do not depend on the machine: the
-owner's 24-bit run gives the exact figure for level 24
-(`level-24.txt`, "searches … logical steps"), and the projections for 25
-and 26 scale with whatever it shows against 2.10·10^13.
+7,720,456,914,039 steps. For level 24 two independent samples gave
+2.11·10^13 and 2.10·10^13, and the level itself, finished here on 13
+November, cost 20,867,501,480,268 steps in 6,273,837 searches: 0.6% under
+the samples. Step counts do not depend on the machine, so the owner's
+`level-24.txt` must show the same figure ("searches … logical steps"), and
+the projections for 25 and 26, which were scaled from 2.10·10^13, stand.
 
 **By node budget**, sibling searches of the samples:
 

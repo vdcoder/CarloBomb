@@ -182,8 +182,8 @@ Largest minimum 9 nodes, needed by 44 strings; 7,720,456,914,039 search
 steps in 3,052,702 searches.
 
 The 24-bit table was finished in the container as well, a day later, in
-eleven sessions of ten minutes on 4 virtual CPUs. `fixed-run-24.frb` must
-have this SHA-256:
+eleven sessions of ten minutes on 4 virtual CPUs and two more that a restart
+of the container cut short. `fixed-run-24.frb` must have this SHA-256:
 
     3f99769699e24d97d7c15a3b305c3d47f1cb0496978ac71ef086c91457ecd0c1
 

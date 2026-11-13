@@ -15,12 +15,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "compact.h"
+
 struct RevFixedBomb {
     FrbTable table;   /* the Bomb's entries, byte for byte as in the file */
     uint16_t *best16; /* table.count numbers, [0] unused: the index of a Bomb of up to 16 bits */
     uint32_t *best32; /* the same for a longer Bomb; exactly one of the two is used */
     size_t entry_bytes, graph_bytes; /* of the table's format */
     int max_nodes;    /* the largest minimum in the table */
+    /*
+     * A Bomb in the compact format (version 4) carries its prefix index in
+     * the file and its node counts in its class directory: nothing above is
+     * used for it, and nothing is built when it is opened.
+     */
+    FrbCompact *compact;
 };
 
 static const uint8_t *entry_at(const RevFixedBomb *b, uint32_t index) {
@@ -51,13 +59,28 @@ static void build_index(RevFixedBomb *b) {
     }
 }
 
+static int bomb_bits(const RevFixedBomb *b) {
+    return b->compact ? frb_compact_info(b->compact)->bits : b->table.bits;
+}
+
 /* 1 <= bits <= B and value < 2^bits. */
 static int in_range(const RevFixedBomb *b, int bits, uint32_t value) {
-    return b && bits >= 1 && bits <= b->table.bits && value < ((uint32_t)1 << bits);
+    return b && bits >= 1 && bits <= bomb_bits(b) && value < ((uint32_t)1 << bits);
 }
 
 static uint32_t select_extension(const RevFixedBomb *b, int bits, uint32_t value) {
+    if (b->compact) { /* the string its REV goes on to emit */
+        RevGraph g;
+        if (bits == bomb_bits(b) || frb_compact_graph(b->compact, bits, value, &g) != FRB_OK) return value;
+        return frb_graph_output(&g, bomb_bits(b));
+    }
     return bits == b->table.bits ? value : best_of(b, ((uint32_t)1 << bits) + value);
+}
+
+/* Minimum node count of the string of `bits` bits with value `value`. */
+static int nodes_of(const RevFixedBomb *b, int bits, uint32_t value) {
+    if (b->compact) return frb_compact_nodes(b->compact, bits, value);
+    return entry_nodes(b, select_extension(b, bits, value));
 }
 
 static FrbError adopt(FrbTable *table, int validated, RevFixedBomb **out, uint32_t *bad_index) {
@@ -122,12 +145,41 @@ FrbError rev_fixed_bomb_from_table(FrbTable *table, RevFixedBomb **bomb, uint32_
     return adopt(table, 0, bomb, bad_index);
 }
 
+/* A compact file: validated in full by its own reader, then the one thing a
+ * file cannot know about itself that a table's adoption checks too. */
+static FrbError open_compact(const char *path, RevFixedBomb **bomb, uint32_t *bad_index) {
+    FrbCompact *c = NULL;
+    RevFixedBomb *b;
+    const FrbCompactInfo *info;
+    uint32_t mask;
+    FrbError e = frb_compact_open(path, &c, bad_index);
+    if (e != FRB_OK) return e;
+    info = frb_compact_info(c);
+    mask = info->count - 1u;
+    for (uint32_t t = 0; t <= mask / 2; t++) /* a string and its complement need the same number of nodes */
+        if (frb_compact_nodes(c, info->bits, t) != frb_compact_nodes(c, info->bits, t ^ mask)) {
+            if (bad_index) *bad_index = t;
+            frb_compact_close(c);
+            return FRB_ERR_EVIDENCE;
+        }
+    b = calloc(1, sizeof *b);
+    if (!b) {
+        frb_compact_close(c);
+        return FRB_ERR_MEMORY;
+    }
+    b->compact = c;
+    b->max_nodes = info->max_nodes;
+    *bomb = b;
+    return FRB_OK;
+}
+
 FrbError rev_fixed_bomb_open(const char *path, RevFixedBomb **bomb, uint32_t *bad_index) {
     FrbTable table;
     FrbFileInfo info;
     FrbError e;
     if (!bomb) return FRB_ERR_ARG;
     *bomb = NULL;
+    if (path && frb_file_is_compact(path) == 1) return open_compact(path, bomb, bad_index);
     e = frb_file_read(path, &table, &info, bad_index); /* every check of FORMAT.md section 6 */
     if (e != FRB_OK) return e;
     e = adopt(&table, 1, bomb, bad_index);
@@ -136,24 +188,25 @@ FrbError rev_fixed_bomb_open(const char *path, RevFixedBomb **bomb, uint32_t *ba
 }
 
 void rev_fixed_bomb_reindex(RevFixedBomb *bomb) {
-    if (bomb) build_index(bomb);
+    if (bomb && !bomb->compact) build_index(bomb);
 }
 
 void rev_fixed_bomb_close(RevFixedBomb *bomb) {
     if (!bomb) return;
+    frb_compact_close(bomb->compact);
     frb_table_destroy(&bomb->table);
     free(bomb->best16);
     free(bomb->best32);
     free(bomb);
 }
 
-int rev_fixed_bomb_bits(const RevFixedBomb *bomb) { return bomb ? bomb->table.bits : 0; }
+int rev_fixed_bomb_bits(const RevFixedBomb *bomb) { return bomb ? bomb_bits(bomb) : 0; }
 
 int rev_fixed_bomb_max_nodes(const RevFixedBomb *bomb) { return bomb ? bomb->max_nodes : 0; }
 
 int rev_fixed_bomb_min_nodes(const RevFixedBomb *bomb, int bits, uint32_t value) {
     if (!in_range(bomb, bits, value)) return 0;
-    return entry_nodes(bomb, select_extension(bomb, bits, value));
+    return nodes_of(bomb, bits, value);
 }
 
 uint32_t rev_fixed_bomb_extension(const RevFixedBomb *bomb, int bits, uint32_t value) {
@@ -165,9 +218,11 @@ void rev_fixed_bomb_histogram(const RevFixedBomb *bomb, int bits,
                               uint32_t counts[FRB_MAX_NODES + 1]) {
     if (!counts) return;
     memset(counts, 0, (FRB_MAX_NODES + 1) * sizeof counts[0]);
-    if (!bomb || bits < 1 || bits > bomb->table.bits) return;
-    for (uint32_t v = 0; v < ((uint32_t)1 << bits); v++)
-        counts[entry_nodes(bomb, select_extension(bomb, bits, v))]++;
+    if (!bomb || bits < 1 || bits > bomb_bits(bomb)) return;
+    for (uint32_t v = 0;; v++) {
+        counts[nodes_of(bomb, bits, v)]++;
+        if (v == ((uint32_t)1 << bits) - 1u) break;
+    }
 }
 
 const char *rev_fixed_bomb_result_str(RevFixedBombResult r) {
@@ -198,19 +253,19 @@ static uint32_t leading_value(const char *target, int bits) {
  * minimum, less one, is a bound too.
  */
 static int lower_bound_long(const RevFixedBomb *b, const char *target, size_t len) {
-    int bits = b->table.bits;
-    uint32_t mask = b->table.count - 1u;
+    int bits = bomb_bits(b);
+    uint32_t mask = (uint32_t)(((uint64_t)1 << bits) - 1u);
     uint32_t window = leading_value(target, bits);
-    int bound = entry_nodes(b, window);
+    int bound = nodes_of(b, bits, window);
     for (size_t j = 1; j + (size_t)bits <= len; j++) {
         window = ((window << 1) | (uint32_t)(target[j + (size_t)bits - 1] - '0')) & mask;
-        if (entry_nodes(b, window) - 1 > bound) bound = entry_nodes(b, window) - 1;
+        if (nodes_of(b, bits, window) - 1 > bound) bound = nodes_of(b, bits, window) - 1;
     }
     /* `window` is now the last B characters; what follows are the ends of
      * the target that are shorter than B. */
     for (int tail = bits - 1; tail >= 1; tail--) {
         uint32_t value = window & (((uint32_t)1 << tail) - 1u);
-        int n = entry_nodes(b, select_extension(b, tail, value)) - 1;
+        int n = nodes_of(b, tail, value) - 1;
         if (n > bound) bound = n;
     }
     return bound;
@@ -218,9 +273,8 @@ static int lower_bound_long(const RevFixedBomb *b, const char *target, size_t le
 
 int rev_fixed_bomb_lower_bound(const RevFixedBomb *bomb, const char *target, size_t target_len) {
     if (!bomb || rev_target_validate(target, target_len) != REV_OK) return 0;
-    if (target_len > (size_t)bomb->table.bits) return lower_bound_long(bomb, target, target_len);
-    return entry_nodes(bomb, select_extension(bomb, (int)target_len,
-                                               leading_value(target, (int)target_len)));
+    if (target_len > (size_t)bomb_bits(bomb)) return lower_bound_long(bomb, target, target_len);
+    return nodes_of(bomb, (int)target_len, leading_value(target, (int)target_len));
 }
 
 RevFixedBombResult rev_fixed_bomb_solve(const RevFixedBomb *bomb, const char *target,
@@ -236,13 +290,32 @@ RevFixedBombResult rev_fixed_bomb_solve(const RevFixedBomb *bomb, const char *ta
     if (result) result->node_count = 0;
     if (!bomb || max_nodes < 0 || rev_target_validate(target, target_len) != REV_OK)
         return REV_FIXED_BOMB_INVALID_INPUT;
-    info->bomb_bits = bomb->table.bits;
+    info->bomb_bits = bomb_bits(bomb);
 
-    if (target_len > (size_t)bomb->table.bits) {
+    if (target_len > (size_t)bomb_bits(bomb)) {
         info->lower_bound = lower_bound_long(bomb, target, target_len);
         return REV_FIXED_BOMB_UNSUPPORTED;
     }
     bits = (int)target_len;
+    if (bomb->compact) { /* the prefix index is in the file: one ordinal, one REV */
+        uint32_t value = leading_value(target, bits);
+        nodes = frb_compact_nodes(bomb->compact, bits, value);
+        info->min_nodes = nodes;
+        info->lower_bound = nodes;
+        if (max_nodes != 0 && nodes > max_nodes) {
+            info->extension = select_extension(bomb, bits, value);
+            return REV_FIXED_BOMB_PROVEN_UNSAT;
+        }
+        if (!result) result = &local_graph;
+        memset(result, 0, sizeof *result);
+        if (frb_compact_graph(bomb->compact, bits, value, result) != FRB_OK || result->node_count != nodes ||
+            rev_verify_prefix(result, target, target_len, NULL) != REV_OK) {
+            result->node_count = 0;
+            return REV_FIXED_BOMB_INTERNAL_ERROR;
+        }
+        info->extension = frb_graph_output(result, bomb_bits(bomb));
+        return REV_FIXED_BOMB_MINIMAL;
+    }
     extension = select_extension(bomb, bits, leading_value(target, bits));
     nodes = entry_nodes(bomb, extension);
     info->min_nodes = nodes;

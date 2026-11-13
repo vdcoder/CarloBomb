@@ -373,8 +373,9 @@ static void test_table_and_image(void) {
         free(longer);
     }
     CHECK(parse_mutated(image, size, 0, 0x20, 0, NULL) == FRB_ERR_MAGIC);
-    CHECK(parse_mutated(image, size, 8, 0x05, 0, NULL) == FRB_ERR_VERSION);  /* version 4 */
-    CHECK(parse_mutated(image, size, 8, 0x05, 1, NULL) == FRB_ERR_VERSION);
+    CHECK(parse_mutated(image, size, 8, 0x05, 0, NULL) == FRB_ERR_VERSION);  /* version 4: the compact format, */
+    CHECK(parse_mutated(image, size, 8, 0x05, 1, NULL) == FRB_ERR_VERSION);  /* which this reader does not read */
+    CHECK(parse_mutated(image, size, 8, 0x04, 1, NULL) == FRB_ERR_VERSION);  /* version 5: nothing */
     CHECK(parse_mutated(image, size, 8, 0x03, 0, NULL) == FRB_ERR_HEADER);   /* version 2 it is not */
     CHECK(parse_mutated(image, size, 8, 0x03, 1, NULL) == FRB_ERR_HEADER);
     CHECK(parse_mutated(image, size, 8, 0x02, 0, NULL) == FRB_ERR_HEADER);   /* nor version 3 */

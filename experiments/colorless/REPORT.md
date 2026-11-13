@@ -120,16 +120,22 @@ Machine steps to the first coloring (24 is the least), for every string:
 
 | Nodes | mean | p50 | p95 | p99 | p99.9 | worst | bound 24·2^N | all colorings, mean / worst |
 |---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 5 | 28.4 | 27 | 37 | 42 | 47 | 56 | 768 | 32.8 / 63 |
 | 6 | 30.4 | 29 | 42 | 49 | 60 | 104 | 1,536 | 36.8 / 107 |
 | 7 | 32.3 | 31 | 47 | 56 | 69 | 185 | 3,072 | 40.6 / 201 |
 | 8 | 32.3 | 31 | 47 | 58 | 75 | 198 | 6,144 | 40.6 / 199 |
 | 9 | 36.3 | 33 | 59 | 91 | 177 | 219 | 12,288 | 48.6 / 289 |
 
 Time for one REV, in nanoseconds, the REV already in the processor's cache
-(100,000 random strings per node count; all 1,886 of 9 nodes):
+(100,000 random strings per node count; all 18,082 of 5 nodes and all 1,886
+of 9):
 
 | Nodes | | mean | p50 | p95 | p99 | p99.9 | worst |
 |---:|---|---:|---:|---:|---:|---:|---:|
+| 5 | verify the colored REV | 167 | 167 | 168 | 170 | 172 | 174 |
+| | recolor | 231 | 222 | 322 | 374 | 430 | 511 |
+| 6 | verify the colored REV | 164 | 165 | 167 | 168 | 169 | 173 |
+| | recolor | 276 | 259 | 415 | 494 | 608 | 950 |
 | 7 | verify the colored REV | 168 | 168 | 172 | 173 | 173 | 177 |
 | | recolor | 310 | 289 | 494 | 601 | 727 | 1,253 |
 | | recolor, then verify | 446 | 426 | 629 | 734 | 866 | 1,391 |

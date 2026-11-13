@@ -22,8 +22,11 @@ version 2 (`bombs/fixed-run/OVERNIGHT.md`,
 `benchmarks/FIXED_RUN_24_FEASIBILITY.md`), and from 25 to 31 bits in format
 version 3 (`bombs/fixed-run/BEYOND_24.md`,
 `benchmarks/FIXED_RUN_31_FEASIBILITY.md`). The format reaches 31 bits; what
-one machine can compute is 26 in a day and 28 in a week. No neural guidance
-and no LevelSearchBomb yet.
+one machine can compute is 26 in a day and 28 in a week. A complete Bomb can
+also be written in a compact format, version 4: the same REVs in 38% of the
+space, with the answer for every shorter string in the file
+(`benchmarks/COMPACT_FORMAT.md`). No neural guidance and no LevelSearchBomb
+yet.
 
 ## Build and test
 
@@ -118,6 +121,19 @@ below; each finished length is a complete certified Bomb, and the command
 continues where it stopped. To 20 bits takes about a minute; to 24, hours
 (`bombs/fixed-run/OVERNIGHT.md`); 25 and 26 on a finished 24-bit Bomb, a
 night and a day (`bombs/fixed-run/BEYOND_24.md`).
+
+A complete table in the compact format, and back:
+
+```bash
+./build/carlobomb bomb compact --file ladder/fixed-run-20.frb --output fixed-run-20.compact.frb   # 35.7 MB -> 13.3 MB
+./build/carlobomb bomb verify  --file fixed-run-20.compact.frb --against ladder/fixed-run-20.frb
+./build/carlobomb bomb lookup  --file fixed-run-20.compact.frb --target 01001000        # any length up to 20 bits
+./build/carlobomb bomb expand  --file fixed-run-20.compact.frb --output again.frb       # the same bytes as the source
+```
+
+The source is only read, and no file is ever replaced. The compact file
+holds the same REVs and is derived from the fixed-width one, which stays the
+certified artifact (`bombs/fixed-run/README.md`, "The compact format").
 
 ### Bomb-backed FixedSolver
 

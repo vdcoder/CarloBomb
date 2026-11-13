@@ -16,6 +16,27 @@ The 24-bit Bomb is the one built in the development container. The owner's
 `fixed-run-24.frb` is the same Bomb, and these counts hold for it, if its
 SHA-256 is the one above.
 
+> **Added 13 November 2026, after this report was read.** Two things below
+> are superseded; the rest stands.
+>
+> - The owner has decided that uncolored REVs are a feature of v4 and that
+>   where several colorings emit a string any of them is a good answer, so no
+>   list of exceptions is wanted. The recommendation below ("keep the
+>   colors") was written before that decision.
+> - The 5,148 strings of finding 4 come from the order in which this
+>   experiment's reader guessed: color 0 first, for every string. They are
+>   half of the 10,296 strings with several colorings, one of each
+>   complement pair: where the REV came from the search, the string that
+>   starts with 1. A reader that guesses the first bit of the string first
+>   follows the search that built the Bomb (white first, and a string that
+>   starts with 1 holds a complement), and returns the stored REV for
+>   **every** string of the 16-, 20- and 24-bit Bombs once REVs of up to 5
+>   nodes keep their colors. Colorless storage is then exact on these Bombs
+>   without any list.
+>
+> The candidates built on this, as files, and their measurements are in
+> [experiments/v4](../v4/REPORT.md).
+
 ## Findings
 
 1. **Topologies are not shared.** 14,112,223 different canonical topologies

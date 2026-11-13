@@ -1,0 +1,434 @@
+Bomb: FixedRunBomb(20), 1,048,576 strings, 35,651,648 bytes, table CRC-32 04be747f; validated in full in 0.6 s
+1000000 random strings per measurement; a checkpoint every 256 strings; 4 processors here
+
+== fixed-width file ==
+  size                 35,651,648 bytes, 100.0% of the fixed-width file
+  node count           9.7 ns for a string of 20 bits (many in a row)
+  REV                  as the reader returns it, 20 bits: mean 122, p50 87, p95 248, p99 374 ns
+  verified REV         and run against the string, 20 bits: mean 304, p50 280, p95 458, p99 546 ns
+   1 reader            2.62 million verified REVs a second; p50 282, p95 466, p99 554 ns
+   2 readers           5.73 million verified REVs a second; p50 262, p95 426, p99 528 ns
+   4 readers           10.20 million verified REVs a second; p50 270, p95 439, p99 545 ns
+
+== compact file of PR 8 ==
+  size                 13,278,592 bytes, 37.2% of the fixed-width file
+  node count           13.6 ns for a string of 20 bits, 10.9 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 27.4 ns in a row;
+                       one at a time: mean 40, p50 34, p95 70, p99 117 ns
+  REV                  as the reader returns it, 20 bits: mean 124, p50 112, p95 200, p99 339 ns
+                       shorter: mean 79, p50 51, p95 214, p99 360 ns
+  verified REV         and run against the string, 20 bits: mean 319, p50 282, p95 441, p99 601 ns
+                       shorter: mean 158, p50 124, p95 365, p99 517 ns
+   1 reader            2.80 million verified REVs a second; p50 252, p95 412, p99 574 ns
+   2 readers           5.54 million verified REVs a second; p50 254, p95 357, p99 490 ns
+   4 readers           10.23 million verified REVs a second; p50 253, p95 360, p99 486 ns
+
+== fields,colors,whole ==
+  size                 7,033,456 bytes, 19.7% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 43 MiB with the mapped source, 8 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.3 ns for a string of 20 bits, 26.1 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 1.3 ns in a row;
+                       one at a time: mean 8, p50 6, p95 10, p99 11 ns
+  REV                  as the reader returns it, 20 bits: mean 99, p50 75, p95 180, p99 346 ns
+                       shorter: mean 110, p50 97, p95 172, p99 331 ns
+  verified REV         and run against the string, 20 bits: mean 270, p50 266, p95 400, p99 534 ns
+                       shorter: mean 182, p50 162, p95 296, p99 463 ns
+   1 reader            2.84 million verified REVs a second; p50 265, p95 430, p99 542 ns
+   2 readers           5.71 million verified REVs a second; p50 260, p95 409, p99 540 ns
+   4 readers           11.03 million verified REVs a second; p50 245, p95 369, p99 529 ns
+  out of the cache     186 lookups each.  Nothing in memory: p50 51, p99 135 us for a string of 20 bits,
+                       p50 26, p99 247 us for a shorter one.  With the index read in (0.000 s):
+                       p50 26, p99 53 us and p50 1, p99 33 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== fields,colors,half ==
+  size                 3,517,032 bytes, 9.9% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 40 MiB with the mapped source, 4 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.5 ns for a string of 20 bits, 39.6 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 2.7 ns in a row;
+                       one at a time: mean 12, p50 10, p95 14, p99 15 ns
+  REV                  as the reader returns it, 20 bits: mean 94, p50 76, p95 154, p99 290 ns
+                       shorter: mean 118, p50 112, p95 158, p99 254 ns
+  verified REV         and run against the string, 20 bits: mean 252, p50 226, p95 335, p99 501 ns
+                       shorter: mean 191, p50 180, p95 292, p99 425 ns
+   1 reader            3.25 million verified REVs a second; p50 208, p95 316, p99 487 ns
+   2 readers           6.55 million verified REVs a second; p50 214, p95 315, p99 475 ns
+   4 readers           12.41 million verified REVs a second; p50 214, p95 299, p99 425 ns
+  out of the cache     93 lookups each.  Nothing in memory: p50 82, p99 230 us for a string of 20 bits,
+                       p50 41, p99 141 us for a shorter one.  With the index read in (0.000 s):
+                       p50 41, p99 87 us and p50 1, p99 46 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== base-n,colors,whole ==
+  size                 6,698,080 bytes, 18.8% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 43 MiB with the mapped source, 7 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.2 ns for a string of 20 bits, 26.9 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 1.3 ns in a row;
+                       one at a time: mean 8, p50 7, p95 10, p99 15 ns
+  REV                  as the reader returns it, 20 bits: mean 139, p50 111, p95 252, p99 406 ns
+                       shorter: mean 117, p50 101, p95 197, p99 355 ns
+  verified REV         and run against the string, 20 bits: mean 301, p50 295, p95 443, p99 562 ns
+                       shorter: mean 188, p50 165, p95 318, p99 482 ns
+   1 reader            2.70 million verified REVs a second; p50 286, p95 436, p99 563 ns
+   2 readers           5.72 million verified REVs a second; p50 248, p95 374, p99 528 ns
+   4 readers           10.75 million verified REVs a second; p50 246, p95 356, p99 512 ns
+  out of the cache     176 lookups each.  Nothing in memory: p50 71, p99 150 us for a string of 20 bits,
+                       p50 40, p99 221 us for a shorter one.  With the index read in (0.000 s):
+                       p50 40, p99 67 us and p50 1, p99 68 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== base-n,colors,half ==
+  size                 3,349,344 bytes, 9.4% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 40 MiB with the mapped source, 4 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.4 ns for a string of 20 bits, 39.1 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 2.5 ns in a row;
+                       one at a time: mean 11, p50 10, p95 13, p99 17 ns
+  REV                  as the reader returns it, 20 bits: mean 101, p50 90, p95 170, p99 294 ns
+                       shorter: mean 124, p50 112, p95 184, p99 320 ns
+  verified REV         and run against the string, 20 bits: mean 277, p50 242, p95 357, p99 524 ns
+                       shorter: mean 195, p50 181, p95 308, p99 417 ns
+   1 reader            3.17 million verified REVs a second; p50 229, p95 336, p99 509 ns
+   2 readers           6.08 million verified REVs a second; p50 232, p95 350, p99 504 ns
+   4 readers           11.95 million verified REVs a second; p50 231, p95 298, p99 408 ns
+  out of the cache     88 lookups each.  Nothing in memory: p50 65, p99 144 us for a string of 20 bits,
+                       p50 35, p99 158 us for a shorter one.  With the index read in (0.000 s):
+                       p50 34, p99 57 us and p50 1, p99 52 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== rank,colors,whole ==
+  size                 5,270,320 bytes, 14.8% of the fixed-width file
+  conversion           0.8 s in all (source validated 0.4 s, file built and written 0.4 s);
+                       peak memory 42 MiB with the mapped source, 6 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.5 ns for a string of 20 bits, 26.9 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 1.3 ns in a row;
+                       one at a time: mean 8, p50 7, p95 10, p99 14 ns
+  REV                  as the reader returns it, 20 bits: mean 389, p50 364, p95 555, p99 680 ns
+                       shorter: mean 175, p50 107, p95 421, p99 576 ns
+  verified REV         and run against the string, 20 bits: mean 505, p50 480, p95 652, p99 767 ns
+                       shorter: mean 252, p50 167, p95 535, p99 710 ns
+   1 reader            1.77 million verified REVs a second; p50 477, p95 661, p99 773 ns
+   2 readers           3.30 million verified REVs a second; p50 481, p95 718, p99 874 ns
+   4 readers           6.40 million verified REVs a second; p50 472, p95 664, p99 810 ns
+  out of the cache     132 lookups each.  Nothing in memory: p50 52, p99 168 us for a string of 20 bits,
+                       p50 41, p99 133 us for a shorter one.  With the index read in (0.000 s):
+                       p50 44, p99 127 us and p50 1, p99 74 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== rank,colors,half ==
+  size                 2,635,464 bytes, 7.4% of the fixed-width file
+  conversion           0.7 s in all (source validated 0.4 s, file built and written 0.3 s);
+                       peak memory 39 MiB with the mapped source, 4 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.7 ns for a string of 20 bits, 41.1 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 2.8 ns in a row;
+                       one at a time: mean 11, p50 10, p95 14, p99 17 ns
+  REV                  as the reader returns it, 20 bits: mean 350, p50 310, p95 455, p99 607 ns
+                       shorter: mean 174, p50 122, p95 378, p99 467 ns
+  verified REV         and run against the string, 20 bits: mean 463, p50 438, p95 579, p99 713 ns
+                       shorter: mean 241, p50 179, p95 498, p99 600 ns
+   1 reader            1.82 million verified REVs a second; p50 441, p95 631, p99 780 ns
+   2 readers           3.65 million verified REVs a second; p50 434, p95 550, p99 697 ns
+   4 readers           6.56 million verified REVs a second; p50 471, p95 591, p99 685 ns
+  out of the cache     66 lookups each.  Nothing in memory: p50 76, p99 162 us for a string of 20 bits,
+                       p50 42, p99 134 us for a shorter one.  With the index read in (0.000 s):
+                       p50 37, p99 47 us and p50 1, p99 49 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== fields,colorless,whole ==
+  size                 6,171,168 bytes, 17.3% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 43 MiB with the mapped source, 7 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           4.6 ns for a string of 20 bits, 43.6 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 2.5 ns in a row;
+                       one at a time: mean 17, p50 14, p95 36, p99 50 ns
+  REV                  as the reader returns it, 20 bits: mean 355, p50 322, p95 538, p99 670 ns
+                       shorter: mean 171, p50 101, p95 425, p99 568 ns
+  verified REV         and run against the string, 20 bits: mean 515, p50 462, p95 680, p99 809 ns
+                       shorter: mean 247, p50 166, p95 564, p99 716 ns
+   1 reader            1.98 million verified REVs a second; p50 415, p95 617, p99 743 ns
+   2 readers           3.91 million verified REVs a second; p50 402, p95 591, p99 721 ns
+   4 readers           7.94 million verified REVs a second; p50 391, p95 566, p99 687 ns
+  out of the cache     160 lookups each.  Nothing in memory: p50 55, p99 116 us for a string of 20 bits,
+                       p50 27, p99 162 us for a shorter one.  With the index read in (0.001 s):
+                       p50 24, p99 54 us and p50 1, p99 26 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== fields,colorless,half ==
+  size                 3,085,888 bytes, 8.7% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 40 MiB with the mapped source, 4 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.4 ns for a string of 20 bits, 36.5 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 2.3 ns in a row;
+                       one at a time: mean 10, p50 9, p95 12, p99 15 ns
+  REV                  as the reader returns it, 20 bits: mean 292, p50 260, p95 430, p99 551 ns
+                       shorter: mean 199, p50 127, p95 447, p99 596 ns
+  verified REV         and run against the string, 20 bits: mean 436, p50 408, p95 590, p99 715 ns
+                       shorter: mean 250, p50 182, p95 531, p99 676 ns
+   1 reader            1.94 million verified REVs a second; p50 414, p95 619, p99 752 ns
+   2 readers           3.81 million verified REVs a second; p50 401, p95 588, p99 719 ns
+   4 readers           7.52 million verified REVs a second; p50 403, p95 585, p99 711 ns
+  out of the cache     80 lookups each.  Nothing in memory: p50 64, p99 171 us for a string of 20 bits,
+                       p50 35, p99 159 us for a shorter one.  With the index read in (0.000 s):
+                       p50 34, p99 68 us and p50 1, p99 41 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== base-n,colorless,whole ==
+  size                 5,835,784 bytes, 16.4% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 42 MiB with the mapped source, 7 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.3 ns for a string of 20 bits, 27.5 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 1.3 ns in a row;
+                       one at a time: mean 9, p50 7, p95 11, p99 12 ns
+  REV                  as the reader returns it, 20 bits: mean 349, p50 324, p95 526, p99 652 ns
+                       shorter: mean 180, p50 104, p95 463, p99 630 ns
+  verified REV         and run against the string, 20 bits: mean 528, p50 487, p95 710, p99 844 ns
+                       shorter: mean 262, p50 172, p95 599, p99 767 ns
+   1 reader            1.82 million verified REVs a second; p50 450, p95 674, p99 812 ns
+   2 readers           3.61 million verified REVs a second; p50 450, p95 661, p99 798 ns
+   4 readers           6.38 million verified REVs a second; p50 476, p95 684, p99 817 ns
+  out of the cache     150 lookups each.  Nothing in memory: p50 74, p99 241 us for a string of 20 bits,
+                       p50 39, p99 245 us for a shorter one.  With the index read in (0.000 s):
+                       p50 37, p99 53 us and p50 1, p99 43 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== base-n,colorless,half ==
+  size                 2,918,192 bytes, 8.2% of the fixed-width file
+  conversion           0.5 s in all (source validated 0.4 s, file built and written 0.1 s);
+                       peak memory 40 MiB with the mapped source, 4 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.3 ns for a string of 20 bits, 40.1 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 2.6 ns in a row;
+                       one at a time: mean 11, p50 10, p95 14, p99 19 ns
+  REV                  as the reader returns it, 20 bits: mean 305, p50 283, p95 446, p99 562 ns
+                       shorter: mean 173, p50 116, p95 409, p99 536 ns
+  verified REV         and run against the string, 20 bits: mean 453, p50 427, p95 605, p99 730 ns
+                       shorter: mean 250, p50 179, p95 544, p99 686 ns
+   1 reader            1.64 million verified REVs a second; p50 470, p95 690, p99 830 ns
+   2 readers           3.89 million verified REVs a second; p50 418, p95 601, p99 730 ns
+   4 readers           7.35 million verified REVs a second; p50 430, p95 614, p99 743 ns
+  out of the cache     75 lookups each.  Nothing in memory: p50 67, p99 141 us for a string of 20 bits,
+                       p50 32, p99 110 us for a shorter one.  With the index read in (0.000 s):
+                       p50 33, p99 53 us and p50 1, p99 38 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== rank,colorless,whole ==
+  size                 4,408,032 bytes, 12.4% of the fixed-width file
+  conversion           0.9 s in all (source validated 0.4 s, file built and written 0.5 s);
+                       peak memory 41 MiB with the mapped source, 5 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           4.1 ns for a string of 20 bits, 28.9 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 1.4 ns in a row;
+                       one at a time: mean 9, p50 7, p95 10, p99 40 ns
+  REV                  as the reader returns it, 20 bits: mean 409, p50 386, p95 587, p99 715 ns
+                       shorter: mean 187, p50 104, p95 496, p99 642 ns
+  verified REV         and run against the string, 20 bits: mean 591, p50 560, p95 788, p99 930 ns
+                       shorter: mean 267, p50 169, p95 647, p99 808 ns
+   1 reader            1.55 million verified REVs a second; p50 544, p95 766, p99 902 ns
+   2 readers           3.14 million verified REVs a second; p50 524, p95 738, p99 878 ns
+   4 readers           5.92 million verified REVs a second; p50 511, p95 713, p99 865 ns
+  out of the cache     106 lookups each.  Nothing in memory: p50 68, p99 152 us for a string of 20 bits,
+                       p50 36, p99 152 us for a shorter one.  With the index read in (0.000 s):
+                       p50 33, p99 61 us and p50 1, p99 38 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+== rank,colorless,half ==
+  size                 2,204,320 bytes, 6.2% of the fixed-width file
+  conversion           0.6 s in all (source validated 0.4 s, file built and written 0.2 s);
+                       peak memory 39 MiB with the mapped source, 3 MiB of its own
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 answered by another extension, 0 with another answer
+                       to "which extension needs fewer nodes"
+  node count           2.4 ns for a string of 20 bits, 40.0 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 2.5 ns in a row;
+                       one at a time: mean 12, p50 10, p95 14, p99 17 ns
+  REV                  as the reader returns it, 20 bits: mean 381, p50 353, p95 530, p99 664 ns
+                       shorter: mean 185, p50 116, p95 458, p99 584 ns
+  verified REV         and run against the string, 20 bits: mean 536, p50 492, p95 687, p99 824 ns
+                       shorter: mean 281, p50 186, p95 632, p99 807 ns
+   1 reader            1.65 million verified REVs a second; p50 506, p95 714, p99 856 ns
+   2 readers           3.39 million verified REVs a second; p50 491, p95 679, p99 815 ns
+   4 readers           7.04 million verified REVs a second; p50 472, p95 636, p99 756 ns
+  out of the cache     53 lookups each.  Nothing in memory: p50 67, p99 195 us for a string of 20 bits,
+                       p50 45, p99 156 us for a shorter one.  With the index read in (0.000 s):
+                       p50 33, p99 64 us and p50 1, p99 40 us.  One read of the disk for each
+                       page not yet in memory; the REVs of shorter strings share few pages.
+
+
+THE MATRIX   FixedRunBomb(20), table CRC-32 04be747f; times in nanoseconds unless said otherwise
+
+1. Size, conversion, and what comes back
+
+                                    bytes of fixed    conv s  peak MiB   not as stored  other next
+  fixed-width file             35,651,648   100.0%         -         -               -           -
+  compact file of PR 8         13,278,592    37.2%         -         -               -           -
+  fields,colors,whole           7,033,456    19.7%       0.5        43               0           0
+  fields,colors,half            3,517,032     9.9%       0.5        40               0           0
+  base-n,colors,whole           6,698,080    18.8%       0.5        43               0           0
+  base-n,colors,half            3,349,344     9.4%       0.5        40               0           0
+  rank,colors,whole             5,270,320    14.8%       0.8        42               0           0
+  rank,colors,half              2,635,464     7.4%       0.7        39               0           0
+  fields,colorless,whole        6,171,168    17.3%       0.5        43               0           0
+  fields,colorless,half         3,085,888     8.7%       0.5        40               0           0
+  base-n,colorless,whole        5,835,784    16.4%       0.5        42               0           0
+  base-n,colorless,half         2,918,192     8.2%       0.5        40               0           0
+  rank,colorless,whole          4,408,032    12.4%       0.9        41               0           0
+  rank,colorless,half           2,204,320     6.2%       0.6        39               0           0
+
+  conv s, peak MiB: the conversion from the fixed-width file, its full validation included; the memory
+  of the converting process at its peak, with the source it holds.  not as stored: strings of 20 bits
+  that get a REV other than the stored one; other next: those of them whose REV emits another bit 21.
+
+2. Questions the index answers without reading a REV
+
+                                  nodes        nodes       choice   choice, one question at a time
+                                 L bits      shorter                 mean    p50    p95    p99
+  fixed-width file                  9.7            -            -       -      -      -      -
+  compact file of PR 8             13.6         10.9         27.4      40     34     70    117
+  fields,colors,whole               2.3         26.1          1.3       8      6     10     11
+  fields,colors,half                2.5         39.6          2.7      12     10     14     15
+  base-n,colors,whole               2.2         26.9          1.3       8      7     10     15
+  base-n,colors,half                2.4         39.1          2.5      11     10     13     17
+  rank,colors,whole                 2.5         26.9          1.3       8      7     10     14
+  rank,colors,half                  2.7         41.1          2.8      11     10     14     17
+  fields,colorless,whole            4.6         43.6          2.5      17     14     36     50
+  fields,colorless,half             2.4         36.5          2.3      10      9     12     15
+  base-n,colorless,whole            2.3         27.5          1.3       9      7     11     12
+  base-n,colorless,half             2.3         40.1          2.6      11     10     14     19
+  rank,colorless,whole              4.1         28.9          1.4       9      7     10     40
+  rank,colorless,half               2.4         40.0          2.5      12     10     14     17
+
+  nodes: the minimum node count of a string, a million in a row.  choice: which of the two extensions
+  of a string of 1 to 19 bits needs fewer nodes, or neither; in a row, and each question by itself.
+
+3. The REV of a string of L bits, one lookup at a time
+
+                            as the reader returns it     and run against the string 
+                              mean    p50    p95    p99    mean    p50    p95    p99
+  fixed-width file             122     87    248    374     304    280    458    546
+  compact file of PR 8         124    112    200    339     319    282    441    601
+  fields,colors,whole           99     75    180    346     270    266    400    534
+  fields,colors,half            94     76    154    290     252    226    335    501
+  base-n,colors,whole          139    111    252    406     301    295    443    562
+  base-n,colors,half           101     90    170    294     277    242    357    524
+  rank,colors,whole            389    364    555    680     505    480    652    767
+  rank,colors,half             350    310    455    607     463    438    579    713
+  fields,colorless,whole       355    322    538    670     515    462    680    809
+  fields,colorless,half        292    260    430    551     436    408    590    715
+  base-n,colorless,whole       349    324    526    652     528    487    710    844
+  base-n,colorless,half        305    283    446    562     453    427    605    730
+  rank,colorless,whole         409    386    587    715     591    560    788    930
+  rank,colorless,half          381    353    530    664     536    492    687    824
+
+4. The REV of a string of 1 to L-1 bits (every length as likely), one lookup at a time
+
+                            as the reader returns it     and run against the string 
+                              mean    p50    p95    p99    mean    p50    p95    p99
+  compact file of PR 8          79     51    214    360     158    124    365    517
+  fields,colors,whole          110     97    172    331     182    162    296    463
+  fields,colors,half           118    112    158    254     191    180    292    425
+  base-n,colors,whole          117    101    197    355     188    165    318    482
+  base-n,colors,half           124    112    184    320     195    181    308    417
+  rank,colors,whole            175    107    421    576     252    167    535    710
+  rank,colors,half             174    122    378    467     241    179    498    600
+  fields,colorless,whole       171    101    425    568     247    166    564    716
+  fields,colorless,half        199    127    447    596     250    182    531    676
+  base-n,colorless,whole       180    104    463    630     262    172    599    767
+  base-n,colorless,half        173    116    409    536     250    179    544    686
+  rank,colorless,whole         187    104    496    642     267    169    647    808
+  rank,colorless,half          185    116    458    584     281    186    632    807
+
+  as the reader returns it: what the reader of the file does to hand over a REV.  A candidate without
+  colors has run the machine on it to find them, one with rank and colors to number its nodes: those
+  REVs have been seen to emit the string.  The other readers unpack a record and return it unrun.
+  and run against the string: the REV returned is then run by code outside the reader, the same for all.
+
+5. Readers at once on one mapping: million verified REVs of L-bit strings a second, and one lookup
+
+                             1:    M/s   p50   p99   2:    M/s   p50   p99   4:    M/s   p50   p99
+  fixed-width file                2.62   282   554        5.73   262   528       10.20   270   545
+  compact file of PR 8            2.80   252   574        5.54   254   490       10.23   253   486
+  fields,colors,whole             2.84   265   542        5.71   260   540       11.03   245   529
+  fields,colors,half              3.25   208   487        6.55   214   475       12.41   214   425
+  base-n,colors,whole             2.70   286   563        5.72   248   528       10.75   246   512
+  base-n,colors,half              3.17   229   509        6.08   232   504       11.95   231   408
+  rank,colors,whole               1.77   477   773        3.30   481   874        6.40   472   810
+  rank,colors,half                1.82   441   780        3.65   434   697        6.56   471   685
+  fields,colorless,whole          1.98   415   743        3.91   402   721        7.94   391   687
+  fields,colorless,half           1.94   414   752        3.81   401   719        7.52   403   711
+  base-n,colorless,whole          1.82   450   812        3.61   450   798        6.38   476   817
+  base-n,colorless,half           1.64   470   830        3.89   418   730        7.35   430   743
+  rank,colorless,whole            1.55   544   902        3.14   524   878        5.92   511   865
+  rank,colorless,half             1.65   506   856        3.39   491   815        7.04   472   756
+
+6. Out of the page cache: microseconds for one lookup
+
+                            nothing in memory          the index in memory      
+                            L p50   p99 sh p50    p99  L p50   p99 sh p50    p99
+  fields,colors,whole          51   135     26    247     26    53      1     33
+  fields,colors,half           82   230     41    141     41    87      1     46
+  base-n,colors,whole          71   150     40    221     40    67      1     68
+  base-n,colors,half           65   144     35    158     34    57      1     52
+  rank,colors,whole            52   168     41    133     44   127      1     74
+  rank,colors,half             76   162     42    134     37    47      1     49
+  fields,colorless,whole       55   116     27    162     24    54      1     26
+  fields,colorless,half        64   171     35    159     34    68      1     41
+  base-n,colorless,whole       74   241     39    245     37    53      1     43
+  base-n,colorless,half        67   141     32    110     33    53      1     38
+  rank,colorless,whole         68   152     36    152     33    61      1     38
+  rank,colorless,half          67   195     45    156     33    64      1     40
+
+  L: strings of 20 bits; sh: shorter ones, whose REVs lie on few pages that are soon in memory.
+  A lookup costs one read of the disk for each page it touches that is not in memory yet.
+
+PASS
+
+real	2m30.991s
+user	2m44.158s
+sys	0m0.607s
+exit 0

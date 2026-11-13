@@ -141,6 +141,11 @@ add_executable(fixed_bomb_lookup benchmarks/fixed_bomb_lookup.c)
 target_link_libraries(fixed_bomb_lookup PRIVATE carlobomb_fixed_bomb)
 
 # What the Bomb knows about targets longer than it covers, against the search.
+# A table of full size without the search: files of many gigabytes written,
+# addressed and read (benchmarks/FIXED_RUN_31_FEASIBILITY.md).
+add_executable(big_table benchmarks/big_table.c)
+target_link_libraries(big_table PRIVATE carlobomb_fixed_run)
+
 add_executable(fixed_bomb_longer benchmarks/fixed_bomb_longer.c)
 target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_fixed_bomb carlobomb_minimal m)
 
@@ -289,6 +294,11 @@ if(CARLOBOMB_HAVE_BOMB_BUILD)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixed_smoke.cmake)
   set_tests_properties(fixed_smoke PROPERTIES TIMEOUT 900)
 endif()
+
+# The same check of size that is run by hand on 26 to 28 bits, on a table
+# small enough for every run of the tests.
+add_test(NAME big_table_small COMMAND big_table --bits 18 --out ${CMAKE_CURRENT_BINARY_DIR}/big_table_18.frb)
+set_tests_properties(big_table_small PROPERTIES PASS_REGULAR_EXPRESSION "PASS")
 
 add_test(NAME legacy_original_runs COMMAND legacy_original)
 set_tests_properties(legacy_original_runs PROPERTIES

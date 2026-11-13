@@ -10,7 +10,7 @@
 > - every halved candidate is 1 MiB smaller at 24 bits than in the tables
 >   below, every whole one 2 MiB;
 > - the times of section 3 are those of the stored two bits; on demand the
->   comparison takes COMPARE_NS;
+>   comparison takes about 110 ns at 24 bits instead of 10;
 > - among equally small extensions of a string that starts with 1, a halved
 >   file now answers with the highest, the complement of its complement's
 >   answer, where it answered with the lowest.

@@ -1,0 +1,306 @@
+All twelve combinations made again with one navigation bit and checked for every string of every length
+(v4_matrix run --variants all --rounds 1 --queries 1000 --threads 1 --cold 0; the timings of such a short run
+mean nothing and are left out here)
+
+Bomb: FixedRunBomb(16), 65,536 strings, 1,245,248 bytes, table CRC-32 3255f12c; validated in full in 0.2 s
+
+== fields,colors,whole ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colors,half ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       20,442 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colors,whole ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colors,half ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       20,442 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colors,whole ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colors,half ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       20,442 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colorless,whole ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colorless,half ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       20,442 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colorless,whole ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colorless,half ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       20,442 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colorless,whole ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colorless,half ==
+  every string         65,536 of 16 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       65,534 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       20,442 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+
+PASS
+
+Bomb: FixedRunBomb(20), 1,048,576 strings, 35,651,648 bytes, table CRC-32 04be747f; validated in full in 0.6 s
+
+== fields,colors,whole ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colors,half ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       321,755 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colors,whole ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colors,half ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       321,755 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colors,whole ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colors,half ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       321,755 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colorless,whole ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colorless,half ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       321,755 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colorless,whole ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colorless,half ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       321,755 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colorless,whole ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colorless,half ==
+  every string         1,048,576 of 20 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       1,048,574 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       321,755 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+
+PASS
+
+Bomb: FixedRunBomb(24), 16,777,216 strings, 570,425,408 bytes, table CRC-32 dfd98e11; validated in full in 7.1 s
+
+== fields,colors,whole ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colors,half ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       5,157,425 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colors,whole ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colors,half ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       5,157,425 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colors,whole ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colors,half ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       5,157,425 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colorless,whole ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== fields,colorless,half ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       5,157,425 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colorless,whole ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== base-n,colorless,half ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       5,157,425 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colorless,whole ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       0 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+== rank,colorless,half ==
+  every string         16,777,216 of 24 bits: 0 wrong node counts, 0 without a REV that emits them,
+                       0 with a REV other than the stored one (0 of them predict another next bit);
+                       16,777,214 shorter strings: 0 not answered by an extension with the fewest nodes,
+                       0 by another such extension than the rule gives, 0 with another answer to
+                       "which extension needs fewer nodes, or neither";
+                       5,157,425 answered by another extension than the lowest of the equals (no error:
+                       the rule for strings that start with 1 in a halved file)
+
+PASS

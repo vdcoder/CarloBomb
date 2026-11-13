@@ -20,7 +20,7 @@ are given.
 |---|---|
 | `cbx.h`, `cbx.c` | The prototype container: writer, reader, lookups, and the check of a file against the Bomb it was made from |
 | `v4_matrix.c` | Makes each candidate from a Bomb, checks it for every string of every length, and measures it; and counts how often a Bomb picks a next bit |
-| `test_cbx.c` | Tests of the container (`ctest -R test_cbx`): 84,762 checks |
+| `test_cbx.c` | Tests of the container (`ctest -R test_cbx`): 170,163 checks |
 | `smoke.cmake` | The twelve candidates on a 13-bit Bomb built for the occasion (`ctest -R v4_smoke`) |
 | `results/` | The output of every run the report quotes |
 
@@ -93,8 +93,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
 
 Then one command. `BOMB` is a complete fixed-width Bomb, for example
 `~/frb24/fixed-run-24.frb`; `SCRATCH` is an existing directory with room for
-the files made, which are all there until the end: a fourteenth of the size
-of the Bomb for the approved design, at most 1.7 times for all twelve. Under
+the files made, which are all there until the end: a tenth of the size of
+the Bomb at most for the approved design, 1.7 times at most for all twelve. Under
 WSL take a directory on the Linux side (under your home directory), not
 under `/mnt/c`: files there are not mapped and cached the way the
 measurement assumes.
@@ -127,7 +127,7 @@ What it needs, measured at 24 bits and scaled by the size of the Bomb:
 
 | Bomb | Fixed-width file | Memory at the peak | Time, approved design | Time, all twelve | Scratch, all twelve |
 |---|---|---|---|---|---|
-| 24 bits | 0.57 GB | about 1.3 GB | FINAL_MINUTES | a quarter of an hour | 1.0 GB |
+| 24 bits | 0.57 GB | about 1.3 GB | 2 to 3 minutes | a quarter of an hour | 1.0 GB |
 | 25 bits | 1.5 GB | about 3.3 GB | twice that | about half an hour | 2.5 GB |
 | 26 bits | 3.0 GB | about 6.5 GB | four times | about an hour | 5 GB |
 

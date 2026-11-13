@@ -354,6 +354,113 @@ static void test_layout(void) {
     }
 }
 
+/* ---- the worked example of FORMAT.md, section 12.10 ------------------------ */
+
+/*
+ * FixedRunBomb(3) with the REVs `carlobomb bomb build --bits 3` finds, made
+ * compact: the file must be the bytes the specification prints, every one.
+ * The bytes below are typed from the specification, not produced by the code
+ * under test.
+ */
+static void test_worked_example(void) {
+    static const struct {
+        int nodes;
+        int node[3][3]; /* color, link 0, link 1 */
+    } revs[8] = {
+        {1, {{0, 0, 0}}},                       /* 000 */
+        {3, {{1, 0, 1}, {0, 0, 2}, {0, 0, 0}}}, /* 001 */
+        {2, {{1, 1, 1}, {0, 0, 0}}},            /* 010 */
+        {2, {{1, 0, 1}, {0, 0, 0}}},            /* 011 */
+        {2, {{0, 1, 0}, {1, 0, 0}}},            /* 100 */
+        {2, {{0, 1, 1}, {1, 0, 0}}},            /* 101 */
+        {3, {{0, 1, 0}, {1, 2, 0}, {1, 0, 0}}}, /* 110 */
+        {1, {{1, 0, 0}}},                       /* 111 */
+    };
+    static const uint8_t header[64] = {
+        0x43, 0x42, 0x46, 0x52, 0x42, 0x0d, 0x0a, 0x1a, /* magic */
+        0x04, 0x00,                                     /* version 4 */
+        0x40, 0x00,                                     /* header size 64 */
+        0x03,                                           /* L = 3 */
+        0x1f,                                           /* 31 */
+        0x01,                                           /* I = 1 */
+        0x00,
+        0x08, 0x00, 0x00, 0x00,                         /* 8 REVs */
+        0x01, 0x00, 0x00, 0x00,                         /* COMPLETE */
+        0x08, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+        0x03, 0x03,                                     /* largest node count 3 */
+        0x01, 0x00,                                     /* made from a version-1 file */
+        0x61, 0x98, 0xcd, 0xaa,                         /* CRC-32 of the directory */
+        0xb6, 0xb0, 0x86, 0x92,                         /* CRC-32 of the index */
+        0xae, 0xba, 0x02, 0x98,                         /* table CRC-32 of the source */
+        0x3a, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* 1,082 bytes */
+        0x00, 0x00, 0x00, 0x00,
+        0x8a, 0xcc, 0xb8, 0x01,                         /* CRC-32 of the 60 bytes before */
+    };
+    static const uint8_t rows[3][32] = {
+        {0x02, 0, 0, 0, 0x00, 0, 0, 0, 0x30, 0x04, 0, 0, 0, 0, 0, 0, 0x01, 0, 0, 0, 0x00, 0, 0, 0, 0x69, 0x22, 0xde, 0x36, 0, 0, 0, 0},
+        {0x04, 0, 0, 0, 0x02, 0, 0, 0, 0x32, 0x04, 0, 0, 0, 0, 0, 0, 0x01, 0, 0, 0, 0x01, 0, 0, 0, 0xc3, 0xe0, 0x0f, 0xa7, 0, 0, 0, 0},
+        {0x02, 0, 0, 0, 0x06, 0, 0, 0, 0x36, 0x04, 0, 0, 0, 0, 0, 0, 0x02, 0, 0, 0, 0x02, 0, 0, 0, 0x8a, 0x5e, 0x94, 0xc4, 0, 0, 0, 0},
+    };
+    static const uint8_t tail[26] = {
+        0x00, 0x01,                                     /* 0, 1 */
+        0x00, 0x02, 0x04, 0x01,                         /* 00, 01, 10, 11 */
+        0x00, 0x06, 0x02, 0x03, 0x04, 0x05, 0x07, 0x01, /* 000 .. 111 */
+        0x00, 0x00,                                     /* padding */
+        0x00, 0x01,                                     /* class 1: 000, 111 */
+        0x07, 0x05, 0x0a, 0x0e,                         /* class 2: 010, 011, 100, 101 */
+        0x09, 0x02, 0xa2, 0x04,                         /* class 3: 001, 110 */
+    };
+    char path[1200];
+    FrbTable t;
+    uint8_t *fixed = NULL, *bytes;
+    size_t fixed_size = 0, size = 0;
+    int rest = 1;
+
+    snprintf(path, sizeof path, "%s", file("example.frb"));
+    CHECK(frb_table_create_as(&t, 3, frb_format(1)) == FRB_OK);
+    for (uint32_t i = 0; i < 8; i++) {
+        RevGraph g;
+        memset(&g, 0, sizeof g);
+        g.node_count = revs[i].nodes;
+        for (int k = 0; k < g.node_count; k++) {
+            g.nodes[k].color = revs[i].node[k][0];
+            g.nodes[k].links[0] = revs[i].node[k][1];
+            g.nodes[k].links[1] = revs[i].node[k][2];
+        }
+        CHECK(frb_table_put(&t, i, FRB_MINIMAL, &g) == FRB_OK); /* runs it: it emits string i */
+    }
+    /* The fixed-width file of the example: 216 bytes, table checksum 0x9802baae. */
+    CHECK(frb_image_build(&t, &fixed, &fixed_size) == FRB_OK && fixed_size == 216);
+    CHECK(fixed && fixed[36] == 0xae && fixed[37] == 0xba && fixed[38] == 0x02 && fixed[39] == 0x98);
+    free(fixed);
+
+    remove(path);
+    CHECK(frb_compact_write(path, &t, 1, 0x9802baaeu, 0) == FRB_OK);
+    bytes = slurp(path, &size);
+    CHECK(bytes != NULL && size == 1082);
+    if (bytes && size == 1082) {
+        CHECK(memcmp(bytes, header, 64) == 0);
+        CHECK(memcmp(bytes + 64, rows, 96) == 0);
+        for (int n = 4; n <= 31; n++) { /* the empty classes: nothing, from ordinal 8, at the end of the file */
+            const uint8_t *row = bytes + 64 + 32 * (n - 1);
+            int b = 0;
+            while ((1 << b) < n) b++;
+            rest = rest && row[0] == 0 && row[1] == 0 && row[2] == 0 && row[3] == 0;
+            rest = rest && row[4] == 8 && row[5] == 0 && row[6] == 0 && row[7] == 0;
+            rest = rest && row[8] == 0x3a && row[9] == 0x04 && row[10] == 0 && row[11] == 0;
+            rest = rest && row[16] == (n * (1 + 2 * b) + 7) / 8 && row[17] == 0 && row[20] == b;
+            for (int k = 12; k < 16; k++) rest = rest && row[k] == 0;
+            for (int k = 21; k < 32; k++) rest = rest && row[k] == 0;
+        }
+        CHECK(rest);
+        CHECK(memcmp(bytes + 1056, tail, 26) == 0);
+    }
+    free(bytes);
+    remove(path);
+    frb_table_destroy(&t);
+    printf("example: the 1,082 bytes of the worked example in the specification, byte for byte\n");
+}
+
 /* ---- conversion ---------------------------------------------------------- */
 
 /* Fewest nodes among the extensions of a string in a table, lowest index
@@ -868,6 +975,7 @@ int main(int argc, char **argv) {
     test_strides();
     test_pack();
     test_layout();
+    test_worked_example();
     test_conversion();
     test_all_classes();
     test_differences();

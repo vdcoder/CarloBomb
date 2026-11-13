@@ -34,8 +34,10 @@
 
 static const uint8_t frb_magic[8] = {'C', 'B', 'F', 'R', 'B', 0x0D, 0x0A, 0x1A};
 
-/* Header field offsets.  Bytes 0..33 mean what they mean in a fixed-width
- * header, with entry size 0: there are no entries of a fixed size. */
+/* Header field offsets.  Bytes 0..13 and 16..33 mean what they mean in a
+ * fixed-width header.  Byte 14 is the width of an index entry where that
+ * has the bits of a node, and byte 15, its entry size, is 0: there are no
+ * entries of a fixed size. */
 enum {
     C_MAGIC = 0,
     C_VERSION = 8,

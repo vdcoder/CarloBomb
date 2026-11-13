@@ -617,8 +617,8 @@ versions 1 to 3 means anything else than it did.
 
 A complete FixedRunBomb(L) holds 2^L certified minimum-node REVs. In a
 fixed-width file each takes the space of the largest REV the version allows:
-19, 34 or 44 bytes for REVs that, at 24 bits, have 7 or 8 nodes and fit in 7
-bytes. A compact file holds the same REVs in the space they need, and adds
+19, 34 or 44 bytes for REVs that, up to 24 bits, nearly all have 8 nodes or
+fewer and fit in 7 bytes. A compact file holds the same REVs in the space they need, and adds
 what a fixed-width file does not have: the answer for every string of fewer
 than L bits.
 
@@ -629,7 +629,7 @@ What it is and is not:
 
 - It is made **from a complete fixed-width file** and holds exactly its
   REVs, node for node. The fixed-width file can be regenerated from it, byte
-  for byte (section 12.8).
+  for byte (section 12.9).
 - **Only a complete table can be compact.** There is no status in it: every
   REV in the file is a certified minimum, and a table with any entry that is
   not has no compact form.
@@ -694,10 +694,12 @@ is a 64-bit number.
 | 56 | 4 | Reserved |
 | 60 | 4 | CRC-32 of header bytes 0..59 |
 
-Bytes 0 to 33 are the fields of the fixed-width header with the values they
-have for a complete table, so that a tool that prints a header prints the
-truth. Offsets 34 to 59 are used differently: a fixed-width header has one
-table checksum there and reserved bytes.
+Offsets 0 to 13 and 16 to 33 are the fields of the fixed-width header with
+the values they have for a complete table, so that a tool that prints a
+header prints the truth. Offset 14 holds I where a fixed-width header has
+the bits of a node, offset 15 is 0 where it has the size of an entry, and
+offsets 34 to 59 are used differently: a fixed-width header has one table
+checksum there and reserved bytes.
 
 I is ⌈L/8⌉ in every file this code writes unless asked otherwise
 (`--index-bytes`): 2 bytes up to 16 bits, 3 up to 24, 4 beyond. A wider I

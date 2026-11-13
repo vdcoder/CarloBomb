@@ -264,6 +264,7 @@ if(MODE STREQUAL "small")
   run(2 "cannot read" bomb compact --file ${W}/missing.frb --output ${W}/no.frb)
   run(2 "check a fixed-width file against how it was built" bomb verify --file ${W}/c10.frb --work-dir ${W}/a)
   run(2 "takes a Bomb for the same or fewer bits" bomb verify --file ${W}/c10.frb --against ${W}/v2-11.frb)
+  run(2 "is in the compact format.  To compare the two files, verify the compact one" bomb verify --file ${W}/a.frb --against ${W}/c10.frb)
   # b.frb certifies the same minima as a.frb with other REVs: not the same Bomb.
   run(1 "first difference at target.*Verification: FAIL" bomb verify --file ${W}/c10.frb --against ${W}/b.frb)
   run(0 "the same[^\n]*PASS" bomb verify --file ${W}/c11.frb --against ${W}/lad3/fixed-run-11.frb)

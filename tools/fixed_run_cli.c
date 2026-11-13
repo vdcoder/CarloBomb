@@ -1005,6 +1005,14 @@ static int cmd_verify(const BombArgs *a) {
     }
     printf("Complement symmetry of witnesses and minima .......... PASS\n");
 
+    if (a->against && frb_file_is_compact(a->against) == 1) {
+        fprintf(stderr,
+                "%s is in the compact format.  To compare the two files, verify the compact one\n"
+                "against this one: carlobomb bomb verify --file %s --against %s\n",
+                a->against, a->against, a->file);
+        frb_table_destroy(&t);
+        return X_USAGE;
+    }
     if (a->against) {
         FrbFileInfo short_info;
         FrbTable shorter;

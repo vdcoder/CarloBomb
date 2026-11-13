@@ -11,12 +11,16 @@
  * A CBX file is made offline from a complete fixed-width Bomb, which is
  * only read.  It holds:
  *
- *   A  two bits for every string of 0 to L-1 bits: which of its two
- *      extensions by one bit needs fewer nodes, 0 or 1, or 2 if they need
- *      the same.  That is the question a Bomb is asked, and one read answers
- *      it.  Followed from a string, 0 among equals, the records lead to its
- *      L-bit extension with the fewest nodes, the lowest among equals: the
- *      choice the compact format of PR 8 makes.
+ *   A  one bit for every stored string of 1 to L-1 bits, the navigation
+ *      bit: 0 if an extension of the string with the fewest nodes lies
+ *      under its extension by 0, 1 if only under its extension by 1.
+ *      Followed from a string the bits lead to an L-bit extension of it
+ *      with the fewest nodes: the lowest of them.  Nothing else is stored
+ *      about shorter strings.  Their node count is the node count of the
+ *      string the bits lead to; and which of the two extensions of a string
+ *      needs fewer nodes, or neither, is found on demand by following both
+ *      and comparing the two node counts (cbx_compare).  (CTO decision of
+ *      13 November 2026: store what is essential, derive the rest.)
  *   B  the node count of every stored string of L bits in 4 bits, and the
  *      number of strings of each node count before every 2^k-th string.
  *      The REVs are kept by node count in the order of their strings, so
@@ -27,13 +31,15 @@
  * and three switches, the features under review:
  *
  *   complement  Only strings that start with 0 are stored: in A, in B and
- *               in the REVs.  The REV of a string that starts with 1 is the
- *               complement (colors inverted, ports exchanged) of the REV of
- *               its complement, and its record in A is that of its
- *               complement with 0 and 1 exchanged.  Requires a Bomb in which
- *               that holds REV for REV; the writer checks every pair and
- *               refuses otherwise.  The choice among equal extensions does
- *               not change: the reader takes the lowest on either side.
+ *               in the REVs.  A string that starts with 1 is answered by
+ *               the complement of the answer of its complement: its node
+ *               count is the same, the extension the bits lead to is the
+ *               complement of the other's, and its REV is the complement
+ *               (colors inverted, ports exchanged) of the other's.  Requires
+ *               a Bomb in which that holds REV for REV; the writer checks
+ *               every pair and refuses otherwise.  The extension is again
+ *               one with the fewest nodes; among equals it is the highest
+ *               where for a string that starts with 0 it is the lowest.
  *   colors      Kept: N bits with each REV.  Dropped: the colors are found
  *               from the topology and the string when the REV is asked for
  *               (cl_recolor).  Where a color has to be guessed, the first
@@ -80,7 +86,8 @@ extern "C" {
 #define CBX_MAX_NODES 12 /* the rank tables reach 12 nodes; minima to 31 bits have fewer */
 #define CBX_CLASSES (CBX_MAX_NODES + 1)
 #define CBX_SMALL 5
-#define CBX_LAYOUT 2
+#define CBX_LAYOUT 3
+#define CBX_TIE 2 /* cbx_compare: the two extensions need the same number of nodes */
 
 typedef enum { CBX_FIELDS = 0, CBX_BASE_N = 1, CBX_RANK = 2 } CbxEncoding;
 
@@ -116,8 +123,8 @@ typedef struct {
     uint32_t class_count[CBX_CLASSES]; /* stored REVs by node count */
     uint8_t topo_bits[CBX_CLASSES];    /* bits of the links of one REV */
     uint8_t record_bits[CBX_CLASSES];  /* with the colors, if kept */
-    uint64_t choice_offset, classes_offset, checkpoint_offset, pool_offset[CBX_CLASSES];
-    uint64_t choice_bytes, classes_bytes, checkpoint_bytes, pool_bytes, file_bytes;
+    uint64_t nav_offset, classes_offset, checkpoint_offset, pool_offset[CBX_CLASSES];
+    uint64_t nav_bytes, classes_bytes, checkpoint_bytes, pool_bytes, file_bytes;
     uint32_t source_crc, body_crc;
     int source_version;
 } CbxInfo;
@@ -127,7 +134,7 @@ typedef struct {
     CbxInfo info;
     const uint8_t *base;
     size_t mapped;
-    const uint64_t *choice;
+    const uint64_t *nav;
     const uint64_t *classes;
     const uint32_t *checkpoint;
     const uint8_t *pool[CBX_CLASSES];
@@ -157,8 +164,9 @@ typedef struct {
     uint64_t not_stored_by_nodes[CBX_CLASSES]; /* the same by node count */
     uint64_t next_bit_differs; /* of those: bit L+1 other than the stored REV's */
     uint64_t shorter;          /* strings of 1 to L-1 bits */
-    uint64_t wrong_extension;  /* answered by another extension than the fewest-nodes, lowest one */
-    uint64_t wrong_choice;     /* strings of 0 to L-1 bits: another answer to "which extension needs fewer nodes" */
+    uint64_t not_minimal;      /* answered by a string that is no extension of theirs with the fewest nodes */
+    uint64_t wrong_extension;  /* by another such extension than the rule gives (lowest; highest in the mirror) */
+    uint64_t wrong_comparison; /* strings of 0 to L-1 bits: cbx_compare other than the table says */
 } CbxCheck;
 
 CbxError cbx_check_against(const Cbx *c, const FrbTable *table, CbxCheck *check);
@@ -171,46 +179,33 @@ static inline unsigned cbx_link_bits(unsigned n) {
     return w;
 }
 
-/* A record of A: 0 or 1 for the extension that needs fewer nodes, 2 for neither. */
-static inline unsigned cbx_choice_at(const Cbx *c, uint64_t place) {
-    return (unsigned)(c->choice[place >> 5] >> (2 * (place & 31u))) & 3u;
+/* A navigation bit: 0, the answer of the string lies under its extension by 0; 1, under its extension by 1. */
+static inline unsigned cbx_nav_at(const Cbx *c, uint64_t place) {
+    return (unsigned)(c->nav[place >> 6] >> (place & 63u)) & 1u;
 }
 
 /*
- * The question the Bomb is for: of the two extensions of a string by one
- * bit, which needs fewer nodes?  0 or 1, or 2 if they need the same.  bits is
- * 0 to L-1.  One read of the index; no REV is read.
+ * The L-bit string that answers the string of `bits` bits (0 to L): itself,
+ * or an extension of it with the fewest nodes, found by following one bit a
+ * level.  Among several such extensions it is the lowest; in a halved file,
+ * for a string that starts with 1, the highest: the complement of the answer
+ * of its complement.
  */
-static inline int cbx_choice(const Cbx *c, int bits, uint32_t value) {
-    unsigned r, mirror;
-    if (!c->info.opt.complement) return (int)cbx_choice_at(c, ((uint64_t)1 << bits) + value);
-    if (bits == 0) return 2; /* 0 and 1 are complements of each other */
-    mirror = (value >> (bits - 1)) & 1u; /* a string that starts with 1: the record of its complement, */
-    value ^= (0u - mirror) & (((uint32_t)1 << bits) - 1u);
-    r = cbx_choice_at(c, ((uint64_t)1 << (bits - 1)) + value);
-    return (int)(r ^ (mirror & ~(r >> 1))); /* with 0 and 1 exchanged; no branch: half the strings start with 1 */
-}
-
-/* The L-bit string that answers the string of `bits` bits: itself, or its
- * extension with the fewest nodes, the lowest among equals. */
 static inline uint32_t cbx_leaf(const Cbx *c, int bits, uint32_t value) {
     int L = c->info.bits;
-    unsigned mirror;
+    uint32_t mirror;
     uint64_t h;
     if (!c->info.opt.complement) {
         h = ((uint64_t)1 << bits) + value;
-        for (int k = bits; k < L; k++) h = 2 * h + (cbx_choice_at(c, h) & 1u);
+        for (int k = bits; k < L; k++) h = 2 * h + cbx_nav_at(c, h);
         return (uint32_t)(h - ((uint64_t)1 << L));
     }
-    if (bits == 0) bits = 1, value = 0; /* the two halves mirror each other: the lowest of the equals is under 0 */
-    mirror = (value >> (bits - 1)) & 1u;
-    value ^= (0u - mirror) & (((uint32_t)1 << bits) - 1u);
-    h = ((uint64_t)1 << (bits - 1)) + value; /* the records of the strings that start with 0, without that 0 */
-    for (int k = bits; k < L; k++) {
-        unsigned r = cbx_choice_at(c, h);
-        h = 2 * h + ((r | ((r >> 1) & mirror)) & 1u); /* among equals 0, which in the mirror is 1 */
-    }
-    return (uint32_t)(h - ((uint64_t)1 << (L - 1))) ^ ((0u - mirror) & c->mask);
+    if (bits == 0) bits = 1, value = 0;             /* 0 and 1 are complements and need the same: the answer under 0 */
+    mirror = 0u - ((value >> (bits - 1)) & 1u);     /* all ones for a string that starts with 1 */
+    value ^= mirror & (((uint32_t)1 << bits) - 1u); /* then its complement, which starts with 0 */
+    h = ((uint64_t)1 << (bits - 1)) + value;        /* the bits of the strings that start with 0, without that 0 */
+    for (int k = bits; k < L; k++) h = 2 * h + cbx_nav_at(c, h);
+    return (uint32_t)(h - ((uint64_t)1 << (L - 1))) ^ (mirror & c->mask); /* and the complement of its answer */
 }
 
 /* Where the REV of an L-bit string is kept: the string, or its complement. */
@@ -232,12 +227,19 @@ static inline int cbx_nodes(const Cbx *c, int bits, uint32_t value) {
     return (int)cbx_class_at(c, cbx_stored_string(c, leaf, &flip));
 }
 
-/* cbx_choice with the two node counts: two walks down the records instead of
- * one read.  bits is 0 to L-1.  Index only. */
-static inline int cbx_smaller_extension(const Cbx *c, int bits, uint32_t value, int nodes[2]) {
-    nodes[0] = cbx_nodes(c, bits + 1, 2 * value);
-    nodes[1] = cbx_nodes(c, bits + 1, 2 * value + 1);
-    return nodes[0] < nodes[1] ? 0 : nodes[1] < nodes[0] ? 1 : 2;
+/*
+ * On demand: of the two extensions of a string by one bit, which needs fewer
+ * nodes?  0 or 1, or CBX_TIE if they need the same.  bits is 0 to L-1.
+ *
+ * Nothing is stored for this question.  Each extension is followed to the
+ * L-bit string that answers it and the node count read there: the fewest
+ * nodes of a string are the fewest among its L-bit extensions.  No REV is
+ * read and no color found.  `nodes`, if not NULL, receives the two counts.
+ */
+static inline int cbx_compare(const Cbx *c, int bits, uint32_t value, int nodes[2]) {
+    int n0 = cbx_nodes(c, bits + 1, 2 * value), n1 = cbx_nodes(c, bits + 1, 2 * value + 1);
+    if (nodes) nodes[0] = n0, nodes[1] = n1;
+    return n0 < n1 ? 0 : n1 < n0 ? 1 : CBX_TIE;
 }
 
 static inline uint32_t cbx_count_equal(uint64_t w, uint64_t pattern, unsigned limit) {

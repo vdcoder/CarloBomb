@@ -2,10 +2,11 @@
  * v4_matrix: the candidate layouts for the compact Bomb, as files, measured
  * side by side.
  *
- *   v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]
+ *   v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants final|short|all|LIST]
  *                 [--queries N] [--rounds R] [--threads 1,2,4] [--cold N] [--checkpoint B]
  *                 [--keep] [--no-verify]
  *   v4_matrix convert --bomb FILE --output FILE --variant NAME [--checkpoint B]
+ *   v4_matrix ask --file FILE --target STRING
  *   v4_matrix choices --bomb FILE
  *
  * FILE of --bomb is a complete fixed-width Bomb.  It is opened for reading
@@ -20,9 +21,14 @@
  *   fields | base-n | rank     how the links of a REV are written
  *   colors | colorless         colors kept, or found by search at lookup
  *   whole | half               every string, or one of each complement pair
- * "short" is the shortlist under review, "all" the twelve combinations.  A
+ * "final" (the default) is the approved design, rank,colorless,half; "short"
+ * is the shortlist that was under review, "all" the twelve combinations.  A
  * fourth part, c64 or c1024, gives a variant its own spacing of the counts
  * in B (--checkpoint sets it for the others).
+ *
+ * `ask` puts one string of 0s and 1s to a file made by `convert`: its node
+ * count, the extension the navigation bits lead to, the comparison of its
+ * two extensions, and its REV.
  *
  * `choices` prints, for every length below L, how many strings have one
  * extension by a bit that needs fewer nodes than the other.
@@ -35,8 +41,8 @@
  *   how many get a REV other than the stored one and how many of those
  *   predict another next bit, and that every shorter string is answered by
  *   the same extension as before;
- *   node count of a string, and "which of the two extensions needs fewer
- *   nodes" (both from the index alone);
+ *   node count of a string, and the comparison on demand, "which of the two
+ *   extensions needs fewer nodes, or neither" (both from the index alone);
  *   the verified REV of a string of L bits and of a shorter string: mean,
  *   p50, p95 and p99 of single lookups;
  *   the same with several readers at once on one mapping: lookups per
@@ -162,6 +168,7 @@ static int parse_variant(const char *text, int checkpoint_shift, Variant *v) {
     return have;
 }
 
+static const char *const final_design[] = {"rank,colorless,half"};
 static const char *const shortlist[] = {"fields,colors,whole",    "fields,colors,half",    "base-n,colors,half",
                                         "rank,colors,whole",      "rank,colors,half",      "fields,colorless,half",
                                         "base-n,colorless,half",  "rank,colorless,whole",  "rank,colorless,half"};
@@ -218,9 +225,8 @@ static int cmd_convert(const char *bomb, const char *output, const char *variant
            (unsigned long long)((info.file_bytes + info.strings) / 1024), status_kb("VmHWM:"), status_kb("RssAnon:"));
     printf("%s: %s bytes from %s (%s); source validated in %.1f s, file built and written in %.1f s\n", v.name,
            commas(info.file_bytes), bomb, output, t1 - t0, t2 - t1);
-    printf("  two bits per shorter string %s, node counts %s, checkpoints %s, REVs %s bytes\n",
-           commas(info.choice_bytes), commas(info.classes_bytes), commas(info.checkpoint_bytes),
-           commas(info.pool_bytes));
+    printf("  navigation bits %s, node counts %s, checkpoints %s, REVs %s bytes\n", commas(info.nav_bytes),
+           commas(info.classes_bytes), commas(info.checkpoint_bytes), commas(info.pool_bytes));
     return 0;
 }
 
@@ -357,10 +363,11 @@ static inline int nodes_of(const Source *s, int bits, uint32_t value) {
     }
 }
 
-/* Which of the two extensions of a string of 0 to L-1 bits needs fewer nodes: 0, 1, or 2 for neither. */
+/* Which of the two extensions of a string of 0 to L-1 bits needs fewer nodes: 0, 1, or 2 for neither.
+ * On demand in every file: the node counts of the two extensions, compared. */
 static inline int choice_of(const Source *s, int bits, uint32_t value) {
     int n0, n1;
-    if (s->kind == KIND_CBX) return cbx_choice(s->cbx, bits, value);
+    if (s->kind == KIND_CBX) return cbx_compare(s->cbx, bits, value, NULL);
     n0 = nodes_of(s, bits + 1, 2 * value);
     n1 = nodes_of(s, bits + 1, 2 * value + 1);
     return n0 < n1 ? 0 : n1 < n0 ? 1 : 2;
@@ -563,9 +570,10 @@ static void keep_best(Row *best, const Row *now) {
 }
 
 /* The timed questions have to get the answers the other files give: node
- * counts and choices always, the REVs themselves where the file returns the
- * stored ones.  `fixed` is the row of the fixed-width file, `sums` an earlier
- * row with answers for shorter strings, `revs` one whose REVs are the stored
+ * counts and comparisons always, the REVs themselves where the file returns
+ * the stored ones.  `fixed` is the row of the fixed-width file, `sums` an
+ * earlier row with answers for shorter strings, `revs` one that takes the
+ * same extension among equals (whole or halved) and whose REVs are the stored
  * ones; either may be missing. */
 static int same_answers(const Row *row, const Row *fixed, const Row *sums, const Row *revs, int as_stored) {
     if (row->sum_nodes_full != fixed->sum_nodes_full) return 0;
@@ -748,11 +756,12 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
     if (r->checked)
         printf("  every string         %s of %d bits: %s wrong node counts, %s without a REV that emits them,\n"
                "                       %s with a REV other than the stored one (%s of them predict another next bit);\n"
-               "                       %s shorter strings: %s answered by another extension, %s with another answer\n"
-               "                       to \"which extension needs fewer nodes\"\n",
+               "                       %s shorter strings: %s not answered by an extension with the fewest nodes,\n"
+               "                       %s by another such extension than the rule gives, %s with another answer to\n"
+               "                       \"which extension needs fewer nodes, or neither\"\n",
                commas(r->check.strings), L, commas(r->check.wrong_nodes), commas(r->check.not_emitting),
                commas(r->check.not_stored), commas(r->check.next_bit_differs), commas(r->check.shorter),
-               commas(r->check.wrong_extension), commas(r->check.wrong_choice));
+               commas(r->check.not_minimal), commas(r->check.wrong_extension), commas(r->check.wrong_comparison));
     if (r->checked && r->check.not_stored) {
         printf("                       REVs other than the stored one, by node count:");
         for (int n = 1; n < CBX_CLASSES; n++)
@@ -762,8 +771,8 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
     printf("  node count           %.1f ns for a string of %d bits", r->nodes_full, L);
     if (r->nodes_short >= 0)
         printf(", %.1f ns for a shorter one (many in a row);\n"
-               "  smaller extension    which of the two extensions of a string needs fewer nodes: %.1f ns in a row;\n"
-               "                       one at a time: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns\n",
+               "  comparison           which of the two extensions of a string needs fewer nodes, or neither, on\n"
+               "                       demand: %.1f ns in a row; one at a time: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns\n",
                r->nodes_short, r->choice, r->choice_alone.mean, r->choice_alone.p50, r->choice_alone.p95,
                r->choice_alone.p99);
     else printf(" (many in a row)\n");
@@ -798,7 +807,9 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
                    const char *variants, size_t queries, const int *thread_list, int thread_count, size_t cold,
                    int checkpoint_shift, int keep, int verify, int rounds) {
     Row *rows;
-    const Row *sums = NULL, *revs = NULL; /* earlier rows to compare the answers for shorter strings with */
+    /* earlier rows to compare the answers for shorter strings with; the REVs by the rule among equals:
+     * [0] the lowest everywhere (PR 8, whole files), [1] the complement rule (halved files) */
+    const Row *sums = NULL, *revs[2] = {NULL, NULL};
     Variant list[16];
     FrbFileInfo finfo;
     FrbTable table;
@@ -812,12 +823,15 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
     FrbError fe;
 
     if (!bomb || !scratch) {
-        fprintf(stderr, "usage: v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]\n"
+        fprintf(stderr, "usage: v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants final|short|all|LIST]\n"
                         "                     [--queries N] [--rounds R] [--threads 1,2,4] [--cold N] [--checkpoint B]\n"
                         "                     [--keep] [--no-verify]\n");
         return 2;
     }
-    if (!variants || !strcmp(variants, "short")) {
+    if (!variants || !strcmp(variants, "final")) {
+        for (size_t i = 0; i < sizeof final_design / sizeof final_design[0]; i++)
+            parse_variant(final_design[i], checkpoint_shift, &list[count++]);
+    } else if (!strcmp(variants, "short")) {
         for (size_t i = 0; i < sizeof shortlist / sizeof shortlist[0]; i++)
             parse_variant(shortlist[i], checkpoint_shift, &list[count++]);
     } else if (!strcmp(variants, "all")) {
@@ -891,7 +905,7 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
         measure(&rows[nrows], &s, exact, prefix, queries, thread_list, thread_count);
         rows[nrows].other_answers = !same_answers(&rows[nrows], &rows[0], NULL, NULL, 1);
         failed |= rows[nrows].other_answers | rows[nrows].lookups_failed;
-        sums = revs = &rows[nrows];
+        sums = revs[0] = &rows[nrows];
         printf("measured  %s\n", rows[nrows].name);
         fflush(stdout);
         nrows++;
@@ -925,8 +939,9 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
             if (e == CBX_OK) e = cbx_check_against(&c, &table, &row->check);
             row->check_s = cb_now() - t0;
             row->checked = e == CBX_OK;
-            if (e != CBX_OK || row->check.wrong_nodes || row->check.not_emitting || row->check.wrong_extension ||
-                row->check.wrong_choice || (list[k].opt.colors && row->check.not_stored))
+            if (e != CBX_OK || row->check.wrong_nodes || row->check.not_emitting || row->check.not_minimal ||
+                row->check.wrong_extension || row->check.wrong_comparison ||
+                (list[k].opt.colors && row->check.not_stored))
                 failed = 1;
         }
         s.kind = KIND_CBX;
@@ -935,9 +950,10 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
         cbx_close(&c);
         {   /* a colorless file may return another REV of the same graph: then only the counts are compared */
             int as_stored = list[k].opt.colors || (row->checked && !row->check.not_stored);
-            row->other_answers = !same_answers(row, &rows[0], sums, revs, as_stored);
+            int rule = list[k].opt.complement != 0;
+            row->other_answers = !same_answers(row, &rows[0], sums, revs[rule], as_stored);
             if (!sums) sums = row;
-            if (!revs && as_stored) revs = row;
+            if (!revs[rule] && as_stored) revs[rule] = row;
         }
         if (cold) measure_cold(row, row->path, exact + queries, prefix, cold);
         failed |= row->lookups_failed | row->other_answers;
@@ -1003,7 +1019,7 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
            L, L + 1);
 
     printf("\n2. Questions the index answers without reading a REV\n\n");
-    printf("  %-26s %12s %12s %12s   %s\n", "", "nodes", "nodes", "choice", "choice, one question at a time");
+    printf("  %-26s %12s %12s %12s   %s\n", "", "nodes", "nodes", "comparison", "comparison, one at a time");
     printf("  %-26s %12s %12s %12s  %6s %6s %6s %6s\n", "", "L bits", "shorter", "", "mean", "p50", "p95", "p99");
     for (int i = 0; i < nrows; i++) {
         const Row *r = &rows[i];
@@ -1014,8 +1030,9 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
                    r->choice_alone.p50, r->choice_alone.p95, r->choice_alone.p99);
         else printf(" %12s %12s  %6s %6s %6s %6s\n", "-", "-", "-", "-", "-", "-");
     }
-    printf("\n  nodes: the minimum node count of a string, a million in a row.  choice: which of the two extensions\n"
-           "  of a string of 1 to %d bits needs fewer nodes, or neither; in a row, and each question by itself.\n",
+    printf("\n  nodes: the minimum node count of a string, a million in a row.  comparison: which of the two\n"
+           "  extensions of a string of 1 to %d bits needs fewer nodes, or neither, worked out on demand from the\n"
+           "  node counts of the two; in a row, and each question by itself.\n",
            L - 1);
 
     for (int part = 0; part < 2; part++) {
@@ -1079,6 +1096,68 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
     free(exact);
     free(prefix);
     return failed;
+}
+
+/* ---- one string, asked of a file ------------------------------------------------------ */
+
+static int cmd_ask(const char *file, const char *target) {
+    Cbx c;
+    ClTopo t;
+    uint32_t value = 0, colors = 0, leaf = 0;
+    char text[40];
+    int bits = 0, L, ok = 1;
+    CbxError e;
+    if (!file || !target) {
+        fprintf(stderr, "usage: v4_matrix ask --file FILE --target STRING\n");
+        return 2;
+    }
+    for (const char *p = target; *p; p++) {
+        if ((*p != '0' && *p != '1') || bits >= 31) {
+            fprintf(stderr, "v4_matrix: the target is a string of 0s and 1s, 31 at most\n");
+            return 2;
+        }
+        value = 2 * value + (uint32_t)(*p - '0');
+        bits++;
+    }
+    e = cbx_open(file, &c);
+    if (e != CBX_OK) {
+        fprintf(stderr, "v4_matrix: %s: %s\n", file, cbx_error_str(e));
+        return 1;
+    }
+    L = c.info.bits;
+    if (bits > L) {
+        fprintf(stderr, "v4_matrix: %s answers strings of up to %d bits\n", file, L);
+        cbx_close(&c);
+        return 1;
+    }
+    printf("Target: %s (%d bits; prototype file of the %d-bit Bomb: %s, %s, %s)\n", bits ? target : "the empty string",
+           bits, L, cbx_encoding_str(c.info.opt.encoding), c.info.opt.colors ? "colors" : "colorless",
+           c.info.opt.complement ? "half" : "whole");
+    if (bits >= 1) {
+        ok = cbx_lookup(&c, bits, value, &t, &colors, &leaf) && cl_verify(&t, colors, value, bits);
+        printf("Nodes: %d, the certified minimum\n", cbx_nodes(&c, bits, value));
+        if (bits < L) {
+            for (int i = 0; i < L; i++) text[i] = (char)('0' + ((leaf >> (L - 1 - i)) & 1u));
+            text[L] = '\0';
+            printf("Extension: %s: where the navigation bits lead, a %d-bit extension with the fewest nodes\n", text, L);
+        }
+    }
+    if (bits < L) {
+        int nodes[2], which = cbx_compare(&c, bits, value, nodes);
+        printf("Followed by 0: %d nodes.  Followed by 1: %d nodes.  ", nodes[0], nodes[1]);
+        if (which == CBX_TIE) printf("Neither needs fewer.\n");
+        else printf("%d needs fewer, by %d.\n", which, which ? nodes[0] - nodes[1] : nodes[1] - nodes[0]);
+    } else {
+        printf("Followed by 0 or by 1: beyond this Bomb; the Bomb of %d-bit strings can say.\n", L + 1);
+    }
+    if (bits >= 1 && ok) {
+        printf("\nNode   Color   Link0   Link1\n");
+        for (int i = 0; i < t.n; i++)
+            printf("%-6d %-7s %-7d %d\n", i, (colors >> i) & 1u ? "B (1)" : "W (0)", t.link[0][i], t.link[1][i]);
+    }
+    if (bits >= 1) printf("\nVerification: %s\n", ok ? "PASS (the REV emits the target)" : "FAIL");
+    cbx_close(&c);
+    return !ok;
 }
 
 /* ---- what the Bomb says about the next bit ------------------------------------------ */
@@ -1149,6 +1228,7 @@ static int cmd_choices(const char *bomb) {
 
 int main(int argc, char **argv) {
     const char *bomb = NULL, *scratch = NULL, *compact = NULL, *variants = NULL, *output = NULL, *variant = NULL;
+    const char *file = NULL, *target = NULL;
     char self[4096];
     size_t queries = 1000000, cold = 1000;
     int thread_list[8] = {1, 2, 4}, thread_count = 3, checkpoint_shift = 8, keep = 0, verify = 1, rounds = 3;
@@ -1167,6 +1247,8 @@ int main(int argc, char **argv) {
             else if (!strcmp(k, "--variants")) variants = v;
             else if (!strcmp(k, "--output")) output = v;
             else if (!strcmp(k, "--variant")) variant = v;
+            else if (!strcmp(k, "--file")) file = v;
+            else if (!strcmp(k, "--target")) target = v;
             else if (!strcmp(k, "--queries")) queries = (size_t)strtoull(v, NULL, 10);
             else if (!strcmp(k, "--cold")) cold = (size_t)strtoull(v, NULL, 10);
             else if (!strcmp(k, "--rounds")) rounds = atoi(v) < 1 ? 1 : atoi(v) > 20 ? 20 : atoi(v);
@@ -1191,6 +1273,7 @@ int main(int argc, char **argv) {
     if (cold > queries / 2) cold = queries / 2; /* the shorter strings of the cold lookups are taken from the others */
     if (!strcmp(argv[1], "convert")) return cmd_convert(bomb, output, variant, checkpoint_shift);
     if (!strcmp(argv[1], "choices")) return cmd_choices(bomb);
+    if (!strcmp(argv[1], "ask")) return cmd_ask(file, target);
     if (!strcmp(argv[1], "run")) {
         len = readlink("/proc/self/exe", self, sizeof self - 1);
         if (len > 0) self[len] = '\0';
@@ -1199,10 +1282,11 @@ int main(int argc, char **argv) {
                        checkpoint_shift, keep, verify, rounds);
     }
 usage:
-    fprintf(stderr, "usage: v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]\n"
+    fprintf(stderr, "usage: v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants final|short|all|LIST]\n"
                     "                     [--queries N] [--rounds R] [--threads 1,2,4] [--cold N] [--checkpoint B]\n"
                     "                     [--keep] [--no-verify]\n"
                     "       v4_matrix convert --bomb FILE --output FILE --variant fields|base-n|rank[,colors|colorless][,whole|half]\n"
+                    "       v4_matrix ask --file FILE --target STRING\n"
                     "       v4_matrix choices --bomb FILE\n");
     return 2;
 }

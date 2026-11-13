@@ -30,8 +30,8 @@ typedef struct {
     uint32_t class_count[CBX_CLASSES];
     uint8_t topo_bits[CBX_CLASSES], record_bits[CBX_CLASSES];
     uint8_t pad[2];
-    uint64_t choice_offset, classes_offset, checkpoint_offset, pool_offset[CBX_CLASSES];
-    uint64_t choice_bytes, classes_bytes, checkpoint_bytes, pool_bytes, file_bytes;
+    uint64_t nav_offset, classes_offset, checkpoint_offset, pool_offset[CBX_CLASSES];
+    uint64_t nav_bytes, classes_bytes, checkpoint_bytes, pool_bytes, file_bytes;
     uint32_t source_crc, source_version, body_crc, header_crc;
 } Header;
 
@@ -125,7 +125,7 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
     CbxInfo info;
     uint32_t next[CBX_CLASSES] = {0}, running[CBX_CLASSES] = {0}, count, mask;
     uint8_t *image = NULL, *below = NULL, *pools[CBX_CLASSES] = {NULL};
-    uint64_t *choice, *classes, at;
+    uint64_t *nav, *classes, at;
     uint32_t *checkpoint;
     char *tmp = NULL;
     FILE *f;
@@ -179,9 +179,9 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
 
     /* where everything goes */
     at = CBX_HEADER_BYTES;
-    info.choice_offset = at; /* two bits for each stored string of L bits: as many shorter ones, and one unused */
-    info.choice_bytes = align8((2 * (uint64_t)info.stored + 7) / 8);
-    at += info.choice_bytes;
+    info.nav_offset = at; /* one bit for each stored string of L bits: as many shorter ones, and one unused */
+    info.nav_bytes = align8(((uint64_t)info.stored + 7) / 8);
+    at += info.nav_bytes;
     info.classes_offset = at;
     info.classes_bytes = (((uint64_t)info.stored + 15) / 16) * 8;
     at += info.classes_bytes;
@@ -202,7 +202,7 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
         free(below);
         return CBX_ERR_MEMORY;
     }
-    choice = (uint64_t *)(void *)(image + info.choice_offset);
+    nav = (uint64_t *)(void *)(image + info.nav_offset);
     classes = (uint64_t *)(void *)(image + info.classes_offset);
     checkpoint = (uint32_t *)(void *)(image + info.checkpoint_offset);
     for (int n = 1; n <= info.max_nodes; n++) pools[n] = image + info.pool_offset[n];
@@ -271,16 +271,18 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
         put_record(pools[n], next[n]++, info.record_bits[n], code);
     }
 
-    /* A: from the strings of L bits upwards, on the node counts alone.  With
-     * the complement only the strings that start with 0 get a record, at the
-     * place of the string without that 0; the pairs were compared above. */
+    /* A: from the strings of L bits upwards, on the node counts alone.  The
+     * bit of a string is 1 only where its extension by 1 needs fewer nodes
+     * than its extension by 0.  With the complement only the strings that
+     * start with 0 get a bit, at the place of the string without that 0; the
+     * pairs were compared above. */
     for (int k = L - 1; e == CBX_OK && k >= 0; k--) {
         for (uint32_t v = 0; v < ((uint32_t)1 << k); v++) {
             uint8_t zero = below[2 * v], one = below[2 * v + 1];
-            uint64_t record = zero < one ? 0u : one < zero ? 1u : 2u, place = 0;
+            uint64_t place = 0;
             if (!info.opt.complement) place = ((uint64_t)1 << k) + v;
             else if (k >= 1 && v < ((uint32_t)1 << (k - 1))) place = ((uint64_t)1 << (k - 1)) + v;
-            if (place) choice[place >> 5] |= record << (2 * (place & 31u));
+            if (place && one < zero) nav[place >> 6] |= (uint64_t)1 << (place & 63u);
             below[v] = one < zero ? one : zero; /* in place: [v] is read before it is written only for 2v, 2v+1 >= v */
         }
     }
@@ -305,11 +307,11 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
     memcpy(h.class_count, info.class_count, sizeof h.class_count);
     memcpy(h.topo_bits, info.topo_bits, sizeof h.topo_bits);
     memcpy(h.record_bits, info.record_bits, sizeof h.record_bits);
-    h.choice_offset = info.choice_offset;
+    h.nav_offset = info.nav_offset;
     h.classes_offset = info.classes_offset;
     h.checkpoint_offset = info.checkpoint_offset;
     memcpy(h.pool_offset, info.pool_offset, sizeof h.pool_offset);
-    h.choice_bytes = info.choice_bytes;
+    h.nav_bytes = info.nav_bytes;
     h.classes_bytes = info.classes_bytes;
     h.checkpoint_bytes = info.checkpoint_bytes;
     h.pool_bytes = info.pool_bytes;
@@ -395,11 +397,11 @@ CbxError cbx_open(const char *path, Cbx *c) {
     memcpy(c->info.class_count, h.class_count, sizeof h.class_count);
     memcpy(c->info.topo_bits, h.topo_bits, sizeof h.topo_bits);
     memcpy(c->info.record_bits, h.record_bits, sizeof h.record_bits);
-    c->info.choice_offset = h.choice_offset;
+    c->info.nav_offset = h.nav_offset;
     c->info.classes_offset = h.classes_offset;
     c->info.checkpoint_offset = h.checkpoint_offset;
     memcpy(c->info.pool_offset, h.pool_offset, sizeof h.pool_offset);
-    c->info.choice_bytes = h.choice_bytes;
+    c->info.nav_bytes = h.nav_bytes;
     c->info.classes_bytes = h.classes_bytes;
     c->info.checkpoint_bytes = h.checkpoint_bytes;
     c->info.pool_bytes = h.pool_bytes;
@@ -410,8 +412,8 @@ CbxError cbx_open(const char *path, Cbx *c) {
     /* every section inside the file, in order, and what the counts need */
     {
         uint64_t at = CBX_HEADER_BYTES, sum = 0;
-        int ok = h.choice_offset == at && h.choice_bytes == align8((2 * (uint64_t)h.stored + 7) / 8);
-        at += h.choice_bytes;
+        int ok = h.nav_offset == at && h.nav_bytes == align8(((uint64_t)h.stored + 7) / 8);
+        at += h.nav_bytes;
         ok = ok && h.classes_offset == at && h.classes_bytes == (((uint64_t)h.stored + 15) / 16) * 8;
         at += h.classes_bytes;
         ok = ok && h.checkpoint_offset == at &&
@@ -433,7 +435,7 @@ CbxError cbx_open(const char *path, Cbx *c) {
     (void)cl_canon_count(1); /* the tables of the rank are filled here, before there can be several readers */
     c->base = map;
     c->mapped = (size_t)st.st_size;
-    c->choice = (const uint64_t *)(const void *)(c->base + h.choice_offset);
+    c->nav = (const uint64_t *)(const void *)(c->base + h.nav_offset);
     c->classes = (const uint64_t *)(const void *)(c->base + h.classes_offset);
     c->checkpoint = (const uint32_t *)(const void *)(c->base + h.checkpoint_offset);
     for (unsigned n = 1; n <= h.max_nodes; n++) c->pool[n] = c->base + h.pool_offset[n];
@@ -458,14 +460,15 @@ CbxError cbx_check_body(const Cbx *c) {
 }
 
 CbxError cbx_check_against(const Cbx *c, const FrbTable *table, CbxCheck *check) {
-    uint32_t waiting[FRB_MAX_BITS + 1];
-    int L;
+    uint32_t waiting_lo[FRB_MAX_BITS + 1], waiting_hi[FRB_MAX_BITS + 1];
+    int L, halved;
     if (!c || !c->base || !table || !check || table->bits != c->info.bits) return CBX_ERR_ARG;
     memset(check, 0, sizeof *check);
     L = c->info.bits;
+    halved = c->info.opt.complement != 0;
     for (uint32_t t = 0;; t++) {
         ClTopo want, got;
-        uint32_t want_colors = 0, colors = 0, leaf = 0, chosen = t, v = t;
+        uint32_t want_colors = 0, colors = 0, leaf = 0, lo = t, hi = t, v = t;
         int bits;
         CbxError e = stored_rev(table, t, &want, &want_colors);
         if (e != CBX_OK) return e;
@@ -483,26 +486,36 @@ CbxError cbx_check_against(const Cbx *c, const FrbTable *table, CbxCheck *check)
                     check->next_bit_differs++;
             }
         }
-        /* Shorter strings, worked out from the table alone: each is answered
-         * by its extension with the fewest nodes, the lowest among equals.
-         * A string ending in 1 closes the strings it is the last extension of. */
+        /* Shorter strings, worked out from the table alone.  A string ending
+         * in 1 closes the strings it is the last extension of.  For each of
+         * them: lo and hi, the lowest and the highest of its extensions with
+         * the fewest nodes, from those of its two halves. */
         for (bits = L; bits > 1 && (v & 1u); bits--) {
-            uint32_t zero = waiting[bits];
-            int n0 = frb_table_nodes(table, zero), n1 = frb_table_nodes(table, chosen);
-            if (n1 >= n0) chosen = zero;
-            v >>= 1;
+            uint32_t zlo = waiting_lo[bits], zhi = waiting_hi[bits], answer;
+            int n0 = frb_table_nodes(table, zlo), n1 = frb_table_nodes(table, lo), least = n0 < n1 ? n0 : n1;
+            if (n0 < n1) lo = zlo, hi = zhi;
+            else if (n0 == n1) lo = zlo; /* hi stays: the highest under the extension by 1 */
+            v >>= 1;                     /* the string of bits-1 bits */
             check->shorter++;
-            if (cbx_leaf(c, bits - 1, v) != chosen || cbx_nodes(c, bits - 1, v) != frb_table_nodes(table, chosen))
-                check->wrong_extension++;
-            if (cbx_choice(c, bits - 1, v) != (n0 < n1 ? 0 : n1 < n0 ? 1 : 2)) check->wrong_choice++;
+            answer = cbx_leaf(c, bits - 1, v);
+            /* what has to hold: an extension of the string, with the fewest nodes */
+            if ((answer >> (L - (bits - 1))) != v || frb_table_nodes(table, answer) != least ||
+                cbx_nodes(c, bits - 1, v) != least)
+                check->not_minimal++;
+            /* and which one: the lowest; in a halved file the highest for a string that starts with 1 */
+            if (answer != (halved && ((v >> (bits - 2)) & 1u) ? hi : lo)) check->wrong_extension++;
+            if (cbx_compare(c, bits - 1, v, NULL) != (n0 < n1 ? 0 : n1 < n0 ? 1 : CBX_TIE)) check->wrong_comparison++;
         }
         if (t == c->mask) { /* the last string closes "1"; "0" is waiting: the two extensions of the empty string */
-            int n0 = frb_table_nodes(table, waiting[1]), n1 = frb_table_nodes(table, chosen);
-            if (cbx_choice(c, 0, 0) != (n0 < n1 ? 0 : n1 < n0 ? 1 : 2)) check->wrong_choice++;
-            if (cbx_leaf(c, 0, 0) != (n1 < n0 ? chosen : waiting[1])) check->wrong_extension++;
+            int n0 = frb_table_nodes(table, waiting_lo[1]), n1 = frb_table_nodes(table, lo);
+            uint32_t answer = cbx_leaf(c, 0, 0);
+            if (frb_table_nodes(table, answer) != (n0 < n1 ? n0 : n1)) check->not_minimal++;
+            if (answer != (n1 < n0 ? lo : waiting_lo[1])) check->wrong_extension++;
+            if (cbx_compare(c, 0, 0, NULL) != (n0 < n1 ? 0 : n1 < n0 ? 1 : CBX_TIE)) check->wrong_comparison++;
             break;
         }
-        waiting[bits] = chosen;
+        waiting_lo[bits] = lo;
+        waiting_hi[bits] = hi;
     }
     return CBX_OK;
 }

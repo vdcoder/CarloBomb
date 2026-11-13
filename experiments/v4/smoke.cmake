@@ -39,9 +39,23 @@ endforeach()
 if(NOT last_output MATCHES "8,192 of 13 bits: 0 wrong node counts, 0 without a REV that emits them")
   message(FATAL_ERROR "the check of every string is missing:\n${last_output}")
 endif()
+# every shorter string: a fewest-nodes extension, the one the rule gives, and the comparison on demand
+if(NOT last_output MATCHES "8,190 shorter strings: 0 not answered by an extension with the fewest nodes,\n +0 by another such extension than the rule gives, 0 with another answer")
+  message(FATAL_ERROR "the check of the shorter strings is missing:\n${last_output}")
+endif()
+if(last_output MATCHES "shorter strings: [1-9]|\n +[1-9][0-9,]* by another such extension|, [1-9][0-9,]* with another answer")
+  message(FATAL_ERROR "a shorter string was answered wrongly:\n${last_output}")
+endif()
 file(GLOB left ${W}/scratch/*)
 if(left)
   message(FATAL_ERROR "the matrix left files behind: ${left}")
+endif()
+
+# Without --variants: the approved design alone, beside the fixed-width file.
+run("\n  rank,colorless,half +[0-9,]+ +[0-9.]+% +[0-9.]+ +[0-9]+ +0 +0\n.*PASS\n$"
+    ${MATRIX} run --bomb ${W}/lad/fixed-run-13.frb --scratch ${W}/scratch --queries 2000 --rounds 1 --threads 1 --cold 0)
+if(last_output MATCHES "fields,colors|rank,colors,|whole")
+  message(FATAL_ERROR "the default is not the approved design alone:\n${last_output}")
 endif()
 
 # How often the Bomb picks a next bit: a row for every length, and the total.
@@ -72,6 +86,22 @@ execute_process(COMMAND ${MATRIX} convert --bomb ${W}/lad/fixed-run-13.frb --out
 if(code EQUAL 0 OR NOT "${err}" MATCHES "the output file exists")
   message(FATAL_ERROR "a file was replaced: exit ${code}\n${out}${err}")
 endif()
+
+# One string asked of that file: the comparison of its two extensions on demand, the extension the
+# navigation bits lead to, the REV.  The node counts of a string do not depend on the Bomb they are read from.
+run("Target: 0101010 \\(7 bits.*Nodes: 2, the certified minimum\nExtension: 0101010101010: .*Followed by 0: 4 nodes\\.  Followed by 1: 2 nodes\\.  1 needs fewer, by 2\\..*Verification: PASS"
+    ${MATRIX} ask --file ${W}/scratch/keep.cbx --target 0101010)
+run("Followed by 0: 4 nodes\\.  Followed by 1: 4 nodes\\.  Neither needs fewer\\..*Verification: PASS"
+    ${MATRIX} ask --file ${W}/scratch/keep.cbx --target 1100110)
+run("13 bits.*beyond this Bomb; the Bomb of 14-bit strings can say.*Verification: PASS"
+    ${MATRIX} ask --file ${W}/scratch/keep.cbx --target 0110100110010)
+foreach(bad "01x0" "01101001100101")
+  execute_process(COMMAND ${MATRIX} ask --file ${W}/scratch/keep.cbx --target ${bad}
+                  RESULT_VARIABLE code OUTPUT_VARIABLE out ERROR_VARIABLE err)
+  if(code EQUAL 0)
+    message(FATAL_ERROR "the target ${bad} was taken:\n${out}${err}")
+  endif()
+endforeach()
 
 # Nothing of this writes to the Bomb.
 file(SHA256 ${W}/lad/fixed-run-13.frb after)

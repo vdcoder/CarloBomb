@@ -56,6 +56,18 @@ static int scan_nodes(const FrbTable *t, int bits, uint32_t value) {
     return best;
 }
 
+/* The lowest, or the highest, of the L-bit extensions of a string that need the fewest nodes. */
+static uint32_t scan_extension(const FrbTable *t, int bits, uint32_t value, int highest) {
+    int shift = t->bits - bits, best = scan_nodes(t, bits, value);
+    uint32_t found = 0;
+    for (uint32_t i = value << shift; i < (value + 1u) << shift; i++)
+        if (frb_table_nodes(t, i) == best) {
+            found = i;
+            if (!highest) break;
+        }
+    return found;
+}
+
 static const CbxEncoding encodings[3] = {CBX_FIELDS, CBX_BASE_N, CBX_RANK};
 
 static void test_variants(void) {
@@ -84,28 +96,47 @@ static void test_variants(void) {
                           c.info.file_bytes == info.file_bytes && c.info.stored == (half ? t.count / 2 : t.count));
                     CHECK(cbx_check_against(&c, &t, &check) == CBX_OK);
                     CHECK(check.strings == t.count && check.shorter == t.count - 2);
-                    CHECK_MSG(check.wrong_nodes == 0 && check.not_emitting == 0 && check.wrong_extension == 0 &&
-                                  check.wrong_choice == 0,
-                              "%d bits %s colors %d half %d: %llu wrong nodes, %llu not emitting, %llu wrong extensions, "
-                              "%llu wrong choices",
+                    CHECK_MSG(check.wrong_nodes == 0 && check.not_emitting == 0 && check.not_minimal == 0 &&
+                                  check.wrong_extension == 0 && check.wrong_comparison == 0,
+                              "%d bits %s colors %d half %d: %llu wrong nodes, %llu not emitting, %llu not minimal, "
+                              "%llu wrong extensions, %llu wrong comparisons",
                               bits, cbx_encoding_str(encodings[e]), colors, half,
                               (unsigned long long)check.wrong_nodes, (unsigned long long)check.not_emitting,
-                              (unsigned long long)check.wrong_extension, (unsigned long long)check.wrong_choice);
+                              (unsigned long long)check.not_minimal, (unsigned long long)check.wrong_extension,
+                              (unsigned long long)check.wrong_comparison);
                     /* With the colors kept the stored REV comes back.  Without them too, here:
                      * every REV of this table was found by the search or is the complement of
                      * one, and the reader guesses in the order the search did. */
                     CHECK_MSG(check.not_stored == 0, "%d bits %s colors %d half %d: %llu REVs are not the stored ones",
                               bits, cbx_encoding_str(encodings[e]), colors, half, (unsigned long long)check.not_stored);
-                    /* the two index questions against a scan of the table */
+                    /* Shorter strings against a scan of the table: the comparison on demand, the
+                     * node count, and where the navigation bits lead.  That is the lowest of the
+                     * extensions with the fewest nodes; in a halved file, for a string that starts
+                     * with 1, the highest: complement in, complement out, for the REV as well. */
                     for (int k = 0; k < bits; k++) {
                         for (uint32_t v = 0; v < (1u << k); v++) {
-                            int nodes[2], which = cbx_smaller_extension(&c, k, v, nodes);
+                            int nodes[2], which = cbx_compare(&c, k, v, nodes);
                             int n0 = scan_nodes(&t, k + 1, 2 * v), n1 = scan_nodes(&t, k + 1, 2 * v + 1);
-                            CHECK(nodes[0] == n0 && nodes[1] == n1 && which == (n0 < n1 ? 0 : n1 < n0 ? 1 : 2));
-                            CHECK(cbx_choice(&c, k, v) == which); /* the one read, and the two walks */
-                            if (k) CHECK(cbx_nodes(&c, k, v) == (n0 < n1 ? n0 : n1));
+                            CHECK(nodes[0] == n0 && nodes[1] == n1 && which == (n0 < n1 ? 0 : n1 < n0 ? 1 : CBX_TIE));
+                            CHECK(cbx_compare(&c, k, v, NULL) == which);
+                            if (k) {
+                                uint32_t leaf = cbx_leaf(&c, k, v), other = v ^ ((1u << k) - 1u);
+                                CHECK(cbx_nodes(&c, k, v) == (n0 < n1 ? n0 : n1));
+                                CHECK(frb_table_nodes(&t, leaf) == (n0 < n1 ? n0 : n1) && (leaf >> (bits - k)) == v);
+                                CHECK(leaf == scan_extension(&t, k, v, half && ((v >> (k - 1)) & 1u)));
+                                if (half) {
+                                    ClTopo a, b, mirrored;
+                                    uint32_t ca = 0, cb = 0;
+                                    CHECK(cbx_leaf(&c, k, other) == (leaf ^ (t.count - 1u)));
+                                    CHECK(cbx_lookup(&c, k, v, &a, &ca, NULL) && cbx_lookup(&c, k, other, &b, &cb, NULL));
+                                    cl_swap_ports(&a, &mirrored);
+                                    CHECK(cl_same_topo(&mirrored, &b) && cb == (ca ^ ((1u << a.n) - 1u)));
+                                }
+                            }
                         }
                     }
+                    CHECK(cbx_leaf(&c, 0, 0) == scan_extension(&t, 0, 0, 0));
+                    CHECK(c.info.nav_bytes == ((uint64_t)c.info.stored + 63) / 64 * 8); /* one bit a stored string */
                     cbx_close(&c);
                     remove(path);
                     files++;
@@ -116,7 +147,7 @@ static void test_variants(void) {
         frb_table_destroy(&t);
     }
     printf("variants: %llu files, the 12 combinations for tables of 2 to 10 bits; %llu strings each given its node\n"
-           "          count and its stored REV, every shorter string its extension\n",
+           "          count and its stored REV, every shorter string its extension and its comparison\n",
            files, strings);
 }
 
@@ -154,8 +185,8 @@ static void test_wide(void) {
                 CHECK(c.info.max_nodes == 12);
                 if (encodings[e] != CBX_RANK || colors) CHECK(c.info.record_bits[12] > 64); /* two words */
                 CHECK(cbx_check_against(&c, &t, &check) == CBX_OK);
-                CHECK(check.wrong_nodes == 0 && check.not_emitting == 0 && check.wrong_extension == 0 &&
-                      check.wrong_choice == 0);
+                CHECK(check.wrong_nodes == 0 && check.not_emitting == 0 && check.not_minimal == 0 &&
+                      check.wrong_extension == 0 && check.wrong_comparison == 0);
                 if (colors) CHECK(check.not_stored == 0);
                 cbx_close(&c);
                 remove(path);

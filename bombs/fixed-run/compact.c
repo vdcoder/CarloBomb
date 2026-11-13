@@ -230,11 +230,16 @@ static void put_ordinal(uint8_t *p, int bytes, uint32_t v) {
     for (int i = 0; i < bytes; i++) p[i] = (uint8_t)((v >> (8 * i)) & 0xFFu);
 }
 
-/* Node count of the class an ordinal lies in; 0 if it lies in none. */
+/*
+ * Node count of the class an ordinal lies in; 0 if it lies in none.  The
+ * starts never go down, so the class is the last one that starts at or
+ * before the ordinal; counted without a branch, since which class it is
+ * cannot be predicted.
+ */
 static int class_of(const FrbCompactInfo *info, uint32_t ordinal) {
-    for (int n = 1; n <= info->max_nodes; n++)
-        if (ordinal - info->class_start[n] < info->class_count[n]) return n;
-    return 0;
+    int n = 1;
+    for (int k = 2; k <= info->max_nodes; k++) n += ordinal >= info->class_start[k];
+    return ordinal - info->class_start[n] < info->class_count[n] ? n : 0;
 }
 
 static void write_header(const FrbCompactInfo *info, uint8_t *h) {

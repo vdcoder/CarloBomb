@@ -1,0 +1,45 @@
+bits 16
+crc 3255f12c
+max_class 7
+class 1 strings 2 restored 2 solver_numbered 2
+class 2 strings 6 restored 6 solver_numbered 6
+class 3 strings 64 restored 42 solver_numbered 42
+class 4 strings 962 restored 326 solver_numbered 326
+class 5 strings 14348 restored 1278 solver_numbered 1278
+class 6 strings 48956 restored 48956 solver_numbered 48956
+class 7 strings 1198 restored 1198 solver_numbered 1198
+class 1 topologies 1 topologies_half 1 self_swap 1 entropy 0.000000 any_bits 0.000000
+class 2 topologies 5 topologies_half 3 self_swap 1 entropy 2.251629 any_bits 3.584963
+class 3 topologies 48 topologies_half 30 self_swap 0 entropy 5.476410 any_bits 7.754888
+class 4 topologies 640 topologies_half 385 self_swap 8 entropy 9.086318 any_bits 12.357552
+class 5 topologies 10003 topologies_half 5785 self_swap 21 entropy 13.050260 any_bits 17.293786
+class 6 topologies 45438 topologies_half 23243 self_swap 22 entropy 15.426260 any_bits 22.499975
+class 7 topologies 1192 topologies_half 596 self_swap 0 entropy 10.216395 any_bits 27.932596
+class 1 one 2 two 0 more 0 rank_bits 0.000 first0_original 2
+class 2 one 6 two 0 more 0 rank_bits 0.000 first0_original 6
+class 3 one 64 two 0 more 0 rank_bits 0.000 first0_original 64
+class 4 one 962 two 0 more 0 rank_bits 0.000 first0_original 962
+class 5 one 14340 two 8 more 0 rank_bits 8.000 first0_original 14344
+class 6 one 48872 two 84 more 0 rank_bits 84.000 first0_original 48914
+class 7 one 1198 two 0 more 0 rank_bits 0.000 first0_original 1198
+class 1 many 0 next_open 0 within8_open 0 within64_open 0 stream_open 0
+class 2 many 0 next_open 0 within8_open 0 within64_open 0 stream_open 0
+class 3 many 0 next_open 0 within8_open 0 within64_open 0 stream_open 0
+class 4 many 0 next_open 0 within8_open 0 within64_open 0 stream_open 0
+class 5 many 8 next_open 0 within8_open 0 within64_open 0 stream_open 0
+class 6 many 84 next_open 16 within8_open 36 within64_open 36 stream_open 36
+class 7 many 0 next_open 0 within8_open 0 within64_open 0 stream_open 0
+class 1 first0_next_differs 0 first0_stream_differs 0 first1_original 2
+class 2 first0_next_differs 0 first0_stream_differs 0 first1_original 6
+class 3 first0_next_differs 0 first0_stream_differs 0 first1_original 64
+class 4 first0_next_differs 0 first0_stream_differs 0 first1_original 962
+class 5 first0_next_differs 0 first0_stream_differs 0 first1_original 14344
+class 6 first0_next_differs 8 first0_stream_differs 18 first1_original 48914
+class 7 first0_next_differs 0 first0_stream_differs 0 first1_original 1198
+class 1 states_mean 16.5000 states_p50 16 states_p95 17 states_p99 17 states_p999 17 states_max 17
+class 2 states_mean 17.0000 states_p50 16 states_p95 18 states_p99 18 states_p999 18 states_max 18
+class 3 states_mean 17.7188 states_p50 17 states_p95 21 states_p99 25 states_p999 25 states_max 25
+class 4 states_mean 18.9137 states_p50 18 states_p95 24 states_p99 28 states_p999 35 states_max 35
+class 5 states_mean 20.2250 states_p50 19 states_p95 29 states_p99 33 states_p999 39 states_max 48
+class 6 states_mean 21.5012 states_p50 21 states_p95 31 states_p99 38 states_p999 48 states_max 71
+class 7 states_mean 23.8940 states_p50 23 states_p95 36 states_p99 45 states_p999 55 states_max 56

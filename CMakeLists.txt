@@ -354,4 +354,8 @@ if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_S
   target_include_directories(test_colorless PRIVATE tests)
   target_link_libraries(test_colorless PRIVATE carlobomb_colorless carlobomb_fixed_run carlobomb_level)
   add_test(NAME test_colorless COMMAND test_colorless)
+  # Every REV of a complete Bomb as a topology and a coloring.
+  add_executable(colorless_scan experiments/colorless/colorless_scan.c)
+  target_include_directories(colorless_scan PRIVATE benchmarks)
+  target_link_libraries(colorless_scan PRIVATE carlobomb_colorless carlobomb_fixed_run m)
 endif()

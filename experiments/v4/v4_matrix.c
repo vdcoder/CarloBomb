@@ -76,6 +76,14 @@ static inline uint64_t tick_begin(void) { return (uint64_t)(cb_now() * 1e9); }
 static inline uint64_t tick_end(void) { return (uint64_t)(cb_now() * 1e9); }
 #endif
 
+/* What is timed has to be done, and done between the two readings of the
+ * clock.  The answers of a loop are added up and the sums compared between
+ * the files at the end, so no loop can be left out; and for a single timed
+ * question HIDE makes the question unknown until the clock has been read and
+ * KEEP makes the answer exist before it is read again. */
+#define HIDE(x) __asm__ volatile("" : "+r"(x))
+#define KEEP(x) __asm__ volatile("" : : "r"(x))
+
 static double ns_per_tick = 1.0;
 static uint64_t tick_overhead;
 
@@ -195,8 +203,8 @@ static int cmd_convert(const char *bomb, const char *output, const char *variant
            (unsigned long long)((info.file_bytes + info.strings) / 1024), status_kb("VmHWM:"), status_kb("RssAnon:"));
     printf("%s: %s bytes from %s (%s); source validated in %.1f s, file built and written in %.1f s\n", v.name,
            commas(info.file_bytes), bomb, output, t1 - t0, t2 - t1);
-    printf("  one bit per shorter string %s, node counts %s, checkpoints %s, REVs %s bytes\n",
-           commas(info.direction_bytes), commas(info.classes_bytes), commas(info.checkpoint_bytes),
+    printf("  two bits per shorter string %s, node counts %s, checkpoints %s, REVs %s bytes\n",
+           commas(info.choice_bytes), commas(info.classes_bytes), commas(info.checkpoint_bytes),
            commas(info.pool_bytes));
     return 0;
 }
@@ -324,6 +332,15 @@ static inline int nodes_of(const Source *s, int bits, uint32_t value) {
     }
 }
 
+/* Which of the two extensions of a string of 0 to L-1 bits needs fewer nodes: 0, 1, or 2 for neither. */
+static inline int choice_of(const Source *s, int bits, uint32_t value) {
+    int n0, n1;
+    if (s->kind == KIND_CBX) return cbx_choice(s->cbx, bits, value);
+    n0 = nodes_of(s, bits + 1, 2 * value);
+    n1 = nodes_of(s, bits + 1, 2 * value + 1);
+    return n0 < n1 ? 0 : n1 < n0 ? 1 : 2;
+}
+
 typedef struct {
     double mean, p50, p95, p99;
     unsigned long long failed;
@@ -352,9 +369,15 @@ static unsigned long long time_each(const Source *s, const Query *q, size_t n, u
     unsigned long long failed = 0;
     uint32_t fold = 0;
     for (size_t i = 0; i < n; i++) {
+        uint32_t value = q[i].value;
         uint64_t a = tick_begin(), b;
-        failed += !rev_of(s, q[i].bits, q[i].value, &fold);
+        int ok;
+        HIDE(value);
+        ok = rev_of(s, q[i].bits, value, &fold);
+        KEEP(ok);
+        KEEP(fold);
         b = tick_end();
+        failed += !ok;
         ticks[i] = (uint32_t)(b - a > tick_overhead ? b - a - tick_overhead : 0);
     }
     *fold_out = fold;
@@ -437,19 +460,38 @@ typedef struct {
     Conversion conversion;
     CbxCheck check;
     int checked;
-    double nodes_full, nodes_short, choice; /* ns, mean */
+    double nodes_full, nodes_short, choice; /* ns each, many in a row */
+    Latency choice_alone;                   /* one at a time */
     Latency full, shorter;
+    /* what the timed questions answered, added up: the same for every file */
+    unsigned long long sum_nodes_full, sum_nodes_short, sum_choice;
+    uint32_t fold_full, fold_short;
     int thread_counts[8], thread_rows;
     double throughput[8];
     Latency thread_latency[8];
     double cold_all_p50, cold_all_p99, cold_index_s, cold_rev_p50, cold_rev_p99; /* microseconds, seconds */
-    int cold_done, lookups_failed;
+    double cold_all_short_p50, cold_all_short_p99, cold_rev_short_p50, cold_rev_short_p99;
+    size_t cold_lookups;
+    int cold_done, lookups_failed, other_answers;
 } Row;
+
+/* The timed questions have to get the answers the other files give: node
+ * counts and choices always, the REVs themselves where the file returns the
+ * stored ones.  `fixed` is the row of the fixed-width file, `sums` an earlier
+ * row with answers for shorter strings, `revs` one whose REVs are the stored
+ * ones; either may be missing. */
+static int same_answers(const Row *row, const Row *fixed, const Row *sums, const Row *revs, int as_stored) {
+    if (row->sum_nodes_full != fixed->sum_nodes_full) return 0;
+    if (as_stored && row->fold_full != fixed->fold_full) return 0;
+    if (sums && (row->sum_nodes_short != sums->sum_nodes_short || row->sum_choice != sums->sum_choice)) return 0;
+    if (revs && as_stored && row->fold_short != revs->fold_short) return 0;
+    return 1;
+}
 
 static void measure(Row *row, const Source *s, const Query *exact, const Query *prefix, size_t queries,
                     const int *thread_list, int thread_count) {
     uint32_t *ticks = malloc(queries * sizeof *ticks), fold = 0;
-    unsigned long long sink = 0, failed;
+    unsigned long long failed;
     double best;
     int L = s->L;
     if (!ticks) return;
@@ -457,46 +499,66 @@ static void measure(Row *row, const Source *s, const Query *exact, const Query *
     /* node counts and the choice between two extensions: index only */
     best = 1e30;
     for (int run = 0; run < 3; run++) {
+        unsigned long long sum = 0;
         double t0 = cb_now();
-        for (size_t i = 0; i < queries; i++) sink += (unsigned)nodes_of(s, L, exact[i].value);
+        for (size_t i = 0; i < queries; i++) sum += (unsigned)nodes_of(s, L, exact[i].value);
         t0 = cb_now() - t0;
         if (t0 < best) best = t0;
+        row->sum_nodes_full = sum;
     }
     row->nodes_full = best / (double)queries * 1e9;
     row->nodes_short = row->choice = -1.0;
     if (s->kind != KIND_FIXED) {
+        unsigned long long sum = 0;
         best = 1e30;
         for (int run = 0; run < 3; run++) {
             double t0 = cb_now();
-            for (size_t i = 0; i < queries; i++) sink += (unsigned)nodes_of(s, prefix[i].bits, prefix[i].value);
+            sum = 0;
+            for (size_t i = 0; i < queries; i++) sum += (unsigned)nodes_of(s, prefix[i].bits, prefix[i].value);
             t0 = cb_now() - t0;
             if (t0 < best) best = t0;
+            row->sum_nodes_short = sum;
         }
         row->nodes_short = best / (double)queries * 1e9;
         best = 1e30;
         for (int run = 0; run < 3; run++) {
             double t0 = cb_now();
-            for (size_t i = 0; i < queries; i++) { /* the two extensions of a string of 0 to L-1 bits */
-                int bits = prefix[i].bits - 1;
-                uint32_t value = prefix[i].value >> 1;
-                int n0 = nodes_of(s, bits + 1, 2 * value), n1 = nodes_of(s, bits + 1, 2 * value + 1);
-                sink += (unsigned)(n0 < n1 ? 0 : n1 < n0 ? 1 : 2);
-            }
+            sum = 0;
+            for (size_t i = 0; i < queries; i++) /* the two extensions of a string of 1 to L-1 bits */
+                sum += (unsigned)choice_of(s, prefix[i].bits, prefix[i].value);
             t0 = cb_now() - t0;
             if (t0 < best) best = t0;
+            row->sum_choice = sum;
         }
         row->choice = best / (double)queries * 1e9;
+        /* and one at a time, each by itself: what one such question costs when it comes alone */
+        sum = 0;
+        for (size_t i = 0; i < queries; i++) {
+            uint32_t value = prefix[i].value;
+            unsigned answer;
+            uint64_t a = tick_begin(), b;
+            HIDE(value);
+            answer = (unsigned)choice_of(s, prefix[i].bits, value);
+            KEEP(answer);
+            b = tick_end();
+            sum += answer;
+            ticks[i] = (uint32_t)(b - a > tick_overhead ? b - a - tick_overhead : 0);
+        }
+        if (sum != row->sum_choice) row->lookups_failed++; /* the same questions, the same answers */
+        row->choice_alone = summarize(ticks, queries, 0);
     }
 
     /* verified REVs, one lookup at a time; the second pass is the one kept */
     failed = time_each(s, exact, queries, ticks, &fold);
     failed = time_each(s, exact, queries, ticks, &fold);
+    row->fold_full = fold;
     row->full = summarize(ticks, queries, failed);
     row->lookups_failed += failed != 0;
     memset(&row->shorter, 0, sizeof row->shorter);
     if (s->kind != KIND_FIXED) {
         failed = time_each(s, prefix, queries, ticks, &fold);
         failed = time_each(s, prefix, queries, ticks, &fold);
+        row->fold_short = fold;
         row->shorter = summarize(ticks, queries, failed);
         row->lookups_failed += failed != 0;
     }
@@ -507,56 +569,71 @@ static void measure(Row *row, const Source *s, const Query *exact, const Query *
         row->thread_rows = k + 1;
     }
     free(ticks);
-    if (sink == 1 && fold == 1) row->lookups_failed += 0; /* the results were used */
 }
 
-/* Lookups with the file out of the page cache: first with nothing in memory,
- * then with the index read in and only the REVs cold. */
-static void measure_cold(Row *row, const char *path, const Query *exact, size_t lookups) {
+/* n lookups, each timed with the clock of the system: median and 99th percentile in microseconds. */
+static void cold_pass(const Source *s, const Query *q, size_t n, double *us, double *p50, double *p99) {
+    uint32_t fold = 0;
+    for (size_t i = 0; i < n; i++) {
+        double t0 = cb_now();
+        int ok = rev_of(s, q[i].bits, q[i].value, &fold);
+        KEEP(ok);
+        us[i] = (cb_now() - t0) * 1e6;
+    }
+    qsort(us, n, sizeof *us, cmp_double);
+    *p50 = us[n / 2];
+    *p99 = us[(size_t)((double)(n - 1) * 0.99)];
+}
+
+/* Lookups with the file out of the page cache: with nothing in memory, and
+ * with the index read in and only the REVs to fetch; strings of L bits and
+ * shorter ones.  exact and prefix hold 2 * lookups strings each. */
+static void measure_cold(Row *row, const char *path, const Query *exact, const Query *prefix, size_t lookups) {
     Cbx c;
     Source s;
     double *us = malloc(lookups * sizeof *us), t0;
-    uint32_t fold = 0;
     volatile uint64_t touch = 0;
+    size_t second = lookups; /* where the second set of strings starts */
     if (!us) return;
-    evict(path);
-    if (cbx_open(path, &c) != CBX_OK) {
-        free(us);
-        return;
-    }
-    madvise((void *)(uintptr_t)c.base, c.mapped, MADV_RANDOM);
     s.kind = KIND_CBX;
     s.cbx = &c;
-    s.L = c.info.bits;
-    for (size_t i = 0; i < lookups; i++) {
-        t0 = cb_now();
-        rev_of(&s, s.L, exact[i].value, &fold);
-        us[i] = (cb_now() - t0) * 1e6;
+    s.table = NULL;
+    s.compact = NULL;
+    /* Few enough lookups that a page is rarely asked for twice: an eighth of the pages of the REVs at most. */
+    if (cbx_open(path, &c) == CBX_OK) {
+        size_t pages = (size_t)((c.info.file_bytes - c.info.pool_offset[1]) / 4096u);
+        if (lookups > pages / 8) lookups = pages / 8 < 50 ? 50 : pages / 8;
+        if (lookups > second) lookups = second;
+        cbx_close(&c);
     }
-    qsort(us, lookups, sizeof *us, cmp_double);
-    row->cold_all_p50 = us[lookups / 2];
-    row->cold_all_p99 = us[(size_t)((double)(lookups - 1) * 0.99)];
-    cbx_close(&c);
-
+    row->cold_lookups = lookups;
+    for (int pass = 0; pass < 2; pass++) { /* nothing in memory: strings of L bits, then shorter ones */
+        evict(path);
+        if (cbx_open(path, &c) != CBX_OK) {
+            free(us);
+            return;
+        }
+        s.L = c.info.bits;
+        madvise((void *)(uintptr_t)c.base, c.mapped, MADV_RANDOM); /* one page for one fault */
+        if (pass == 0) cold_pass(&s, exact, lookups, us, &row->cold_all_p50, &row->cold_all_p99);
+        else cold_pass(&s, prefix, lookups, us, &row->cold_all_short_p50, &row->cold_all_short_p99);
+        cbx_close(&c);
+    }
     evict(path);
     if (cbx_open(path, &c) != CBX_OK) {
         free(us);
         return;
     }
-    s.cbx = &c;
     t0 = cb_now(); /* the index: everything before the REVs */
     for (uint64_t at = 0; at < c.info.pool_offset[1]; at += 4096) touch += c.base[at];
     row->cold_index_s = cb_now() - t0;
-    madvise((void *)(uintptr_t)(c.base + c.info.pool_offset[1]), (size_t)(c.info.file_bytes - c.info.pool_offset[1]),
-            MADV_RANDOM);
-    for (size_t i = 0; i < lookups; i++) {
-        t0 = cb_now();
-        rev_of(&s, s.L, exact[lookups + i].value, &fold);
-        us[i] = (cb_now() - t0) * 1e6;
+    {   /* from here on one page for one fault: the address has to be on a page boundary */
+        uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE), from = (c.info.pool_offset[1] + page - 1) / page * page;
+        if (from < c.info.file_bytes)
+            madvise((void *)(uintptr_t)(c.base + from), (size_t)(c.info.file_bytes - from), MADV_RANDOM);
     }
-    qsort(us, lookups, sizeof *us, cmp_double);
-    row->cold_rev_p50 = us[lookups / 2];
-    row->cold_rev_p99 = us[(size_t)((double)(lookups - 1) * 0.99)];
+    cold_pass(&s, exact + second, lookups, us, &row->cold_rev_p50, &row->cold_rev_p99);
+    cold_pass(&s, prefix + second, lookups, us, &row->cold_rev_short_p50, &row->cold_rev_short_p99);
     row->cold_done = 1;
     cbx_close(&c);
     free(us);
@@ -575,10 +652,11 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
     if (r->checked)
         printf("  every string         %s of %d bits: %s wrong node counts, %s without a REV that emits them,\n"
                "                       %s with a REV other than the stored one (%s of them predict another next bit);\n"
-               "                       %s shorter strings: %s answered by another extension\n",
+               "                       %s shorter strings: %s answered by another extension, %s with another answer\n"
+               "                       to \"which extension needs fewer nodes\"\n",
                commas(r->check.strings), L, commas(r->check.wrong_nodes), commas(r->check.not_emitting),
                commas(r->check.not_stored), commas(r->check.next_bit_differs), commas(r->check.shorter),
-               commas(r->check.wrong_extension));
+               commas(r->check.wrong_extension), commas(r->check.wrong_choice));
     if (r->checked && r->check.not_stored) {
         printf("                       REVs other than the stored one, by node count:");
         for (int n = 1; n < CBX_CLASSES; n++)
@@ -587,9 +665,12 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
     }
     printf("  node count           %.1f ns for a string of %d bits", r->nodes_full, L);
     if (r->nodes_short >= 0)
-        printf(", %.1f ns for a shorter one;\n  smaller extension    %.1f ns (which of the two extensions of a string needs fewer nodes)\n",
-               r->nodes_short, r->choice);
-    else printf("\n");
+        printf(", %.1f ns for a shorter one (many in a row);\n"
+               "  smaller extension    which of the two extensions of a string needs fewer nodes: %.1f ns in a row;\n"
+               "                       one at a time: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns\n",
+               r->nodes_short, r->choice, r->choice_alone.mean, r->choice_alone.p50, r->choice_alone.p95,
+               r->choice_alone.p99);
+    else printf(" (many in a row)\n");
     printf("  verified REV         %d bits: mean %.0f, p50 %.0f, p95 %.0f, p99 %.0f ns", L, r->full.mean, r->full.p50,
            r->full.p95, r->full.p99);
     if (r->shorter.mean > 0)
@@ -601,10 +682,14 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
                r->thread_counts[k], r->thread_counts[k] == 1 ? " " : "s", r->throughput[k] / 1e6,
                r->thread_latency[k].p50, r->thread_latency[k].p95, r->thread_latency[k].p99);
     if (r->cold_done)
-        printf("  out of the cache     nothing in memory: p50 %.0f, p99 %.0f us a lookup; index read in %.3f s, then\n"
-               "                       p50 %.0f, p99 %.0f us a lookup\n",
-               r->cold_all_p50, r->cold_all_p99, r->cold_index_s, r->cold_rev_p50, r->cold_rev_p99);
+        printf("  out of the cache     %zu lookups each.  Nothing in memory: p50 %.0f, p99 %.0f us for a string of %d bits,\n"
+               "                       p50 %.0f, p99 %.0f us for a shorter one.  With the index read in (%.3f s):\n"
+               "                       p50 %.0f, p99 %.0f us and p50 %.0f, p99 %.0f us.  One read of the disk for each\n"
+               "                       page not yet in memory; the REVs of shorter strings share few pages.\n",
+               r->cold_lookups, r->cold_all_p50, r->cold_all_p99, L, r->cold_all_short_p50, r->cold_all_short_p99,
+               r->cold_index_s, r->cold_rev_p50, r->cold_rev_p99, r->cold_rev_short_p50, r->cold_rev_short_p99);
     if (r->lookups_failed) printf("  LOOKUPS FAILED in the timed runs\n");
+    if (r->other_answers) printf("  THE TIMED QUESTIONS GOT OTHER ANSWERS than from the files before\n");
     fflush(stdout);
 }
 
@@ -612,6 +697,7 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
                    const char *variants, size_t queries, const int *thread_list, int thread_count, size_t cold,
                    int checkpoint_shift, int keep, int verify) {
     Row *rows;
+    const Row *sums = NULL, *revs = NULL; /* earlier rows to compare the answers for shorter strings with */
     Variant list[16];
     FrbFileInfo finfo;
     FrbTable table;
@@ -698,6 +784,9 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
         s.kind = KIND_COMPACT;
         s.compact = compact;
         measure(&rows[nrows], &s, exact, prefix, queries, thread_list, thread_count);
+        rows[nrows].other_answers = !same_answers(&rows[nrows], &rows[0], NULL, NULL, 1);
+        failed |= rows[nrows].other_answers | rows[nrows].lookups_failed;
+        sums = revs = &rows[nrows];
         print_row_detail(&rows[nrows], fixed_bytes, L);
         nrows++;
         frb_compact_close(compact);
@@ -730,15 +819,21 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
             if (e == CBX_OK) e = cbx_check_against(&c, &table, &row->check);
             row->checked = e == CBX_OK;
             if (e != CBX_OK || row->check.wrong_nodes || row->check.not_emitting || row->check.wrong_extension ||
-                (list[k].opt.colors && row->check.not_stored))
+                row->check.wrong_choice || (list[k].opt.colors && row->check.not_stored))
                 failed = 1;
         }
         s.kind = KIND_CBX;
         s.cbx = &c;
         measure(row, &s, exact, prefix, queries, thread_list, thread_count);
         cbx_close(&c);
-        if (cold) measure_cold(row, path, exact + queries, cold);
-        failed |= row->lookups_failed;
+        {   /* a colorless file may return another REV of the same graph: then only the counts are compared */
+            int as_stored = list[k].opt.colors || (row->checked && !row->check.not_stored);
+            row->other_answers = !same_answers(row, &rows[0], sums, revs, as_stored);
+            if (!sums) sums = row;
+            if (!revs && as_stored) revs = row;
+        }
+        if (cold) measure_cold(row, path, exact + queries, prefix, cold);
+        failed |= row->lookups_failed | row->other_answers;
         print_row_detail(row, fixed_bytes, L);
         if (!keep) remove(path);
         nrows++;
@@ -761,7 +856,7 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
         if (r->checked) printf("  %9s %8s", commas(r->check.not_stored), commas(r->check.next_bit_differs));
         else printf("  %9s %8s", "-", "-");
         printf("  %6.1f", r->nodes_full);
-        if (r->choice >= 0) printf(" %6.1f", r->choice);
+        if (r->choice >= 0) printf(" %6.0f", r->choice_alone.p50);
         else printf(" %6s", "-");
         printf("  %5.0f %5.0f %5.0f %5.0f", r->full.mean, r->full.p50, r->full.p95, r->full.p99);
         if (r->shorter.mean > 0) printf("  %5.0f %5.0f %5.0f %5.0f", r->shorter.mean, r->shorter.p50, r->shorter.p95, r->shorter.p99);
@@ -775,8 +870,9 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
     }
     printf("\n  conv s, MiB: the conversion from the fixed-width file, with its validation; peak memory with the mapped source.\n"
            "  not stored, next bit: strings of %d bits that get a REV other than the stored one, and of those the ones whose\n"
-           "  REV predicts another bit %d.  nodes: node count of a %d-bit string.  choice: which of the two extensions of a\n"
-           "  shorter string needs fewer nodes.  REV: verified REV of a %d-bit string; short: of a string of 1 to %d bits.\n"
+           "  REV predicts another bit %d.  nodes: node count of a %d-bit string, many in a row.  choice: which of the two\n"
+           "  extensions of a shorter string needs fewer nodes, one question at a time, median.  REV: verified REV of a\n"
+           "  %d-bit string, one at a time; short: of a string of 1 to %d bits.\n"
            "  Nx M/s: million verified REVs a second with N readers.  cold us: one lookup with the REVs out of the cache\n"
            "  and the index in memory, median microseconds.\n",
            L, L + 1, L, L, L - 1);
@@ -791,7 +887,7 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
 int main(int argc, char **argv) {
     const char *bomb = NULL, *scratch = NULL, *compact = NULL, *variants = NULL, *output = NULL, *variant = NULL;
     char self[4096];
-    size_t queries = 1000000, cold = 2000;
+    size_t queries = 1000000, cold = 1000;
     int thread_list[8] = {1, 2, 4}, thread_count = 3, checkpoint_shift = 8, keep = 0, verify = 1;
     ssize_t len;
     if (argc < 2) goto usage;
@@ -828,6 +924,7 @@ int main(int argc, char **argv) {
         }
     }
     if (queries < 1000) queries = 1000;
+    if (cold > queries / 2) cold = queries / 2; /* the shorter strings of the cold lookups are taken from the others */
     if (!strcmp(argv[1], "convert")) return cmd_convert(bomb, output, variant, checkpoint_shift);
     if (!strcmp(argv[1], "run")) {
         len = readlink("/proc/self/exe", self, sizeof self - 1);

@@ -30,8 +30,8 @@ typedef struct {
     uint32_t class_count[CBX_CLASSES];
     uint8_t topo_bits[CBX_CLASSES], record_bits[CBX_CLASSES];
     uint8_t pad[2];
-    uint64_t direction_offset, classes_offset, checkpoint_offset, pool_offset[CBX_CLASSES];
-    uint64_t direction_bytes, classes_bytes, checkpoint_bytes, pool_bytes, file_bytes;
+    uint64_t choice_offset, classes_offset, checkpoint_offset, pool_offset[CBX_CLASSES];
+    uint64_t choice_bytes, classes_bytes, checkpoint_bytes, pool_bytes, file_bytes;
     uint32_t source_crc, source_version, body_crc, header_crc;
 } Header;
 
@@ -125,7 +125,7 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
     CbxInfo info;
     uint32_t next[CBX_CLASSES] = {0}, running[CBX_CLASSES] = {0}, count, mask;
     uint8_t *image = NULL, *below = NULL, *pools[CBX_CLASSES] = {NULL};
-    uint64_t *direction, *classes, at;
+    uint64_t *choice, *classes, at;
     uint32_t *checkpoint;
     char *tmp = NULL;
     FILE *f;
@@ -179,9 +179,9 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
 
     /* where everything goes */
     at = CBX_HEADER_BYTES;
-    info.direction_offset = at;
-    info.direction_bytes = align8(((uint64_t)count + 7) / 8);
-    at += info.direction_bytes;
+    info.choice_offset = at; /* two bits for each stored string of L bits: as many shorter ones, and one unused */
+    info.choice_bytes = align8((2 * (uint64_t)info.stored + 7) / 8);
+    at += info.choice_bytes;
     info.classes_offset = at;
     info.classes_bytes = (((uint64_t)info.stored + 15) / 16) * 8;
     at += info.classes_bytes;
@@ -202,7 +202,7 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
         free(below);
         return CBX_ERR_MEMORY;
     }
-    direction = (uint64_t *)(void *)(image + info.direction_offset);
+    choice = (uint64_t *)(void *)(image + info.choice_offset);
     classes = (uint64_t *)(void *)(image + info.classes_offset);
     checkpoint = (uint32_t *)(void *)(image + info.checkpoint_offset);
     for (int n = 1; n <= info.max_nodes; n++) pools[n] = image + info.pool_offset[n];
@@ -271,14 +271,16 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
         put_record(pools[n], next[n]++, info.record_bits[n], code);
     }
 
-    /* A: from the strings of L bits upwards, on the node counts alone */
-    for (int k = L - 1; e == CBX_OK && k >= 1; k--) {
+    /* A: from the strings of L bits upwards, on the node counts alone.  With
+     * the complement only the strings that start with 0 get a record, at the
+     * place of the string without that 0; the pairs were compared above. */
+    for (int k = L - 1; e == CBX_OK && k >= 0; k--) {
         for (uint32_t v = 0; v < ((uint32_t)1 << k); v++) {
             uint8_t zero = below[2 * v], one = below[2 * v + 1];
-            if (one < zero) {
-                uint64_t place = ((uint64_t)1 << k) + v;
-                direction[place >> 6] |= (uint64_t)1 << (place & 63u);
-            }
+            uint64_t record = zero < one ? 0u : one < zero ? 1u : 2u, place = 0;
+            if (!info.opt.complement) place = ((uint64_t)1 << k) + v;
+            else if (k >= 1 && v < ((uint32_t)1 << (k - 1))) place = ((uint64_t)1 << (k - 1)) + v;
+            if (place) choice[place >> 5] |= record << (2 * (place & 31u));
             below[v] = one < zero ? one : zero; /* in place: [v] is read before it is written only for 2v, 2v+1 >= v */
         }
     }
@@ -303,11 +305,11 @@ CbxError cbx_write(const char *path, const FrbTable *table, uint32_t source_crc,
     memcpy(h.class_count, info.class_count, sizeof h.class_count);
     memcpy(h.topo_bits, info.topo_bits, sizeof h.topo_bits);
     memcpy(h.record_bits, info.record_bits, sizeof h.record_bits);
-    h.direction_offset = info.direction_offset;
+    h.choice_offset = info.choice_offset;
     h.classes_offset = info.classes_offset;
     h.checkpoint_offset = info.checkpoint_offset;
     memcpy(h.pool_offset, info.pool_offset, sizeof h.pool_offset);
-    h.direction_bytes = info.direction_bytes;
+    h.choice_bytes = info.choice_bytes;
     h.classes_bytes = info.classes_bytes;
     h.checkpoint_bytes = info.checkpoint_bytes;
     h.pool_bytes = info.pool_bytes;
@@ -393,11 +395,11 @@ CbxError cbx_open(const char *path, Cbx *c) {
     memcpy(c->info.class_count, h.class_count, sizeof h.class_count);
     memcpy(c->info.topo_bits, h.topo_bits, sizeof h.topo_bits);
     memcpy(c->info.record_bits, h.record_bits, sizeof h.record_bits);
-    c->info.direction_offset = h.direction_offset;
+    c->info.choice_offset = h.choice_offset;
     c->info.classes_offset = h.classes_offset;
     c->info.checkpoint_offset = h.checkpoint_offset;
     memcpy(c->info.pool_offset, h.pool_offset, sizeof h.pool_offset);
-    c->info.direction_bytes = h.direction_bytes;
+    c->info.choice_bytes = h.choice_bytes;
     c->info.classes_bytes = h.classes_bytes;
     c->info.checkpoint_bytes = h.checkpoint_bytes;
     c->info.pool_bytes = h.pool_bytes;
@@ -408,8 +410,8 @@ CbxError cbx_open(const char *path, Cbx *c) {
     /* every section inside the file, in order, and what the counts need */
     {
         uint64_t at = CBX_HEADER_BYTES, sum = 0;
-        int ok = h.direction_offset == at && h.direction_bytes == align8(((uint64_t)h.strings + 7) / 8);
-        at += h.direction_bytes;
+        int ok = h.choice_offset == at && h.choice_bytes == align8((2 * (uint64_t)h.stored + 7) / 8);
+        at += h.choice_bytes;
         ok = ok && h.classes_offset == at && h.classes_bytes == (((uint64_t)h.stored + 15) / 16) * 8;
         at += h.classes_bytes;
         ok = ok && h.checkpoint_offset == at &&
@@ -430,12 +432,11 @@ CbxError cbx_open(const char *path, Cbx *c) {
     }
     c->base = map;
     c->mapped = (size_t)st.st_size;
-    c->direction = (const uint64_t *)(const void *)(c->base + h.direction_offset);
+    c->choice = (const uint64_t *)(const void *)(c->base + h.choice_offset);
     c->classes = (const uint64_t *)(const void *)(c->base + h.classes_offset);
     c->checkpoint = (const uint32_t *)(const void *)(c->base + h.checkpoint_offset);
     for (unsigned n = 1; n <= h.max_nodes; n++) c->pool[n] = c->base + h.pool_offset[n];
     c->mask = h.strings - 1u;
-    c->top = h.strings >> 1;
     return CBX_OK;
 }
 
@@ -486,14 +487,21 @@ CbxError cbx_check_against(const Cbx *c, const FrbTable *table, CbxCheck *check)
          * A string ending in 1 closes the strings it is the last extension of. */
         for (bits = L; bits > 1 && (v & 1u); bits--) {
             uint32_t zero = waiting[bits];
-            if (frb_table_nodes(table, chosen) >= frb_table_nodes(table, zero)) chosen = zero;
+            int n0 = frb_table_nodes(table, zero), n1 = frb_table_nodes(table, chosen);
+            if (n1 >= n0) chosen = zero;
             v >>= 1;
             check->shorter++;
             if (cbx_leaf(c, bits - 1, v) != chosen || cbx_nodes(c, bits - 1, v) != frb_table_nodes(table, chosen))
                 check->wrong_extension++;
+            if (cbx_choice(c, bits - 1, v) != (n0 < n1 ? 0 : n1 < n0 ? 1 : 2)) check->wrong_choice++;
+        }
+        if (t == c->mask) { /* the last string closes "1"; "0" is waiting: the two extensions of the empty string */
+            int n0 = frb_table_nodes(table, waiting[1]), n1 = frb_table_nodes(table, chosen);
+            if (cbx_choice(c, 0, 0) != (n0 < n1 ? 0 : n1 < n0 ? 1 : 2)) check->wrong_choice++;
+            if (cbx_leaf(c, 0, 0) != (n1 < n0 ? chosen : waiting[1])) check->wrong_extension++;
+            break;
         }
         waiting[bits] = chosen;
-        if (t == c->mask) break;
     }
     return CBX_OK;
 }

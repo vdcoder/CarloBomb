@@ -84,11 +84,13 @@ static void test_variants(void) {
                           c.info.file_bytes == info.file_bytes && c.info.stored == (half ? t.count / 2 : t.count));
                     CHECK(cbx_check_against(&c, &t, &check) == CBX_OK);
                     CHECK(check.strings == t.count && check.shorter == t.count - 2);
-                    CHECK_MSG(check.wrong_nodes == 0 && check.not_emitting == 0 && check.wrong_extension == 0,
-                              "%d bits %s colors %d half %d: %llu wrong nodes, %llu not emitting, %llu wrong extensions",
+                    CHECK_MSG(check.wrong_nodes == 0 && check.not_emitting == 0 && check.wrong_extension == 0 &&
+                                  check.wrong_choice == 0,
+                              "%d bits %s colors %d half %d: %llu wrong nodes, %llu not emitting, %llu wrong extensions, "
+                              "%llu wrong choices",
                               bits, cbx_encoding_str(encodings[e]), colors, half,
                               (unsigned long long)check.wrong_nodes, (unsigned long long)check.not_emitting,
-                              (unsigned long long)check.wrong_extension);
+                              (unsigned long long)check.wrong_extension, (unsigned long long)check.wrong_choice);
                     /* With the colors kept the stored REV comes back.  Without them too, here:
                      * every REV of this table was found by the search or is the complement of
                      * one, and the reader guesses in the order the search did. */
@@ -100,6 +102,7 @@ static void test_variants(void) {
                             int nodes[2], which = cbx_smaller_extension(&c, k, v, nodes);
                             int n0 = scan_nodes(&t, k + 1, 2 * v), n1 = scan_nodes(&t, k + 1, 2 * v + 1);
                             CHECK(nodes[0] == n0 && nodes[1] == n1 && which == (n0 < n1 ? 0 : n1 < n0 ? 1 : 2));
+                            CHECK(cbx_choice(&c, k, v) == which); /* the one read, and the two walks */
                             if (k) CHECK(cbx_nodes(&c, k, v) == (n0 < n1 ? n0 : n1));
                         }
                     }
@@ -151,7 +154,8 @@ static void test_wide(void) {
                 CHECK(c.info.max_nodes == 12);
                 if (encodings[e] != CBX_RANK || colors) CHECK(c.info.record_bits[12] > 64); /* two words */
                 CHECK(cbx_check_against(&c, &t, &check) == CBX_OK);
-                CHECK(check.wrong_nodes == 0 && check.not_emitting == 0 && check.wrong_extension == 0);
+                CHECK(check.wrong_nodes == 0 && check.not_emitting == 0 && check.wrong_extension == 0 &&
+                      check.wrong_choice == 0);
                 if (colors) CHECK(check.not_stored == 0);
                 cbx_close(&c);
                 remove(path);

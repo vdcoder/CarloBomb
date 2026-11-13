@@ -3,7 +3,8 @@
  * side by side.
  *
  *   v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]
- *                 [--queries N] [--threads 1,2,4] [--cold N] [--checkpoint B] [--keep] [--no-verify]
+ *                 [--queries N] [--rounds R] [--threads 1,2,4] [--cold N] [--checkpoint B]
+ *                 [--keep] [--no-verify]
  *   v4_matrix convert --bomb FILE --output FILE --variant NAME [--checkpoint B]
  *   v4_matrix choices --bomb FILE
  *
@@ -11,14 +12,20 @@
  * and never written.  For each variant `run` makes a prototype file (CBX,
  * see cbx.h) in DIR, in a process of its own so that its time and memory can
  * be read off; checks it against the Bomb for every string of every length;
- * measures lookups; and removes the file again unless --keep is given.
- * Nothing else is written anywhere.
+ * and measures lookups, R times over, every file in turn in each round.  At
+ * the end the files are removed again unless --keep is given.  Nothing else
+ * is written anywhere.
  *
  * A variant is three choices, written as a name like "rank,colorless,half":
  *   fields | base-n | rank     how the links of a REV are written
  *   colors | colorless         colors kept, or found by search at lookup
  *   whole | half               every string, or one of each complement pair
- * "short" is the shortlist under review, "all" the twelve combinations.
+ * "short" is the shortlist under review, "all" the twelve combinations.  A
+ * fourth part, c64 or c1024, gives a variant its own spacing of the counts
+ * in B (--checkpoint sets it for the others).
+ *
+ * `choices` prints, for every length below L, how many strings have one
+ * extension by a bit that needs fewer nodes than the other.
  *
  * What is measured for each (and for the fixed-width file itself, and for
  * the compact file of PR 8 if --compact names it):
@@ -122,13 +129,13 @@ static const char *commas(uint64_t v) {
 /* ---- variants ------------------------------------------------------------------ */
 
 typedef struct {
-    char name[40];
+    char name[48];
     CbxOptions opt;
 } Variant;
 
 static int parse_variant(const char *text, int checkpoint_shift, Variant *v) {
     char copy[64], *tok, *save = NULL;
-    int have = 0;
+    int have = 0, own = 0;
     memset(v, 0, sizeof *v);
     v->opt.checkpoint_shift = checkpoint_shift;
     v->opt.colors = 1;
@@ -141,10 +148,17 @@ static int parse_variant(const char *text, int checkpoint_shift, Variant *v) {
         else if (!strcmp(tok, "colorless")) v->opt.colors = 0;
         else if (!strcmp(tok, "whole")) v->opt.complement = 0;
         else if (!strcmp(tok, "half")) v->opt.complement = 1;
-        else return 0;
+        else if (tok[0] == 'c' && tok[1] >= '1' && tok[1] <= '9') { /* c64: a checkpoint every 64 strings */
+            int b = atoi(tok + 1), shift = 0;
+            while ((1 << shift) < b) shift++;
+            if (b < 16 || b > 4096 || (1 << shift) != b) return 0;
+            v->opt.checkpoint_shift = shift;
+            own = b;
+        } else return 0;
     }
     snprintf(v->name, sizeof v->name, "%s,%s,%s", cbx_encoding_str(v->opt.encoding),
              v->opt.colors ? "colors" : "colorless", v->opt.complement ? "half" : "whole");
+    if (own) snprintf(v->name + strlen(v->name), sizeof v->name - strlen(v->name), ",c%d", own);
     return have;
 }
 
@@ -489,8 +503,12 @@ static int cmp_double(const void *a, const void *b) {
 /* ---- one row of the matrix -------------------------------------------------------- */
 
 typedef struct {
-    char name[40];
+    char name[48];
+    char path[1200];
+    Kind kind;
     uint64_t bytes;
+    double check_s;                  /* the check of every string, seconds */
+    double full_low, full_high;      /* the mean of a verified L-bit lookup: the lowest and highest of the rounds */
     Conversion conversion;
     CbxCheck check;
     int checked;
@@ -509,6 +527,40 @@ typedef struct {
     size_t cold_lookups;
     int cold_done, lookups_failed, other_answers;
 } Row;
+
+static void better(Latency *best, const Latency *now) {
+    unsigned long long failed = best->failed + now->failed;
+    if (now->mean > 0 && (best->mean <= 0 || now->mean < best->mean)) *best = *now;
+    best->failed = failed;
+}
+
+/*
+ * A later round of the same measurements on the same file.  Of each timing
+ * the quieter one is kept: the rounds go through all files in turn, so a
+ * minute in which the machine was busy with something else costs every file
+ * one round and no file its place in the table.
+ */
+static void keep_best(Row *best, const Row *now) {
+    if (now->nodes_full < best->nodes_full) best->nodes_full = now->nodes_full;
+    if (now->nodes_short >= 0 && now->nodes_short < best->nodes_short) best->nodes_short = now->nodes_short;
+    if (now->choice >= 0 && now->choice < best->choice) best->choice = now->choice;
+    better(&best->choice_alone, &now->choice_alone);
+    better(&best->full, &now->full);
+    better(&best->shorter, &now->shorter);
+    better(&best->fetch_full, &now->fetch_full);
+    better(&best->fetch_short, &now->fetch_short);
+    if (now->full.mean < best->full_low) best->full_low = now->full.mean;
+    if (now->full.mean > best->full_high) best->full_high = now->full.mean;
+    for (int k = 0; k < best->thread_rows && k < now->thread_rows; k++)
+        if (now->throughput[k] > best->throughput[k]) {
+            best->throughput[k] = now->throughput[k];
+            best->thread_latency[k] = now->thread_latency[k];
+        }
+    best->lookups_failed += now->lookups_failed;
+    if (now->sum_nodes_full != best->sum_nodes_full || now->sum_nodes_short != best->sum_nodes_short ||
+        now->sum_choice != best->sum_choice || now->fold_full != best->fold_full || now->fold_short != best->fold_short)
+        best->lookups_failed++; /* the same questions to the same file: the same answers */
+}
 
 /* The timed questions have to get the answers the other files give: node
  * counts and choices always, the REVs themselves where the file returns the
@@ -744,7 +796,7 @@ static void print_row_detail(const Row *r, uint64_t fixed_bytes, int L) {
 
 static int cmd_run(const char *self, const char *bomb, const char *scratch, const char *compact_path,
                    const char *variants, size_t queries, const int *thread_list, int thread_count, size_t cold,
-                   int checkpoint_shift, int keep, int verify) {
+                   int checkpoint_shift, int keep, int verify, int rounds) {
     Row *rows;
     const Row *sums = NULL, *revs = NULL; /* earlier rows to compare the answers for shorter strings with */
     Variant list[16];
@@ -761,7 +813,8 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
 
     if (!bomb || !scratch) {
         fprintf(stderr, "usage: v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]\n"
-                        "                     [--queries N] [--threads 1,2,4] [--cold N] [--checkpoint B] [--keep] [--no-verify]\n");
+                        "                     [--queries N] [--rounds R] [--threads 1,2,4] [--cold N] [--checkpoint B]\n"
+                        "                     [--keep] [--no-verify]\n");
         return 2;
     }
     if (!variants || !strcmp(variants, "short")) {
@@ -796,8 +849,8 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
     calibrate();
     printf("Bomb: FixedRunBomb(%d), %s strings, %s bytes, table CRC-32 %08x; validated in full in %.1f s\n", L,
            commas(table.count), commas(fixed_bytes), (unsigned)finfo.table_crc, cb_now() - t0);
-    printf("%zu random strings per measurement; a checkpoint every %d strings; %ld processors here\n", queries,
-           1 << checkpoint_shift, sysconf(_SC_NPROCESSORS_ONLN));
+    printf("%zu random strings per measurement, %d round%s; a checkpoint every %d strings; %ld processors here\n\n",
+           queries, rounds, rounds == 1 ? "" : "s", 1 << checkpoint_shift, sysconf(_SC_NPROCESSORS_ONLN));
     for (size_t i = 0; i < queries + 2 * cold; i++) {
         rng ^= rng << 13, rng ^= rng >> 7, rng ^= rng << 17;
         exact[i].bits = (uint8_t)L;
@@ -810,62 +863,67 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
         prefix[i].value = (uint32_t)((rng * 0x2545F4914F6CDD1Dull) >> 33) & (((uint32_t)1 << prefix[i].bits) - 1u);
     }
 
-    /* the fixed-width file itself */
+    /* ---- the first round: every file measured, the candidates made and checked on the way ---- */
     snprintf(rows[nrows].name, sizeof rows[nrows].name, "fixed-width file");
     rows[nrows].bytes = fixed_bytes;
+    rows[nrows].kind = KIND_FIXED;
     s.kind = KIND_FIXED;
     s.table = &table;
     s.cbx = NULL;
     s.compact = NULL;
     s.L = L;
     measure(&rows[nrows], &s, exact, prefix, queries, thread_list, thread_count);
-    print_row_detail(&rows[nrows], fixed_bytes, L);
+    failed |= rows[nrows].lookups_failed;
+    printf("measured  %s\n", rows[nrows].name);
+    fflush(stdout);
     nrows++;
 
-    /* the compact file of PR 8, if there is one */
-    if (compact_path) {
+    if (compact_path) { /* the compact file of PR 8, if there is one */
         if (frb_compact_open(compact_path, &compact, &bad) != FRB_OK || frb_compact_info(compact)->bits != L) {
             fprintf(stderr, "v4_matrix: %s is not the compact file of this Bomb\n", compact_path);
             return 1;
         }
         snprintf(rows[nrows].name, sizeof rows[nrows].name, "compact file of PR 8");
         rows[nrows].bytes = frb_compact_info(compact)->file_bytes;
+        rows[nrows].kind = KIND_COMPACT;
         s.kind = KIND_COMPACT;
         s.compact = compact;
         measure(&rows[nrows], &s, exact, prefix, queries, thread_list, thread_count);
         rows[nrows].other_answers = !same_answers(&rows[nrows], &rows[0], NULL, NULL, 1);
         failed |= rows[nrows].other_answers | rows[nrows].lookups_failed;
         sums = revs = &rows[nrows];
-        print_row_detail(&rows[nrows], fixed_bytes, L);
+        printf("measured  %s\n", rows[nrows].name);
+        fflush(stdout);
         nrows++;
-        frb_compact_close(compact);
     }
 
     for (int k = 0; k < count; k++) {
-        char path[1200];
         Row *row = &rows[nrows];
         Cbx c;
         CbxError e;
-        snprintf(path, sizeof path, "%s/v4-%d-%s.cbx", scratch, L, list[k].name);
+        snprintf(row->path, sizeof row->path, "%s/v4-%d-%s.cbx", scratch, L, list[k].name);
         memcpy(row->name, list[k].name, sizeof row->name);
-        remove(path); /* a file of an earlier run of this program */
-        row->conversion = convert_in_child(self, bomb, path, &list[k]);
+        row->kind = KIND_CBX;
+        remove(row->path); /* a file of an earlier run of this program */
+        row->conversion = convert_in_child(self, bomb, row->path, &list[k]);
         if (!row->conversion.ok) {
-            printf("\n== %s ==\n  not made: %s\n", row->name,
+            printf("not made  %s: %s\n", row->name,
                    row->conversion.error ? cbx_error_str((CbxError)row->conversion.error) : "the conversion failed");
             failed |= row->conversion.error != CBX_ERR_NOT_SYMMETRIC && row->conversion.error != CBX_ERR_NUMBERING;
             continue;
         }
-        e = cbx_open(path, &c);
+        e = cbx_open(row->path, &c);
         if (e != CBX_OK) {
-            printf("\n== %s ==\n  cannot open %s: %s\n", row->name, path, cbx_error_str(e));
+            printf("cannot open %s: %s\n", row->path, cbx_error_str(e));
             failed = 1;
             continue;
         }
         row->bytes = c.info.file_bytes;
         if (verify) {
+            t0 = cb_now();
             e = cbx_check_body(&c);
             if (e == CBX_OK) e = cbx_check_against(&c, &table, &row->check);
+            row->check_s = cb_now() - t0;
             row->checked = e == CBX_OK;
             if (e != CBX_OK || row->check.wrong_nodes || row->check.not_emitting || row->check.wrong_extension ||
                 row->check.wrong_choice || (list[k].opt.colors && row->check.not_stored))
@@ -881,11 +939,45 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
             if (!sums) sums = row;
             if (!revs && as_stored) revs = row;
         }
-        if (cold) measure_cold(row, path, exact + queries, prefix, cold);
+        if (cold) measure_cold(row, row->path, exact + queries, prefix, cold);
         failed |= row->lookups_failed | row->other_answers;
-        print_row_detail(row, fixed_bytes, L);
-        if (!keep) remove(path);
+        printf("made      %-26s %14s bytes in %5.1f s", row->name, commas(row->bytes), row->conversion.wall_s);
+        if (verify) printf("; every string checked in %5.1f s", row->check_s);
+        printf("; measured\n");
+        fflush(stdout);
         nrows++;
+    }
+    for (int i = 0; i < nrows; i++) rows[i].full_low = rows[i].full_high = rows[i].full.mean;
+
+    /* ---- the other rounds: every file again, in turn ---- */
+    for (int round = 1; round < rounds; round++) {
+        for (int i = 0; i < nrows; i++) {
+            Row now;
+            Cbx c;
+            if (!rows[i].bytes) continue;
+            memset(&now, 0, sizeof now);
+            s.kind = rows[i].kind;
+            s.compact = compact;
+            if (rows[i].kind == KIND_CBX) {
+                if (cbx_open(rows[i].path, &c) != CBX_OK) {
+                    failed = 1;
+                    continue;
+                }
+                s.cbx = &c;
+            }
+            measure(&now, &s, exact, prefix, queries, thread_list, thread_count);
+            if (rows[i].kind == KIND_CBX) cbx_close(&c);
+            keep_best(&rows[i], &now);
+            failed |= rows[i].lookups_failed;
+        }
+        printf("round %d of %d measured\n", round + 1, rounds);
+        fflush(stdout);
+    }
+    if (compact) frb_compact_close(compact);
+    for (int i = 0; i < nrows; i++) {
+        if (!rows[i].bytes) continue;
+        print_row_detail(&rows[i], fixed_bytes, L);
+        if (rows[i].kind == KIND_CBX && !keep) remove(rows[i].path);
     }
 
     /* ---- the matrix ---- */
@@ -893,12 +985,12 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
            (unsigned)finfo.table_crc);
 
     printf("\n1. Size, conversion, and what comes back\n\n");
-    printf("  %-24s %14s %8s  %8s %9s  %14s %11s\n", "", "bytes", "of fixed", "conv s", "peak MiB", "not as stored",
+    printf("  %-26s %14s %8s  %8s %9s  %14s %11s\n", "", "bytes", "of fixed", "conv s", "peak MiB", "not as stored",
            "other next");
     for (int i = 0; i < nrows; i++) {
         const Row *r = &rows[i];
         if (!r->bytes) continue;
-        printf("  %-24s %14s %7.1f%%", r->name, commas(r->bytes), 100.0 * (double)r->bytes / (double)fixed_bytes);
+        printf("  %-26s %14s %7.1f%%", r->name, commas(r->bytes), 100.0 * (double)r->bytes / (double)fixed_bytes);
         if (r->conversion.ok) printf("  %8.1f %9.0f", r->conversion.wall_s, (double)r->conversion.peak_kb / 1024.0);
         else printf("  %8s %9s", "-", "-");
         if (r->checked) printf("  %14s %11s", commas(r->check.not_stored), commas(r->check.next_bit_differs));
@@ -911,12 +1003,12 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
            L, L + 1);
 
     printf("\n2. Questions the index answers without reading a REV\n\n");
-    printf("  %-24s %12s %12s %12s   %s\n", "", "nodes", "nodes", "choice", "choice, one question at a time");
-    printf("  %-24s %12s %12s %12s  %6s %6s %6s %6s\n", "", "L bits", "shorter", "", "mean", "p50", "p95", "p99");
+    printf("  %-26s %12s %12s %12s   %s\n", "", "nodes", "nodes", "choice", "choice, one question at a time");
+    printf("  %-26s %12s %12s %12s  %6s %6s %6s %6s\n", "", "L bits", "shorter", "", "mean", "p50", "p95", "p99");
     for (int i = 0; i < nrows; i++) {
         const Row *r = &rows[i];
         if (!r->bytes) continue;
-        printf("  %-24s %12.1f", r->name, r->nodes_full);
+        printf("  %-26s %12.1f", r->name, r->nodes_full);
         if (r->choice >= 0)
             printf(" %12.1f %12.1f  %6.0f %6.0f %6.0f %6.0f\n", r->nodes_short, r->choice, r->choice_alone.mean,
                    r->choice_alone.p50, r->choice_alone.p95, r->choice_alone.p99);
@@ -929,30 +1021,37 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
     for (int part = 0; part < 2; part++) {
         printf("\n%d. The REV of a string of %s, one lookup at a time\n\n", 3 + part,
                part ? "1 to L-1 bits (every length as likely)" : "L bits");
-        printf("  %-24s  %-27s  %-27s\n", "", "as the reader returns it", "and run against the string");
-        printf("  %-24s  %6s %6s %6s %6s  %6s %6s %6s %6s\n", "", "mean", "p50", "p95", "p99", "mean", "p50", "p95",
-               "p99");
+        printf("  %-26s  %-27s  %-27s%s\n", "", "as the reader returns it", "and run against the string",
+               part || rounds < 2 ? "" : "  that mean in each");
+        printf("  %-26s  %6s %6s %6s %6s  %6s %6s %6s %6s%s\n", "", "mean", "p50", "p95", "p99", "mean", "p50", "p95",
+               "p99", part || rounds < 2 ? "" : "  round: from, to");
         for (int i = 0; i < nrows; i++) {
             const Row *r = &rows[i];
             const Latency *f = part ? &r->fetch_short : &r->fetch_full, *v = part ? &r->shorter : &r->full;
             if (!r->bytes || v->mean <= 0) continue;
-            printf("  %-24s  %6.0f %6.0f %6.0f %6.0f  %6.0f %6.0f %6.0f %6.0f\n", r->name, f->mean, f->p50, f->p95,
+            printf("  %-26s  %6.0f %6.0f %6.0f %6.0f  %6.0f %6.0f %6.0f %6.0f", r->name, f->mean, f->p50, f->p95,
                    f->p99, v->mean, v->p50, v->p95, v->p99);
+            if (!part && rounds > 1) printf("  %7.0f %5.0f", r->full_low, r->full_high);
+            printf("\n");
         }
     }
+    if (rounds > 1)
+        printf("\n  Every timing in these tables is the quietest of %d rounds, each round going through all files in\n"
+               "  turn; the last two columns of table 3 show how far the rounds lie apart on this machine.\n",
+               rounds);
     printf("\n  as the reader returns it: what the reader of the file does to hand over a REV.  A candidate without\n"
            "  colors has run the machine on it to find them, one with rank and colors to number its nodes: those\n"
            "  REVs have been seen to emit the string.  The other readers unpack a record and return it unrun.\n"
            "  and run against the string: the REV returned is then run by code outside the reader, the same for all.\n");
 
     printf("\n5. Readers at once on one mapping: million verified REVs of L-bit strings a second, and one lookup\n\n");
-    printf("  %-24s", "");
+    printf("  %-26s", "");
     for (int k = 0; k < thread_count; k++) printf("  %2d: %6s %5s %5s", thread_list[k], "M/s", "p50", "p99");
     printf("\n");
     for (int i = 0; i < nrows; i++) {
         const Row *r = &rows[i];
         if (!r->bytes) continue;
-        printf("  %-24s", r->name);
+        printf("  %-26s", r->name);
         for (int k = 0; k < r->thread_rows; k++)
             printf("      %6.2f %5.0f %5.0f", r->throughput[k] / 1e6, r->thread_latency[k].p50, r->thread_latency[k].p99);
         printf("\n");
@@ -960,13 +1059,13 @@ static int cmd_run(const char *self, const char *bomb, const char *scratch, cons
 
     if (cold) {
         printf("\n6. Out of the page cache: microseconds for one lookup\n\n");
-        printf("  %-24s  %-25s  %-25s\n", "", "nothing in memory", "the index in memory");
-        printf("  %-24s  %5s %5s %6s %6s  %5s %5s %6s %6s\n", "", "L p50", "p99", "sh p50", "p99", "L p50", "p99",
+        printf("  %-26s  %-25s  %-25s\n", "", "nothing in memory", "the index in memory");
+        printf("  %-26s  %5s %5s %6s %6s  %5s %5s %6s %6s\n", "", "L p50", "p99", "sh p50", "p99", "L p50", "p99",
                "sh p50", "p99");
         for (int i = 0; i < nrows; i++) {
             const Row *r = &rows[i];
             if (!r->bytes || !r->cold_done) continue;
-            printf("  %-24s  %5.0f %5.0f %6.0f %6.0f  %5.0f %5.0f %6.0f %6.0f\n", r->name, r->cold_all_p50,
+            printf("  %-26s  %5.0f %5.0f %6.0f %6.0f  %5.0f %5.0f %6.0f %6.0f\n", r->name, r->cold_all_p50,
                    r->cold_all_p99, r->cold_all_short_p50, r->cold_all_short_p99, r->cold_rev_p50, r->cold_rev_p99,
                    r->cold_rev_short_p50, r->cold_rev_short_p99);
         }
@@ -1052,7 +1151,7 @@ int main(int argc, char **argv) {
     const char *bomb = NULL, *scratch = NULL, *compact = NULL, *variants = NULL, *output = NULL, *variant = NULL;
     char self[4096];
     size_t queries = 1000000, cold = 1000;
-    int thread_list[8] = {1, 2, 4}, thread_count = 3, checkpoint_shift = 8, keep = 0, verify = 1;
+    int thread_list[8] = {1, 2, 4}, thread_count = 3, checkpoint_shift = 8, keep = 0, verify = 1, rounds = 3;
     ssize_t len;
     if (argc < 2) goto usage;
     for (int i = 2; i < argc; i++) {
@@ -1070,6 +1169,7 @@ int main(int argc, char **argv) {
             else if (!strcmp(k, "--variant")) variant = v;
             else if (!strcmp(k, "--queries")) queries = (size_t)strtoull(v, NULL, 10);
             else if (!strcmp(k, "--cold")) cold = (size_t)strtoull(v, NULL, 10);
+            else if (!strcmp(k, "--rounds")) rounds = atoi(v) < 1 ? 1 : atoi(v) > 20 ? 20 : atoi(v);
             else if (!strcmp(k, "--checkpoint")) {
                 int b = atoi(v);
                 checkpoint_shift = 0;
@@ -1096,11 +1196,12 @@ int main(int argc, char **argv) {
         if (len > 0) self[len] = '\0';
         else snprintf(self, sizeof self, "%s", argv[0]);
         return cmd_run(self, bomb, scratch, compact, variants, queries, thread_list, thread_count, cold,
-                       checkpoint_shift, keep, verify);
+                       checkpoint_shift, keep, verify, rounds);
     }
 usage:
     fprintf(stderr, "usage: v4_matrix run --bomb FILE --scratch DIR [--compact FILE] [--variants short|all|LIST]\n"
-                    "                     [--queries N] [--threads 1,2,4] [--cold N] [--checkpoint B] [--keep] [--no-verify]\n"
+                    "                     [--queries N] [--rounds R] [--threads 1,2,4] [--cold N] [--checkpoint B]\n"
+                    "                     [--keep] [--no-verify]\n"
                     "       v4_matrix convert --bomb FILE --output FILE --variant fields|base-n|rank[,colors|colorless][,whole|half]\n"
                     "       v4_matrix choices --bomb FILE\n");
     return 2;

@@ -1,0 +1,72 @@
+Bomb: FixedRunBomb(24), 16,777,216 strings, 570,425,408 bytes, table CRC-32 dfd98e11; validated in full in 7.1 s
+1000000 random strings per measurement; a checkpoint every 64 strings; 4 processors here
+
+== fixed-width file ==
+  size                 570,425,408 bytes, 100.0% of the fixed-width file
+  node count           18.6 ns for a string of 24 bits (many in a row)
+  REV                  as the reader returns it, 24 bits: mean 212, p50 174, p95 379, p99 467 ns
+  verified REV         and run against the string, 24 bits: mean 417, p50 373, p95 590, p99 694 ns
+   1 reader            2.09 million verified REVs a second; p50 355, p95 571, p99 677 ns
+
+== rank,colorless,half ==
+  size                 43,446,144 bytes, 7.6% of the fixed-width file
+  conversion           11.7 s in all (source validated 6.8 s, file built and written 4.9 s);
+                       peak memory 603 MiB with the mapped source, 57 MiB of its own
+  node count           8.0 ns for a string of 24 bits, 83.0 ns for a shorter one (many in a row);
+  smaller extension    which of the two extensions of a string needs fewer nodes: 3.9 ns in a row;
+                       one at a time: mean 16, p50 10, p95 42, p99 96 ns
+  REV                  as the reader returns it, 24 bits: mean 715, p50 668, p95 963, p99 1134 ns
+                       shorter: mean 491, p50 274, p95 1090, p99 1329 ns
+  verified REV         and run against the string, 24 bits: mean 900, p50 846, p95 1138, p99 1313 ns
+                       shorter: mean 604, p50 389, p95 1241, p99 1477 ns
+   1 reader            1.03 million verified REVs a second; p50 847, p95 1156, p99 1345 ns
+
+
+THE MATRIX   FixedRunBomb(24), table CRC-32 dfd98e11; times in nanoseconds unless said otherwise
+
+1. Size, conversion, and what comes back
+
+                                    bytes of fixed    conv s  peak MiB   not as stored  other next
+  fixed-width file            570,425,408   100.0%         -         -               -           -
+  rank,colorless,half          43,446,144     7.6%      11.7       603               -           -
+
+  conv s, peak MiB: the conversion from the fixed-width file, its full validation included; the memory
+  of the converting process at its peak, with the source it holds.  not as stored: strings of 24 bits
+  that get a REV other than the stored one; other next: those of them whose REV emits another bit 25.
+
+2. Questions the index answers without reading a REV
+
+                                  nodes        nodes       choice   choice, one question at a time
+                                 L bits      shorter                 mean    p50    p95    p99
+  fixed-width file                 18.6            -            -       -      -      -      -
+  rank,colorless,half               8.0         83.0          3.9      16     10     42     96
+
+  nodes: the minimum node count of a string, a million in a row.  choice: which of the two extensions
+  of a string of 1 to 23 bits needs fewer nodes, or neither; in a row, and each question by itself.
+
+3. The REV of a string of L bits, one lookup at a time
+
+                            as the reader returns it     and run against the string 
+                              mean    p50    p95    p99    mean    p50    p95    p99
+  fixed-width file             212    174    379    467     417    373    590    694
+  rank,colorless,half          715    668    963   1134     900    846   1138   1313
+
+4. The REV of a string of 1 to L-1 bits (every length as likely), one lookup at a time
+
+                            as the reader returns it     and run against the string 
+                              mean    p50    p95    p99    mean    p50    p95    p99
+  rank,colorless,half          491    274   1090   1329     604    389   1241   1477
+
+  as the reader returns it: what the reader of the file does to hand over a REV.  A candidate without
+  colors has run the machine on it to find them, one with rank and colors to number its nodes: those
+  REVs have been seen to emit the string.  The other readers unpack a record and return it unrun.
+  and run against the string: the REV returned is then run by code outside the reader, the same for all.
+
+5. Readers at once on one mapping: million verified REVs of L-bit strings a second, and one lookup
+
+                             1:    M/s   p50   p99
+  fixed-width file                2.09   355   677
+  rank,colorless,half             1.03   847  1345
+
+PASS
+exit 0

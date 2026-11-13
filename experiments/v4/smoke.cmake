@@ -27,12 +27,12 @@ file(SHA256 ${W}/lad/fixed-run-13.frb before)
 # The twelve combinations: each made, checked for every string of every
 # length, and measured.  PASS means no file gave anything the Bomb does not.
 run("PASS\n$" ${MATRIX} run --bomb ${W}/lad/fixed-run-13.frb --scratch ${W}/scratch --compact ${W}/c13.frb
-    --variants all --queries 4000 --threads 1,2 --cold 20)
+    --variants all --queries 4000 --rounds 2 --threads 1,2 --cold 20)
 foreach(variant "fields,colors,whole" "fields,colors,half" "base-n,colors,whole" "base-n,colors,half"
                 "rank,colors,whole" "rank,colors,half" "fields,colorless,whole" "fields,colorless,half"
                 "base-n,colorless,whole" "base-n,colorless,half" "rank,colorless,whole" "rank,colorless,half")
   # size, share, conversion time and memory, then: 0 REVs other than the stored one, 0 other next bits
-  if(NOT last_output MATCHES "\n  ${variant} +[0-9,]+ +[0-9.]+% +[0-9.]+ +[0-9]+ +0 +0 ")
+  if(NOT last_output MATCHES "\n  ${variant} +[0-9,]+ +[0-9.]+% +[0-9.]+ +[0-9]+ +0 +0\n")
     message(FATAL_ERROR "no row for ${variant} with every stored REV returned:\n${last_output}")
   endif()
 endforeach()
@@ -48,6 +48,20 @@ endif()
 # Of the 8,191 strings of 0 to 12 bits each has two extensions that either differ or do not.
 run("Bomb: FixedRunBomb\\(13\\).*\n  12 +4,096 +[0-9,]+ +[0-9.]+% +[0-9,]+ +[0-9,]+ +[0-9,]+ +[0-9,]+\n +8,191 "
     ${MATRIX} choices --bomb ${W}/lad/fixed-run-13.frb)
+
+# A variant with its own spacing of the stored counts, and a name that is none.
+run("\n  rank,colorless,half,c64 +[0-9,]+ +[0-9.]+% +[0-9.]+ +[0-9]+ +0 +0\n.*PASS\n$"
+    ${MATRIX} run --bomb ${W}/lad/fixed-run-13.frb --scratch ${W}/scratch --variants "rank,colorless,half,c64"
+    --queries 2000 --rounds 1 --threads 1 --cold 0)
+execute_process(COMMAND ${MATRIX} run --bomb ${W}/lad/fixed-run-13.frb --scratch ${W}/scratch --variants "rank,plaid"
+                RESULT_VARIABLE code OUTPUT_VARIABLE out ERROR_VARIABLE err)
+if(code EQUAL 0 OR NOT "${err}" MATCHES "no such variant: rank,plaid")
+  message(FATAL_ERROR "an unknown variant was taken: exit ${code}\n${out}${err}")
+endif()
+file(GLOB left ${W}/scratch/*)
+if(left)
+  message(FATAL_ERROR "the matrix left files behind: ${left}")
+endif()
 
 # One file made and kept; a second conversion onto it is refused.
 run("rank,colorless,half: [0-9,]+ bytes" ${MATRIX} convert --bomb ${W}/lad/fixed-run-13.frb

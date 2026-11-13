@@ -8,6 +8,12 @@
 #if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
 #define _FILE_OFFSET_BITS 64 /* files of more than 2 GB where off_t would otherwise be 32 bits */
 #endif
+#if defined(__linux__) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE /* MAP_NORESERVE */
+#endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
 
 #include "fixed_run.h"
 
@@ -864,7 +870,18 @@ static FrbError table_of_file(FILE *f, const FrbFormat *format, int bits, FrbTab
     bytes = (size_t)format->entry_bytes << bits;
 #if !defined(_WIN32)
     if (!getenv("CARLOBOMB_NO_MMAP")) {
-        void *map = mmap(NULL, FRB_HEADER_BYTES + bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE, fileno(f), 0);
+        /*
+         * Private and writable, so that the table behaves as a copy; and
+         * without a reservation of memory for the day every page of it is
+         * written to, which never comes: with one, a table larger than
+         * memory is refused outright, and that is the table this is for.
+         */
+        int flags = MAP_PRIVATE;
+        void *map;
+#ifdef MAP_NORESERVE
+        flags |= MAP_NORESERVE;
+#endif
+        map = mmap(NULL, FRB_HEADER_BYTES + bytes, PROT_READ | PROT_WRITE, flags, fileno(f), 0);
         if (map != MAP_FAILED) {
             table->bits = bits;
             table->count = (uint32_t)1 << bits;

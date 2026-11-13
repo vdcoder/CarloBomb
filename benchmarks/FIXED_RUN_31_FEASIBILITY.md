@@ -288,7 +288,23 @@ or the vectorized multi-search of `bombs/fixed-run/MULTI_SEARCH_SIMD.md`.
   26-bit table is 2,952,790,080 bytes, longer than 2^31, and was written,
   read back, verified with all 67,108,864 REVs run, and read at its first
   and last entries.
-- 18 tests with GCC and Clang, 17 under AddressSanitizer and UBSan, 15
+- Beyond what can be constructed here (`benchmarks/big_table.c`): tables of
+  27, 28 and 29 bits, empty but for the ring of a few strings at the ends,
+  in the middle and on both sides of every power-of-two byte offset from
+  2^31 up. Each was written entry by entry, read back by position at those
+  places, and read whole through a mapping with every entry decoded:
+
+  | Bits | File | Written in | Read whole and validated in | Heap |
+  |---:|---:|---:|---:|---:|
+  | 27 | 5,905,580,096 bytes | 24 s | 19 s | 4 MB |
+  | 28 | 11,811,160,128 bytes | 45 s | 37 s | 4 MB |
+  | 29 | 23,622,320,192 bytes | 91 s | 93 s | 4 MB |
+
+  The 29-bit file is one and a half times the memory of the machine it was
+  read on. The first attempt at it failed, usefully: a private mapping
+  larger than memory is refused unless it is made without a reservation
+  of memory, which it now is.
+- 19 tests with GCC and Clang, 18 under AddressSanitizer and UBSan, 16
   without the assembly solver; the C and the AMD64 engine both.
 - Unchanged: the checksums of the 16-bit and 17-bit tables, and with them
   versions 1 and 2.

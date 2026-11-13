@@ -50,7 +50,7 @@ any time, before, during or after.
    ctest --test-dir build -j 4
    ```
 
-   18 tests. Leave the tests for a moment when no construction is running:
+   19 tests. Leave the tests for a moment when no construction is running:
    several of them time things.
 
 2. **Disk:** 15 GB free where `~/frb31` will be. The copy of the 24-bit

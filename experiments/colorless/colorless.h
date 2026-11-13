@@ -271,6 +271,63 @@ static inline int cl_recolor(const ClTopo *t, uint32_t target, int L, unsigned f
 }
 
 /*
+ * cl_recolor with color 0 first, which also says in which order the machine
+ * reaches the nodes on the way to the coloring it finds: perm[node] = place.
+ * That order is the numbering of a LevelSolver witness, so the search gives
+ * the stored REV's numbering without another run.  (A node gets its color
+ * exactly when the machine first reaches it: the root at bit 0, a node fp
+ * moves to at the next bit, a node cp moves to at once.)
+ */
+static inline int cl_recolor_order(const ClTopo *t, uint32_t target, int L, uint32_t *colors,
+                                   uint8_t perm[CL_MAX_NODES]) {
+    struct {
+        uint32_t known, col;
+        uint8_t k, fp, cp;
+    } stack[CL_MAX_NODES + 1];
+    uint32_t known = 0, col = 0;
+    unsigned fp = 0, cp = 0, sp = 0;
+    int k = 0;
+    for (;;) {
+        unsigned c, to, bit;
+        if (!((known >> fp) & 1u)) {
+            perm[fp] = (uint8_t)__builtin_popcount(known);
+            stack[sp].known = known | (1u << fp);
+            stack[sp].col = col | (1u << fp);
+            stack[sp].k = (uint8_t)k;
+            stack[sp].fp = (uint8_t)fp;
+            stack[sp].cp = (uint8_t)cp;
+            sp++;
+            known |= 1u << fp;
+        }
+        c = (col >> fp) & 1u;
+        to = t->link[c][cp];
+        bit = (target >> (L - 1 - k)) & 1u;
+        if ((known >> to) & 1u) {
+            if (((col >> to) & 1u) != bit) {
+                if (!sp) return 0;
+                sp--;
+                known = stack[sp].known;
+                col = stack[sp].col;
+                k = stack[sp].k;
+                fp = stack[sp].fp;
+                cp = stack[sp].cp;
+                continue;
+            }
+        } else {
+            perm[to] = (uint8_t)__builtin_popcount(known);
+            known |= 1u << to;
+            col |= bit << to;
+        }
+        cp = to;
+        if (++k == L) {
+            *colors = col;
+            return __builtin_popcount(known) == t->n; /* every node reached, as in a minimum-node REV */
+        }
+        fp = t->link[(col >> cp) & 1u][fp];
+    }
+}
+
+/*
  * Every coloring that emits the target, in the order of the search (color 0
  * tried first): up to `max` of them are stored, all are counted.  A solution
  * that leaves f nodes untouched stands for 2^f colorings and is counted once,
@@ -348,6 +405,7 @@ static inline void cl_radix_unpack64(uint64_t code, int n, ClTopo *t) {
 uint64_t cl_canon_count(int n);
 uint64_t cl_canon_rank(const ClTopo *canonical);              /* of a canonical topology */
 int cl_canon_unrank(int n, uint64_t rank, ClTopo *canonical); /* 0 if rank is out of range */
+int cl_canon_unrank_reference(int n, uint64_t rank, ClTopo *canonical); /* the same with divisions */
 int cl_is_canonical(const ClTopo *t);
 
 #ifdef __cplusplus

@@ -240,6 +240,10 @@ void cl_radix_unpack(ClU128 code, int n, ClTopo *t) {
  */
 enum { CL_COUNT_MAX = 12 };
 static uint64_t ways[CL_COUNT_MAX + 1][2 * CL_COUNT_MAX + 1][CL_COUNT_MAX + 2];
+/* For dividing a rank by ways[n][p + 1][m] with one multiplication:
+ * rank / w == (rank * magic) >> shift for every rank below 2^62. */
+static uint64_t magic[CL_COUNT_MAX + 1][2 * CL_COUNT_MAX + 1][CL_COUNT_MAX + 2];
+static uint8_t magic_shift[CL_COUNT_MAX + 1][2 * CL_COUNT_MAX + 1][CL_COUNT_MAX + 2];
 static int ways_ready;
 
 static void ways_fill(void) {
@@ -253,6 +257,19 @@ static void ways_fill(void) {
                     if (m < n) w += ways[n][p + 1][m + 1];
                 }
                 ways[n][p][m] = w;
+            }
+        }
+        /* magic = ceil(2^K / w) with K = 62 + the bits of w: below 2^63, and exact
+         * for rank < 2^62 because rank * w < 2^K */
+        for (int p = 0; p < 2 * n; p++) {
+            for (int m = 0; m <= n + 1; m++) {
+                uint64_t w = ways[n][p + 1][m];
+                int bits = 0, k;
+                if (w < 2) continue; /* 0: never divided by; 1: the rank itself */
+                while (bits < 64 && (w >> bits)) bits++;
+                k = 62 + bits;
+                magic[n][p][m] = (uint64_t)((((ClU128)1 << k) + w - 1) / w);
+                magic_shift[n][p][m] = (uint8_t)k;
             }
         }
     }
@@ -291,7 +308,7 @@ uint64_t cl_canon_rank(const ClTopo *t) {
     return rank;
 }
 
-int cl_canon_unrank(int n, uint64_t rank, ClTopo *t) {
+int cl_canon_unrank_reference(int n, uint64_t rank, ClTopo *t) {
     int m = 1;
     if (!ways_ready) ways_fill();
     if (n < 1 || n > CL_COUNT_MAX || rank >= ways[n][0][1]) return 0;
@@ -301,6 +318,27 @@ int cl_canon_unrank(int n, uint64_t rank, ClTopo *t) {
         uint64_t w = ways[n][p + 1][m], old = (uint64_t)m * w;
         if (rank < old) {
             uint64_t to = w ? rank / w : 0;
+            t->link[p & 1][p >> 1] = (uint8_t)to;
+            rank -= to * w;
+        } else {
+            rank -= old;
+            t->link[p & 1][p >> 1] = (uint8_t)m;
+            m++;
+        }
+    }
+    return 1;
+}
+
+/* The same without a division: each quotient is one multiplication and a shift. */
+int cl_canon_unrank(int n, uint64_t rank, ClTopo *t) {
+    int m = 1;
+    if (!ways_ready) ways_fill();
+    if (n < 1 || n > CL_COUNT_MAX || rank >= ways[n][0][1]) return 0;
+    t->n = (uint8_t)n;
+    for (int p = 0; p < 2 * n; p++) {
+        uint64_t w = ways[n][p + 1][m], old = (uint64_t)m * w;
+        if (rank < old) {
+            uint64_t to = w > 1 ? (uint64_t)(((ClU128)rank * magic[n][p][m]) >> magic_shift[n][p][m]) : rank;
             t->link[p & 1][p >> 1] = (uint8_t)to;
             rank -= to * w;
         } else {

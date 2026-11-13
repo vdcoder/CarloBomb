@@ -1,0 +1,135 @@
+Bomb: FixedRunBomb(23), format version 2, 8,388,608 strings, table CRC-32 827595bf; validated in full (6.5 s)
+Scanned in 39.5 s.
+
+1. The stored REVs
+
+  Nodes       Strings   Unreachable   Not reached   Solver's      Canonical   Restored from     Links never   of them
+                           node        in 23 bits   numbering     already    canonical form    followed      not 0
+      1             2             0             0   100.0000%   100.0000%      100.0000%        50.00%         0
+      2             6             0             0   100.0000%   100.0000%      100.0000%         8.33%         0
+      3            64             0             0    65.6250%    82.8125%       65.6250%         9.90%         0
+      4           968             0             0    34.2975%    58.1612%       34.2975%         5.29%         0
+      5        18,024             0             0    27.4856%    27.8240%       27.4856%         3.23%         0
+      6       406,588             0             0   100.0000%    21.2594%      100.0000%         1.73%         0
+      7     5,560,594             0             0   100.0000%     8.8850%      100.0000%         1.18%         0
+      8     2,402,318             0             0   100.0000%     2.6651%      100.0000%         1.19%         0
+      9            44             0             0   100.0000%     9.0909%      100.0000%         4.55%         0
+    all     8,388,608             0             0    99.8363%     7.7505%       99.8363%         1.21%         0
+
+  Canonical renumbering changed the first 256 output bits of 0 REVs.
+  "Restored": the canonical REV, renumbered in the order the machine reaches its nodes while
+  emitting the string, is the stored REV again, link for link and color for color.
+
+2. Canonical topologies
+
+  Nodes       Strings      Topologies   Strings per   Used    Most     Half the strings   Bits to name one of them
+                                         topology     once    used     are covered by     flat      entropy   any of N nodes
+      1             2               1         2.00    0.0%       2           1 (100.00%)      0        0.00        0.00
+      2             6               5         1.20   80.0%       2           2 (40.00%)      3        2.25        3.58
+      3            64              48         1.33   70.8%       3          16 (33.33%)      6        5.48        7.75
+      4           968             646         1.50   71.5%       6         173 (26.78%)     10        9.10       12.36
+      5        18,024          11,323         1.59   71.3%      16       2,782 (24.57%)     14       13.14       17.29
+      6       406,588         258,411         1.57   73.7%      26      61,484 (23.79%)     18       17.62       22.50
+      7     5,560,594       4,279,412         1.30   83.0%      26   1,499,115 (35.03%)     23       21.82       27.93
+      8     2,402,318       2,369,726         1.01   98.7%      10   1,168,567 (49.31%)     22       21.17       33.56
+      9            44              44         1.00  100.0%       1          22 (50.00%)      6        5.46       39.36
+    all     8,388,608       6,919,616         1.21
+
+  How many strings share a topology (topologies by the number of strings that use them):
+  Nodes          1          2        3-4        5-8       9-16      17-32      33-64     65-128    129-256       more
+      1          0          1          0          0          0          0          0          0          0          0
+      2          4          1          0          0          0          0          0          0          0          0
+      3         34         12          2          0          0          0          0          0          0          0
+      4        462        111         52         21          0          0          0          0          0          0
+      5      8,070      1,876        918        383         76          0          0          0          0          0
+      6    190,560     37,792     20,176      7,639      1,968        276          0          0          0          0
+      7  3,550,576    474,864    189,911     52,838     10,616        607          0          0          0          0
+      8  2,338,800     29,493      1,399         32          2          0          0          0          0          0
+      9         44          0          0          0          0          0          0          0          0          0
+
+  Complements.  The REV of a complement string is the REV with colors inverted and ports
+  exchanged, so its topology is the port-exchanged one:
+  Nodes      Topologies   Used by strings   Pairs under      Their own
+                          that start with 0  port exchange    exchange
+      1               1                 1              1             1
+      2               5                 3              3             1
+      3              48                30             24             0
+      4             646               388            327             8
+      5          11,323             6,705          5,675            27
+      6         258,411           148,519        129,276           141
+      7       4,279,412         2,324,430      2,139,944           476
+      8       2,369,726         1,185,994      1,184,887            48
+      9              44                22             22             0
+  Topologies whose port-exchanged twin is missing or used by another number of strings: 0
+
+3. Recoloring: the colorings of the stored topology that emit the string
+
+  Nodes       Strings    One coloring         Two        More    Most   Nodes left   Original   Brute force
+                                                                         uncolored    missing    disagrees
+      1             2             2 (100.0000%)           0           0       1           0          0      not run
+      2             6             6 (100.0000%)           0           0       1           0          0      not run
+      3            64            64 (100.0000%)           0           0       1           0          0      not run
+      4           968           968 (100.0000%)           0           0       1           0          0      not run
+      5        18,024        18,014 (99.9445%)          10           0       2           0          0      not run
+      6       406,588       406,350 (99.9415%)         234           4       4           0          0      not run
+      7     5,560,594     5,558,154 (99.9561%)       2,408          32       4           0          0      not run
+      8     2,402,318     2,399,958 (99.9018%)       2,338          22       4           0          0      not run
+      9            44            44 (100.0000%)           0           0       1           0          0      not run
+
+  Strings with more than one coloring: do the colorings go on alike after bit 23?
+  Nodes   More than one    Next bit       Within 8      Within 64     Somewhere     Never: the same
+            coloring        differs        bits          bits          later         stream for ever
+      1             0             0             0             0             0             0
+      2             0             0             0             0             0             0
+      3             0             0             0             0             0             0
+      4             0             0             0             0             0             0
+      5            10             0             0             0             0            10
+      6           238            10            20            20            20           218
+      7         2,440           216           718           724           724         1,716
+      8         2,360            80           236           254           254         2,106
+      9             0             0             0             0             0             0
+
+  Where another coloring first differs from the original (colorings, not strings):
+  Nodes   bit L+1       L+2       L+3       L+4       L+5       L+6       L+7       L+8     later
+      1         0         0         0         0         0         0         0         0         0
+      2         0         0         0         0         0         0         0         0         0
+      3         0         0         0         0         0         0         0         0         0
+      4         0         0         0         0         0         0         0         0         0
+      5         0         0         0         0         0         0         0         0         0
+      6        10         8         0         0         0         2         0         0         0
+      7       218       222       100        56        38        46        30        16         6
+      8        80        40        34        30        26        20         4         2        18
+      9         0         0         0         0         0         0         0         0         0
+
+  If the first coloring found is taken (color 0 tried first, or color 1):
+  Nodes       Strings   It is the original          Tried 1 first       Not the original (0 first):
+                         (0 first)                                       next bit differs   stream differs
+      1             2             2 (100.0000%)             2 (100.0000%)             0               0
+      2             6             6 (100.0000%)             6 (100.0000%)             0               0
+      3            64            64 (100.0000%)            64 (100.0000%)             0               0
+      4           968           968 (100.0000%)           968 (100.0000%)             0               0
+      5        18,024        18,019 ( 99.9723%)        18,019 ( 99.9723%)             0               0
+      6       406,588       406,469 ( 99.9707%)       406,469 ( 99.9707%)             5              10
+      7     5,560,594     5,559,374 ( 99.9781%)     5,559,374 ( 99.9781%)           108             362
+      8     2,402,318     2,401,138 ( 99.9509%)     2,401,138 ( 99.9509%)            40             127
+      9            44            44 (100.0000%)            44 (100.0000%)             0               0
+
+  Machine steps of the search (one per bit tried; 23 is the least that finds a coloring):
+  Nodes   To the first coloring, color 0 tried first                      1 first   All colorings          Bound
+            mean     p50     p95     p99   p99.9     max   guesses mean     mean      mean     max      L * 2^N
+      1    23.50      23      24      24      24      24           1.00    23.50     24.00      24          46
+      2    24.00      23      25      25      25      25           1.00    24.00     25.00      25          92
+      3    24.72      24      28      32      32      32           1.38    24.72     26.44      32         184
+      4    25.91      25      31      35      42      42           2.03    25.91     28.82      42         368
+      5    27.38      26      36      41      46      55           2.72    27.38     31.78      62         736
+      6    29.37      28      41      48      58     103           3.61    29.37     35.75     106        1472
+      7    31.08      29      45      54      68     172           4.36    31.08     39.18     200        2944
+      8    31.02      29      46      56      73     163           4.10    31.02     39.07     188        5888
+      9    43.48      35      77     167     167     167           5.91    43.48     63.95     221       11776
+
+  The strings that take the most steps to their first coloring:
+      5 nodes:  01010110110110101010101 (55)  10101010110000101101010 (55)  01001001001001010100101 (54)
+      6 nodes:  10101010101011101110111 (103)  10110110101101111111110 (94)  10101010101001100110011 (93)
+      7 nodes:  10101010101010110010010 (172)  10101010101010111001001 (172)  10110110110111111111000 (166)
+      8 nodes:  10101010101011011100000 (163)  10101010101011111110001 (149)  10101010101011011011000 (148)
+      9 nodes:  11111111111111111111001 (167)  11111111111111111111100 (149)  00000000000000000000110 (77)

@@ -1,0 +1,44 @@
+Bomb: FixedRunBomb(20), 1,048,576 strings, table CRC-32 04be747f; layouts built in memory in 0.8 s
+
+Sizes in bytes (a checkpoint every 256 strings)
+  one bit for every shorter string (A)                             131,072
+  node count of every string and checkpoints (B)                   655,392
+  an ordinal for every string of 1 to 20 bits                    6,291,450
+  REVs as bit fields (the compact format's records)              6,986,080
+  REVs of 6 and more nodes as rank and colors                    4,272,886  (+ 90,810 for 1 to 5 nodes as fields)
+  REVs of 6 and more nodes as rank                               3,410,596  (+ 90,810, and 446 strings listed: 2,230)
+
+  Layout                                   bytes     of fixed-width
+  F  fixed-width (+A)                  35,782,720    100.0%
+  V  v4 as built                       13,277,530     37.2%
+  W  A+B, bit fields                    7,772,544     21.8%
+  Y  A+B, rank and colors               5,150,160     14.4%
+  X  A+B, rank, colorless               4,290,100     12.0%
+
+Every string of 20 bits (1,048,576) looked up in each layout and compared with the stored REV,
+link for link and color for color (2.3 s):
+  V 0 wrong, W 0, Y 0, X 0; X without renumbering: 0 that do not emit their string
+  (the entry decoder of this program against the library's: 0 differences)
+Every shorter string (1,048,574): the walk along the bits ends where the ordinal rule points: 0 differ
+
+Lookups, nanoseconds each (2000000 random strings, best of 5 passes)
+  "REV": unpacked into memory.  "verified": and run against the string asked for.  For Y and X the
+  first two columns are the REV in canonical numbering; "as stored" is the stored REV, verified,
+  with its numbering found by the run that verifies it.
+                                   strings of 20 bits               strings of 1 to 20 bits
+  Layout                           REV   verified   as stored        REV   verified   as stored
+  F  fixed-width (+A)             95.8      228.7       228.7       93.8      161.0       161.0
+  V  v4 as built                  86.6      223.8       223.8       44.3      114.8       114.8
+  W  A+B, bit fields              60.2      192.6       192.6       84.3      143.4       143.4
+  Y  A+B, rank and colors        148.7      271.9       321.0      113.4      189.6       224.7
+  X  A+B, rank, colorless        401.4      527.1       641.8      198.9      267.9       318.7
+
+The ordinal of a string of 20 bits, nanoseconds (the same random strings)
+  an ordinal stored for every string (3 bytes)                 4.0         3,145,728 bytes
+  node counts in 4 bits, a checkpoint every   16 strings       8.4         2,621,472 bytes
+  node counts in 4 bits, a checkpoint every   64 strings      12.6         1,048,608 bytes
+  node counts in 4 bits, a checkpoint every  256 strings      20.8           655,392 bytes
+  node counts in 4 bits, a checkpoint every 1024 strings      47.7           557,088 bytes
+  node counts in 4 bits, a checkpoint every 4096 strings     148.4           532,512 bytes
+
+PASS: every layout gives the stored REVs

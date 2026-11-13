@@ -1,5 +1,5 @@
-Bomb: FixedRunBomb(24), format version 2, 16,777,216 strings, table CRC-32 dfd98e11; validated in full (7.2 s)
-Scanned in 82.4 s.
+Bomb: FixedRunBomb(24), format version 2, 16,777,216 strings, table CRC-32 dfd98e11; validated in full (7.1 s)
+Scanned in 115.2 s, with all 2^N colorings of every topology as reference.
 
 1. The stored REVs
 
@@ -66,15 +66,15 @@ Scanned in 82.4 s.
 
   Nodes       Strings    One coloring         Two        More    Most   Nodes left   Original   Brute force
                                                                          uncolored    missing    disagrees
-      1             2             2 (100.0000%)           0           0       1           0          0      not run
-      2             6             6 (100.0000%)           0           0       1           0          0      not run
-      3            64            64 (100.0000%)           0           0       1           0          0      not run
-      4           968           968 (100.0000%)           0           0       1           0          0      not run
-      5        18,082        18,072 (99.9447%)          10           0       2           0          0      not run
-      6       418,502       418,274 (99.9455%)         224           4       4           0          0      not run
-      7     7,811,408     7,808,384 (99.9613%)       2,980          44       4           0          0      not run
-      8     8,526,298     8,519,266 (99.9175%)       6,942          90       4           0          0      not run
-      9         1,886         1,884 (99.8940%)           2           0       2           0          0      not run
+      1             2             2 (100.0000%)           0           0       1           0          0            0
+      2             6             6 (100.0000%)           0           0       1           0          0            0
+      3            64            64 (100.0000%)           0           0       1           0          0            0
+      4           968           968 (100.0000%)           0           0       1           0          0            0
+      5        18,082        18,072 (99.9447%)          10           0       2           0          0            0
+      6       418,502       418,274 (99.9455%)         224           4       4           0          0            0
+      7     7,811,408     7,808,384 (99.9613%)       2,980          44       4           0          0            0
+      8     8,526,298     8,519,266 (99.9175%)       6,942          90       4           0          0            0
+      9         1,886         1,884 (99.8940%)           2           0       2           0          0            0
 
   Strings with more than one coloring: do the colorings go on alike after bit 24?
   Nodes   More than one    Next bit       Within 8      Within 64     Somewhere     Never: the same

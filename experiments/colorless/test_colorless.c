@@ -137,7 +137,9 @@ static void test_rank(void) {
         ClKey last = {0, 0};
         for (uint64_t r = 0; r < cl_canon_count(n); r++) {
             ClTopo t;
-            int ok = cl_canon_unrank(n, r, &t) && cl_is_canonical(&t) && cl_canon_rank(&t) == r;
+            ClTopo slow;
+            int ok = cl_canon_unrank(n, r, &t) && cl_is_canonical(&t) && cl_canon_rank(&t) == r &&
+                     cl_canon_unrank_reference(n, r, &slow) && cl_same_topo(&slow, &t);
             ClKey k = cl_key(&t);
             total++;
             if (!ok) {
@@ -161,6 +163,13 @@ static void test_rank(void) {
         uint64_t rank = (((uint64_t)rnd(1u << 31) << 31) ^ rnd(1u << 31)) % count, other;
         ClTopo t, u;
         CHECK(cl_canon_unrank(n, rank, &t) && cl_is_canonical(&t) && cl_canon_rank(&t) == rank);
+        CHECK(cl_canon_unrank_reference(n, rank, &u) && cl_same_topo(&t, &u)); /* multiplication against division */
+        if (r % 16 == 0) { /* the ends of the range, where a quotient is most easily one off */
+            uint64_t edge = r % 32 ? count - 1 - (uint64_t)rnd(64) : (uint64_t)rnd(64);
+            ClTopo a, b;
+            CHECK(cl_canon_unrank(n, edge, &a) && cl_canon_unrank_reference(n, edge, &b) && cl_same_topo(&a, &b));
+            CHECK(cl_canon_rank(&a) == edge);
+        }
         other = (rank + 1 + rnd(1000)) % count;
         CHECK(cl_canon_unrank(n, other, &u) && !cl_same_topo(&t, &u));
         total++;
@@ -210,6 +219,17 @@ static void test_recolor(void) {
             continue;
         }
         CHECK(c0 == dfs[0] && in_list(dfs, found, c1) && s0.states >= (uint32_t)L && s0.states <= sa.states);
+        {   /* the same search, noting the order in which the machine reaches the nodes */
+            uint8_t order[CL_MAX_NODES], want[CL_MAX_NODES];
+            uint32_t co = 0, visited;
+            int all_reached = cl_recolor_order(&t, target, L, &co, order);
+            cl_trace(&t, c0, L, &visited, NULL);
+            CHECK(co == c0 && all_reached == (visited == (1u << n) - 1u));
+            if (all_reached) {
+                CHECK(cl_execution_order(&t, c0, L, want) == n);
+                for (int i = 0; i < n; i++) CHECK(order[i] == want[i]);
+            }
+        }
         /* at most 2^n ends of at most L steps each, and a guess less than there are ends */
         CHECK(sa.branches < (1u << n) && s0.branches <= sa.branches && sa.states <= (uint32_t)L << n);
         for (int i = 0; i < found; i++) {
@@ -289,6 +309,15 @@ static void test_witness_numbering(void) {
         CHECK(cl_execution_order(&canon, kc, L, perm) == t.n);
         cl_relabel(&canon, kc, perm, &back, &back_colors);
         by_rule += cl_same_topo(&back, &t) && back_colors == colors;
+        /* and the search for the colors gives that order by itself */
+        {
+            uint8_t found_perm[CL_MAX_NODES];
+            uint32_t found = 0, first = 0;
+            CHECK(cl_recolor_order(&canon, value, L, &found, found_perm));
+            CHECK(cl_recolor(&canon, value, L, 0, &first, NULL) && first == found);
+            CHECK(cl_execution_order(&canon, found, L, perm) == t.n);
+            for (int i = 0; i < t.n; i++) CHECK(found_perm[i] == perm[i]);
+        }
     }
     CHECK(by_rule == witnesses);
     printf("witnesses: %d minimum-node REVs from the LevelSolver are numbered in the order the machine reaches\n"

@@ -358,4 +358,16 @@ if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_S
   add_executable(colorless_scan experiments/colorless/colorless_scan.c)
   target_include_directories(colorless_scan PRIVATE benchmarks)
   target_link_libraries(colorless_scan PRIVATE carlobomb_colorless carlobomb_fixed_run m)
+  # What recoloring costs, REV by REV, against verification of the colored REV.
+  add_executable(colorless_bench experiments/colorless/colorless_bench.c)
+  target_include_directories(colorless_bench PRIVATE benchmarks)
+  target_link_libraries(colorless_bench PRIVATE carlobomb_colorless carlobomb_fixed_run m)
+  # Candidate layouts built in memory and measured end to end.
+  add_executable(colorless_lookup experiments/colorless/colorless_lookup.c)
+  target_include_directories(colorless_lookup PRIVATE benchmarks)
+  target_link_libraries(colorless_lookup PRIVATE carlobomb_colorless carlobomb_fixed_run m)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    # counting node counts in a word needs the population count instruction
+    target_compile_options(colorless_lookup PRIVATE -mpopcnt)
+  endif()
 endif()

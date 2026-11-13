@@ -1,6 +1,6 @@
 # End-to-end check of `carlobomb bomb`.  Run by ctest:
 #   cmake -DCLI=<carlobomb> -DWORK=<dir> -DHAVE_ASM=ON|OFF -DMODE=small|16|16full
-#         -P bomb_smoke.cmake
+#         -DFIXTURE=<compact_fixture> -P bomb_smoke.cmake
 #
 # small   every command and exit status on 10-bit tables, with interruption
 # 16      the 16-bit table with enumeration up to 4 nodes (seconds)
@@ -238,6 +238,17 @@ if(MODE STREQUAL "small")
   run(0 "every REV and the answer for every shorter string the same[^\n]*PASS" bomb verify --file ${W}/c10-wide.frb --against ${W}/a.frb)
   run(0 "the same.table, byte for byte" bomb expand --file ${W}/c10-wide.frb --output ${W}/c10-wide-expanded.frb)
   expect_same_file(${W}/c10-wide-expanded.frb ${W}/a.frb)
+  # A compact file that holds this table and names another as its source:
+  # valid in every byte, and found out by the two commands that ask.
+  execute_process(COMMAND ${FIXTURE} ${W}/a.frb ${W}/c10-false.frb RESULT_VARIABLE fixture_code)
+  if(NOT fixture_code EQUAL 0)
+    message(FATAL_ERROR "compact_fixture failed: ${fixture_code}")
+  endif()
+  run(1 "ordinals in order[^\n]*PASS.*The table it holds has the checksum of its source[^\n]*FAIL.*Verification: FAIL"
+      bomb verify --file ${W}/c10-false.frb)
+  run(1 "it says it was made from a version-1 file with table CRC-32.*Nothing was written"
+      bomb expand --file ${W}/c10-false.frb --output ${W}/no.frb)
+  run(0 "Status: MINIMAL.*Nodes: 4.*Verification: PASS" bomb lookup --file ${W}/c10-false.frb --target 0110100110)
   # Compact refusals: nothing is replaced, nothing partial is written, and a
   # construction does not take a compact file for its base.
   run(2 "--index-bytes must be 2..4 for 10-bit targets" bomb compact --file ${W}/a.frb --output ${W}/no.frb --index-bytes 1)

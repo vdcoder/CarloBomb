@@ -119,7 +119,7 @@ static void test_differences(void) {
     FrbCompact *b = NULL;
     FrbTable t, other;
     uint32_t bad = 0;
-    int relabeled = 0, larger = 0;
+    int relabeled = 0, larger = 0, one_part[3] = {0, 0, 0};
     reference_table(&t, L, frb_format(2));
     CHECK(frb_compact_write(file("d.frb"), &t, 2, 0, 0) == FRB_OK);
     CHECK(frb_compact_open(file("d.frb"), &b, NULL) == FRB_OK);
@@ -139,6 +139,22 @@ static void test_differences(void) {
                     relabeled++;
                 }
             }
+            /* A REV that differs in one link only, or in one color: where the string does not
+             * depend on it within its length, the table holds another REV, and that is seen. */
+            for (int node = 0; node < g.node_count; node++) {
+                for (int part = 0; part < 3; part++) {
+                    changed = g;
+                    if (part < 2) changed.nodes[node].links[part] = (g.nodes[node].links[part] + 1) % g.node_count;
+                    else changed.nodes[node].color ^= 1;
+                    if (same_graph(&g, &changed) || frb_graph_output(&changed, L) != i) continue;
+                    reference_table(&other, L, frb_format(2));
+                    CHECK(frb_table_put(&other, i, FRB_MINIMAL, &changed) == FRB_OK);
+                    bad = ~0u;
+                    CHECK(frb_compact_equals_table(b, &other, &bad) == FRB_ERR_EVIDENCE && bad == i);
+                    frb_table_destroy(&other);
+                    one_part[part]++;
+                }
+            }
             /* A larger REV for one string. */
             if (g.node_count < L) {
                 frb_ring_witness(i, L, &changed);
@@ -150,7 +166,38 @@ static void test_differences(void) {
                 larger++;
             }
         }
+        /* A node no link reaches: its color and its links change nothing the REV emits, and
+         * each of them is part of the REV all the same. */
+        {
+            const uint32_t at = 3;
+            FrbCompact *pb = NULL;
+            FrbTable padded;
+            RevGraph g = ref_graph[L][at], changed;
+            int k = g.node_count;
+            g.nodes[k].color = 0;
+            g.nodes[k].links[0] = g.nodes[k].links[1] = 0;
+            g.node_count++;
+            reference_table(&padded, L, frb_format(2));
+            CHECK(frb_table_put(&padded, at, FRB_MINIMAL, &g) == FRB_OK);
+            CHECK(frb_compact_write(file("p.frb"), &padded, 2, 0, 0) == FRB_OK);
+            CHECK(frb_compact_open(file("p.frb"), &pb, NULL) == FRB_OK);
+            if (pb) {
+                CHECK(frb_compact_equals_table(pb, &padded, &bad) == FRB_OK);
+                for (int part = 0; part < 3; part++) {
+                    changed = g;
+                    if (part == 2) changed.nodes[k].color = 1;
+                    else changed.nodes[k].links[part] = 1;
+                    CHECK(frb_table_put(&padded, at, FRB_MINIMAL, &changed) == FRB_OK);
+                    bad = ~0u;
+                    CHECK(frb_compact_equals_table(pb, &padded, &bad) == FRB_ERR_EVIDENCE && bad == at);
+                }
+            }
+            frb_compact_close(pb);
+            remove(file("p.frb"));
+            frb_table_destroy(&padded);
+        }
         CHECK(relabeled >= 10 && larger >= 10);
+        CHECK(one_part[0] >= 1 && one_part[1] >= 1); /* a link the string never follows; colors all matter */
         /* A table for another length, and one that is not there. */
         reference_table(&other, L - 1, frb_format(2));
         CHECK(frb_compact_equals_table(b, &other, &bad) == FRB_ERR_ARG);
@@ -160,8 +207,9 @@ static void test_differences(void) {
     frb_compact_close(b);
     remove(file("d.frb"));
     frb_table_destroy(&t);
-    printf("differences: %d relabeled and %d larger REVs in the table, each found at its string\n", relabeled,
-           larger);
+    printf("differences: %d relabeled and %d larger REVs in the table, %d that differ in one link 0, %d in one\n"
+           "             link 1 and %d in one color: each found at its string\n",
+           relabeled, larger, one_part[0], one_part[1], one_part[2]);
 }
 
 /* ---- one REV of a class -------------------------------------------------- */
@@ -531,6 +579,25 @@ static void repair(uint8_t *image, const FrbCompactInfo *info) {
     for (int i = 0; i < 4; i++) image[60 + i] = (uint8_t)(crc >> (8 * i));
 }
 
+/* The checksums of the directory and of the header alone, for a change to either. */
+static void reseal(uint8_t *image) {
+    uint32_t crc = frb_crc32(0, image + 64, 31 * 32);
+    for (int i = 0; i < 4; i++) image[36 + i] = (uint8_t)(crc >> (8 * i));
+    crc = frb_crc32(0, image, 60);
+    for (int i = 0; i < 4; i++) image[60 + i] = (uint8_t)(crc >> (8 * i));
+}
+
+/* One answer from an image as a file. */
+static FrbError lookup_image(const uint8_t *image, size_t size, int bits, uint32_t value) {
+    char path[1200];
+    FrbError e;
+    snprintf(path, sizeof path, "%s", file("asked.frb"));
+    spit(path, image, size);
+    e = frb_compact_file_lookup(path, bits, value, NULL, NULL, NULL);
+    remove(path);
+    return e;
+}
+
 static FrbError open_image(const uint8_t *image, size_t size, uint32_t *bad) {
     char path[1200];
     snprintf(path, sizeof path, "%s", file("damaged.frb")); /* a name of its own: file() reuses its buffers */
@@ -644,6 +711,9 @@ static void test_refusals(void) {
     }
     repair(copy, &info);
     CHECK(open_image(copy, size, &bad) == FRB_ERR_OUTPUT && bad == a);
+    /* and asked for one of the two alone, the file gives a REV that does not emit it */
+    CHECK(lookup_image(copy, size, 8, a) == FRB_ERR_OUTPUT && lookup_image(copy, size, 8, c) == FRB_ERR_OUTPUT);
+    CHECK(lookup_image(image, size, 8, a) == FRB_OK && lookup_image(image, size, 8, c) == FRB_OK);
     /* a shorter string answered by the worse of its two extensions */
     {
         int done = 0;
@@ -698,7 +768,77 @@ static void test_refusals(void) {
         CHECK(open_image(copy, size, NULL) == FRB_ERR_VERSION);
         spit(file("v.frb"), copy, size); /* and the fixed-width reader does not take it for one of its own */
         CHECK(frb_file_read(file("v.frb"), &none, NULL, NULL) != FRB_OK && none.entries == NULL);
+        CHECK(frb_file_is_compact(file("v.frb")) == 0); /* a FixedRunBomb file, and not a compact one */
         remove(file("v.frb"));
+    }
+    /*
+     * One field of the header or of the directory saying something else, with
+     * the checksums of both made right: every field is checked for itself.
+     */
+    {
+        static const struct {
+            int at, add;
+            const char *what;
+        } fields[] = {
+            {10, 1, "header size"},
+            {12, 1, "bits"},
+            {13, 1, "largest class"},
+            {13, -1, "largest class"},
+            {16, 1, "count"},
+            {24, 1, "witnesses"},
+            {28, 1, "minimal"},
+            {32, 1, "largest minimal node count"},
+            {33, 1, "largest witness node count"},
+            {34, 4, "source version 5"},
+            {35, 1, "source version 257"},
+            {48, 1, "file length"},
+            {56, 1, "reserved"},
+            {59, 1, "reserved"},
+        };
+        int fired = 0, rows = 0;
+        for (size_t k = 0; k < sizeof fields / sizeof fields[0]; k++) {
+            memcpy(copy, image, size);
+            copy[fields[k].at] = (uint8_t)(copy[fields[k].at] + fields[k].add);
+            reseal(copy);
+            fired += open_image(copy, size, NULL) == FRB_ERR_HEADER;
+            CHECK_MSG(open_image(copy, size, NULL) == FRB_ERR_HEADER, "%s accepted", fields[k].what);
+        }
+        CHECK(fired == (int)(sizeof fields / sizeof fields[0]));
+        /* The directory row of a class that has REVs, and of one that has none. */
+        for (int n = 1; n <= 31; n++) {
+            static const int row_fields[] = {4, 8, 16, 20, 21, 23, 28, 31}; /* start, offset, stride, link bits, reserved */
+            uint8_t *row = copy + 64 + (size_t)(n - 1) * 32;
+            if (n != 4 && n != 20) continue;
+            CHECK((info.class_count[n] > 0) == (n == 4));
+            for (size_t k = 0; k < sizeof row_fields / sizeof row_fields[0]; k++) {
+                memcpy(copy, image, size);
+                row[row_fields[k]]++;
+                reseal(copy);
+                CHECK_MSG(open_image(copy, size, NULL) == FRB_ERR_HEADER, "class %d, byte %d of its row accepted", n,
+                          row_fields[k]);
+                rows++;
+            }
+            memcpy(copy, image, size);
+            row[0]++; /* one REV more than there is: the counts no longer add up */
+            reseal(copy);
+            CHECK(open_image(copy, size, NULL) == FRB_ERR_HEADER);
+            memcpy(copy, image, size);
+            row[24] ^= 1; /* its checksum: of bytes that are there, or of none */
+            reseal(copy);
+            CHECK(open_image(copy, size, NULL) == (n == 4 ? FRB_ERR_CHECKSUM : FRB_ERR_HEADER));
+        }
+        CHECK(rows == 16);
+        /* The checksum of the index. */
+        memcpy(copy, image, size);
+        copy[40] ^= 1;
+        reseal(copy);
+        CHECK(open_image(copy, size, NULL) == FRB_ERR_CHECKSUM);
+        /* The source it names is not checked on opening, and is not lost either. */
+        memcpy(copy, image, size);
+        copy[44] ^= 1;
+        copy[34] = 2;
+        reseal(copy);
+        CHECK(open_image(copy, size, NULL) == FRB_OK);
     }
     /* not complete, by the flag */
     memcpy(copy, image, size);

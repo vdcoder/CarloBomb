@@ -299,10 +299,13 @@ if(CARLOBOMB_HAVE_BOMB_BUILD)
   if(NOT CARLOBOMB_SANITIZE)
     list(APPEND CARLOBOMB_BOMB_MODES 16full)
   endif()
+  # A compact file that names a source it does not hold, for bomb_small.
+  add_executable(compact_fixture tests/compact_fixture.c)
+  target_link_libraries(compact_fixture PRIVATE carlobomb_fixed_run)
   foreach(mode ${CARLOBOMB_BOMB_MODES})
     add_test(NAME bomb_${mode}
       COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
-              -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM} -DMODE=${mode}
+              -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM} -DMODE=${mode} -DFIXTURE=$<TARGET_FILE:compact_fixture>
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/bomb_smoke.cmake)
     set_tests_properties(bomb_${mode} PROPERTIES TIMEOUT 900)
   endforeach()

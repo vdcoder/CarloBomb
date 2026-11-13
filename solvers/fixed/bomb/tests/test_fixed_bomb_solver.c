@@ -766,10 +766,18 @@ static void test_compact_bomb(const RevFixedBomb *fixed, const char *fixed_file)
             ok = ok && same_graph(&g1, &g2) && i2.bomb_bits == bits;
             ok = ok && rev_fixed_bomb_min_nodes(b, len, v) == i1.min_nodes;
             ok = ok && rev_fixed_bomb_extension(b, len, v) == i1.extension;
-            if ((v & 63u) == 5u) /* a budget one below the minimum is refused the same way */
-                ok = ok && rev_fixed_bomb_solve(b, target, (size_t)len, i1.min_nodes - 1, &g2, &i2) ==
-                               (i1.min_nodes > 1 ? REV_FIXED_BOMB_PROVEN_UNSAT : REV_FIXED_BOMB_MINIMAL) &&
-                     i2.extension == i1.extension;
+            if ((v & 63u) == 5u) {
+                /* A budget one below the minimum is refused the same way, and no REV comes with
+                 * the refusal; a budget of exactly the minimum is enough. */
+                RevFixedBombResult r = rev_fixed_bomb_solve(b, target, (size_t)len, i1.min_nodes - 1, &g2, &i2);
+                if (i1.min_nodes > 1)
+                    ok = ok && r == REV_FIXED_BOMB_PROVEN_UNSAT && g2.node_count == 0 && i2.min_nodes == i1.min_nodes;
+                else ok = ok && r == REV_FIXED_BOMB_MINIMAL;
+                ok = ok && i2.extension == i1.extension;
+                ok = ok && rev_fixed_bomb_solve(b, target, (size_t)len, i1.min_nodes, &g2, &i2) ==
+                               REV_FIXED_BOMB_MINIMAL &&
+                     same_graph(&g1, &g2) && i2.extension == i1.extension;
+            }
             strings++;
             wrong += !ok;
         }
@@ -809,6 +817,26 @@ static void test_compact_bomb(const RevFixedBomb *fixed, const char *fixed_file)
         free(image2);
         frb_table_destroy(&back);
         frb_compact_close(c);
+    }
+
+    /* A compact file is valid with any REVs that emit their strings.  A Bomb is more: a string
+     * and its complement need the same number of nodes, and the solver refuses a file in which
+     * they do not, compact or not. */
+    {
+        const char *odd = in_scratch("compact-odd.frb");
+        FrbStatus st;
+        RevGraph g;
+        uint32_t bad = 0, at = 5;
+        CHECK(frb_table_get(&t, at, &st, &g) == FRB_OK && g.node_count < t.format->node_capacity);
+        g.nodes[g.node_count].color = 0; /* a node no link leads to */
+        g.nodes[g.node_count].links[0] = g.nodes[g.node_count].links[1] = 0;
+        g.node_count++;
+        CHECK(frb_table_put(&t, at, FRB_MINIMAL, &g) == FRB_OK);
+        CHECK(frb_compact_write(odd, &t, 0, 0, 0) == FRB_OK);
+        b = NULL;
+        CHECK(rev_fixed_bomb_open(odd, &b, &bad) == FRB_ERR_EVIDENCE && b == NULL && bad == at);
+        rev_fixed_bomb_close(b);
+        remove(odd);
     }
     frb_table_destroy(&t);
 }

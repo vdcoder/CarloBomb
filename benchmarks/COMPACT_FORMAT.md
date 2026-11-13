@@ -356,6 +356,32 @@ mapping or entry by entry, so the resident pages are the files themselves
 and can be reclaimed by the system at any time. A Bomb larger than memory
 converts the same way.
 
+## Past 2 GB
+
+The Bombs that exist here end at 24 bits, and their compact files at 218
+MB. The first real compact files with 4-byte ordinals will be those of 25
+and 26 bits, and from 27 bits a compact file passes 2^31 bytes. To have run
+the code there before real data does, a table of 26 bits was made in which
+every entry is the ring of its string, marked as a minimum so that the table
+counts as complete. It is not a Bomb and certifies nothing; it was made
+outside the repository and removed afterwards. With rings of 26 nodes
+everything is as large as it can be at that length:
+
+| 26 bits, synthetic | |
+|---|---:|
+| Fixed-width file (version 3) | 2,952,790,080 bytes |
+| Compact file: 67,108,864 REVs of 36 bytes, 134,217,726 index entries of 4 bytes | 2,952,791,064 bytes |
+| `bomb compact` | 121 s, no memory of its own |
+| `bomb verify --against` the source: every REV run, every index entry, the source checksum | 118 s, all pass |
+| `bomb expand`, then `cmp` with the source | 144 s, identical |
+| `bomb lookup` of a 26-bit and of a 10-bit string | correct |
+
+The class of 26 nodes begins below 2^31 bytes and ends above it, links are
+5 bits, ordinals 4 bytes, and the 5.6 GB of the two files were mapped, not
+allocated. (That the two files are nearly the same size is the arithmetic of
+this table: 36 bytes of ring and 8 of index against an entry of 44. A real
+26-bit Bomb, whose REVs have 8 to 10 nodes, will be about 1.1 GB.)
+
 ## What a conversion does and does not touch
 
 - The source file is opened for reading and is never written. Its SHA-256

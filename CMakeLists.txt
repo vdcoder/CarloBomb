@@ -243,6 +243,11 @@ add_executable(test_compact bombs/fixed-run/tests/test_compact.c)
 target_include_directories(test_compact PRIVATE tests)
 target_link_libraries(test_compact PRIVATE carlobomb_fixed_run carlobomb_minimal)
 add_test(NAME test_compact COMMAND test_compact ${CMAKE_CURRENT_BINARY_DIR}/compact_test)
+# compact.c compiled into the test, to change the bytes of an opened Bomb.
+add_executable(test_compact_internal bombs/fixed-run/tests/test_compact_internal.c)
+target_include_directories(test_compact_internal PRIVATE tests)
+target_link_libraries(test_compact_internal PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_compact_internal COMMAND test_compact_internal ${CMAKE_CURRENT_BINARY_DIR}/compact_internal)
 add_test(NAME test_compact_unmapped COMMAND test_compact ${CMAKE_CURRENT_BINARY_DIR}/compact_test_unmapped)
 set_tests_properties(test_compact_unmapped PROPERTIES ENVIRONMENT "CARLOBOMB_NO_MMAP=1")
 

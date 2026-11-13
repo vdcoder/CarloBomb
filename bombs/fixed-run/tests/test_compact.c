@@ -99,6 +99,71 @@ static void reference_table(FrbTable *t, int bits, const FrbFormat *format) {
         CHECK(frb_table_put(t, i, FRB_MINIMAL, &ref_graph[bits][i]) == FRB_OK);
 }
 
+/* The same REV with the names of two of its nodes exchanged: it emits the
+ * same string, and it is another graph. */
+static void relabel(const RevGraph *in, int a, int b, RevGraph *out) {
+    *out = *in;
+    for (int i = 0; i < in->node_count; i++) {
+        int to = i == a ? b : i == b ? a : i;
+        out->nodes[to].color = in->nodes[i].color;
+        for (int k = 0; k < 2; k++) {
+            int link = in->nodes[i].links[k];
+            out->nodes[to].links[k] = link == a ? b : link == b ? a : link;
+        }
+    }
+}
+
+/* A compact Bomb is the Bomb of one table and of no other. */
+static void test_differences(void) {
+    const int L = 9;
+    FrbCompact *b = NULL;
+    FrbTable t, other;
+    uint32_t bad = 0;
+    int relabeled = 0, larger = 0;
+    reference_table(&t, L, frb_format(2));
+    CHECK(frb_compact_write(file("d.frb"), &t, 2, 0, 0) == FRB_OK);
+    CHECK(frb_compact_open(file("d.frb"), &b, NULL) == FRB_OK);
+    if (b) {
+        CHECK(frb_compact_equals_table(b, &t, &bad) == FRB_OK);
+        for (uint32_t i = 0; i < t.count; i += 37) {
+            RevGraph g = ref_graph[L][i], changed;
+            /* Another minimum-node REV for one string. */
+            if (g.node_count >= 3) {
+                relabel(&g, 1, 2, &changed);
+                if (!same_graph(&g, &changed) && frb_graph_output(&changed, L) == i) {
+                    reference_table(&other, L, frb_format(2));
+                    CHECK(frb_table_put(&other, i, FRB_MINIMAL, &changed) == FRB_OK);
+                    bad = ~0u;
+                    CHECK(frb_compact_equals_table(b, &other, &bad) == FRB_ERR_EVIDENCE && bad == i);
+                    frb_table_destroy(&other);
+                    relabeled++;
+                }
+            }
+            /* A larger REV for one string. */
+            if (g.node_count < L) {
+                frb_ring_witness(i, L, &changed);
+                reference_table(&other, L, frb_format(2));
+                CHECK(frb_table_put(&other, i, FRB_MINIMAL, &changed) == FRB_OK);
+                bad = ~0u;
+                CHECK(frb_compact_equals_table(b, &other, &bad) == FRB_ERR_EVIDENCE && bad == i);
+                frb_table_destroy(&other);
+                larger++;
+            }
+        }
+        CHECK(relabeled >= 10 && larger >= 10);
+        /* A table for another length, and one that is not there. */
+        reference_table(&other, L - 1, frb_format(2));
+        CHECK(frb_compact_equals_table(b, &other, &bad) == FRB_ERR_ARG);
+        frb_table_destroy(&other);
+        CHECK(frb_compact_equals_table(b, NULL, &bad) == FRB_ERR_ARG);
+    }
+    frb_compact_close(b);
+    remove(file("d.frb"));
+    frb_table_destroy(&t);
+    printf("differences: %d relabeled and %d larger REVs in the table, each found at its string\n", relabeled,
+           larger);
+}
+
 /* ---- one REV of a class -------------------------------------------------- */
 
 static void test_strides(void) {
@@ -333,9 +398,42 @@ static void check_conversion(const FrbTable *t, int index_bytes, const char *wha
     CHECK(frb_compact_to_table(b, NULL, &back) == FRB_OK);
     CHECK(frb_image_build(t, &image, &size) == FRB_OK && frb_image_build(&back, &image2, &size2) == FRB_OK);
     CHECK(size == size2 && image && image2 && memcmp(image, image2, size) == 0);
-    free(image);
     free(image2);
     frb_table_destroy(&back);
+    {   /* The same without holding the table: its checksum, and the file itself. */
+        const char *out = file("x.frb");
+        uint32_t crc = 0, written = 1;
+        uint32_t want = image ? (uint32_t)image[36] | (uint32_t)image[37] << 8 | (uint32_t)image[38] << 16 |
+                                    (uint32_t)image[39] << 24
+                              : 0;
+        CHECK(frb_compact_table_crc(b, NULL, &crc) == FRB_OK && crc == want);
+        CHECK(frb_compact_table_crc(b, t->format, &crc) == FRB_OK && crc == want);
+        CHECK(frb_compact_table_crc(b, NULL, NULL) == FRB_ERR_ARG);
+        remove(out);
+        CHECK(frb_compact_expand(b, NULL, out, &written) == FRB_OK && written == want);
+        bytes = slurp(out, &file_size);
+        CHECK(bytes && file_size == size && memcmp(bytes, image, size) == 0);
+        free(bytes);
+        CHECK(!file_exists(file("x.frb.tmp")));
+        if (t->format->version < 3 && t->format->node_capacity < FRB_MAX_NODES) {
+            /* In a wider format it is another file with another checksum, and the same REVs. */
+            FrbFileInfo winfo;
+            FrbTable wide;
+            uint32_t wide_crc = 0;
+            int max_nodes = 0;
+            for (int n = 1; n <= FRB_COMPACT_CLASSES; n++)
+                if (info->class_count[n]) max_nodes = n;
+            CHECK(frb_compact_table_crc(b, frb_format(3), &wide_crc) == FRB_OK);
+            CHECK(frb_compact_expand(b, frb_format(3), out, &written) == FRB_OK && written == wide_crc);
+            CHECK(frb_file_read(out, &wide, &winfo, NULL) == FRB_OK);
+            CHECK(winfo.version == 3 && winfo.table_crc == wide_crc && winfo.complete &&
+                  winfo.max_minimal_nodes == max_nodes);
+            CHECK(frb_compact_equals_table(b, &wide, NULL) == FRB_OK);
+            frb_table_destroy(&wide);
+        }
+        remove(out);
+    }
+    free(image);
     frb_compact_close(b);
     remove(path);
 }
@@ -398,6 +496,13 @@ static void test_all_classes(void) {
         CHECK(classes == 31 && info->max_nodes == 31);
         /* This table is not symmetric in its node counts, and that is seen. */
         CHECK(frb_compact_check_symmetry(b, &bad) == FRB_ERR_EVIDENCE);
+        /* A REV of 31 nodes has no place in a format for 16 or 24: nothing is written. */
+        for (int version = 1; version <= 2; version++) {
+            uint32_t crc = 0;
+            CHECK(frb_compact_table_crc(b, frb_format(version), &crc) != FRB_OK);
+            CHECK(frb_compact_expand(b, frb_format(version), file("small.frb"), &crc) != FRB_OK);
+            CHECK(!file_exists(file("small.frb")) && !file_exists(file("small.frb.tmp")));
+        }
     }
     frb_compact_close(b);
     remove(file("a.frb"));
@@ -621,6 +726,7 @@ int main(int argc, char **argv) {
     test_layout();
     test_conversion();
     test_all_classes();
+    test_differences();
     test_refusals();
     for (int bits = 1; bits <= REF_MAX; bits++) free(ref_graph[bits]);
     return t_report("test_compact");

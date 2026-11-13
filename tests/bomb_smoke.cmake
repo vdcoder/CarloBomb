@@ -291,6 +291,12 @@ elseif(MODE STREQUAL "16")
       bomb lookup --file ${W}/fixed-run-16.frb --target 0100100011010110 --out ${W}/g.rev)
   run(0 "Verification: PASS" verify --target 0100100011010110 --graph ${W}/g.rev)
   run(0 "Nodes: 6" solve --target 0100100011010110)
+  # The compact format: 640,084 bytes for the same 65,536 REVs, and back.
+  compact_round_trip(${W}/fixed-run-16.frb c16 1 16)
+  expect_size(${W}/c16.frb 640084)
+  run(0 "16 bits; .*compact, 16-bit Bomb.*Status: MINIMAL.*Nodes: 6.*Verification: PASS"
+      bomb lookup --file ${W}/c16.frb --target 0100100011010110 --out ${W}/gc.rev)
+  expect_same_file(${W}/gc.rev ${W}/g.rev)
 
 elseif(MODE STREQUAL "16full")
   run(0 "Complete: 15,382 of 65,536 targets are emitted by a graph of at most 5 nodes.*the other 50,154 need at least 6.*COMPLETE: every target has a certified minimum.  The largest is 7 nodes"
@@ -299,6 +305,10 @@ elseif(MODE STREQUAL "16full")
   expect_sha256(${W}/fixed-run-16.frb 0394d4d358312ae740ec1c05fbd0c18ca1416dfec3a2fcc400148a9b5e5e6a14)
   run(0 "65536 certified minima reproduced.*Verification: PASS \\(complete certified table\\)"
       bomb verify --file ${W}/fixed-run-16.frb --work-dir ${W}/w --recertify)
+  # The compact file of a table is the same bytes on every machine as well.
+  compact_round_trip(${W}/fixed-run-16.frb c16 1 16)
+  expect_size(${W}/c16.frb 640084)
+  expect_sha256(${W}/c16.frb 51b3e8c8c363a9d2f881f7bf4d326c82d735092031f6f49c62b82e3bacb93a13)
   # One rung up.  The 17-bit table is the same bytes on every machine too.
   run(0 "FixedRunBomb\\(17\\) is complete.*      8 +2 +131,072 +100.00%.*The ladder is complete"
       bomb ladder --dir ${W}/lad --from ${W}/fixed-run-16.frb --to 17 --workers 4 --progress 0)
@@ -306,6 +316,11 @@ elseif(MODE STREQUAL "16full")
   run(0 "Against the complete 16-bit Bomb.*PASS.*2000 certified minima reproduced.*Verification: PASS"
       bomb verify --file ${W}/lad/fixed-run-17.frb --work-dir ${W}/lad/work-17 --against ${W}/fixed-run-16.frb
       --recertify --sample 2000 --engine c)
+  compact_round_trip(${W}/lad/fixed-run-17.frb c17 2 17)
+  expect_size(${W}/c17.frb 1566366)
+  expect_sha256(${W}/c17.frb a48a56e4325ebe856c901704290fc6d2261521dd5246410400e099ff24cf9914)
+  run(0 "Against the complete 16-bit Bomb[^\n]*PASS.*is 8 nodes, needed by 2 strings.*Verification: PASS"
+      bomb verify --file ${W}/c17.frb --against ${W}/fixed-run-16.frb)
 
 else()
   message(FATAL_ERROR "MODE must be small, 16 or 16full")

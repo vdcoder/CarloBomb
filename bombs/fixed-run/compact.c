@@ -584,14 +584,16 @@ FrbError frb_compact_check_symmetry(const FrbCompact *b, uint32_t *bad_index) {
 /* ---- to and from the fixed-width formats ---------------------------------- */
 
 FrbError frb_compact_equals_table(const FrbCompact *b, const FrbTable *table, uint32_t *bad_index) {
-    uint32_t *best;
+    uint32_t waiting[FRB_MAX_BITS + 1]; /* [k]: the choice of a string of k bits ending in 0 */
     int L;
     if (!b || !table || !table->entries || !table->format || table->bits != b->info.bits) return FRB_ERR_ARG;
     L = b->info.bits;
-    /* String for string: the REV the table has. */
     for (uint32_t t = 0;; t++) {
+        /* String for string: the REV the table has. */
         RevGraph mine, theirs;
         FrbStatus status;
+        uint32_t chosen = t, v = t;
+        int bits;
         int same = frb_entry_decode_as(table->format, frb_table_entry(table, t), &status, &theirs) == FRB_OK &&
                    status == FRB_MINIMAL && frb_compact_graph(b, L, t, &mine) == FRB_OK &&
                    mine.node_count == theirs.node_count;
@@ -603,37 +605,39 @@ FrbError frb_compact_equals_table(const FrbCompact *b, const FrbTable *table, ui
             if (bad_index) *bad_index = t;
             return FRB_ERR_EVIDENCE;
         }
-        if (t == table->count - 1) break;
-    }
-    /* Shorter strings: the extension with the fewest nodes in the table,
-     * the lowest index among equals, worked out from the table alone. */
-    best = malloc((size_t)table->count * sizeof *best);
-    if (!best) return FRB_ERR_MEMORY;
-    for (uint32_t t = 0;; t++) {
-        best[t] = t;
-        if (t == table->count - 1) break;
-    }
-    for (int bits = L - 1; bits >= 1; bits--) {
-        for (uint32_t v = 0; v < ((uint32_t)1 << bits); v++) {
-            uint32_t zero = best[2 * v], one = best[2 * v + 1];
-            uint32_t chosen = frb_table_nodes(table, one) < frb_table_nodes(table, zero) ? one : zero;
-            best[v] = chosen;
-            if (frb_compact_ordinal(b, bits, v) != frb_compact_ordinal(b, L, chosen)) {
-                if (bad_index) *bad_index = v << (L - bits);
-                free(best);
+        /*
+         * Shorter strings, worked out from the table alone: each is answered
+         * by its extension with the fewest nodes, the lowest index among
+         * equals.  A string ending in 1 closes the strings it is the last
+         * extension of: for each, the choice of the half ending in 0, which
+         * has waited, against the choice of the half that just closed.
+         */
+        for (bits = L; bits > 1 && (v & 1u); bits--) {
+            uint32_t zero = waiting[bits];
+            if (frb_table_nodes(table, chosen) >= frb_table_nodes(table, zero)) chosen = zero;
+            v >>= 1;
+            if (frb_compact_ordinal(b, bits - 1, v) != frb_compact_ordinal(b, L, chosen)) {
+                if (bad_index) *bad_index = v << (L - bits + 1);
                 return FRB_ERR_EVIDENCE;
             }
         }
+        waiting[bits] = chosen; /* a string of that many bits, ending in 0 unless it is the last of all */
+        if (t == table->count - 1) break;
     }
-    free(best);
     return FRB_OK;
+}
+
+static const FrbFormat *format_of(const FrbCompact *b, const FrbFormat *format) {
+    if (!format) format = frb_format(b->info.source_version);
+    if (!format) format = frb_format_for_bits(b->info.bits);
+    return format && b->info.bits <= format->max_bits ? format : NULL;
 }
 
 FrbError frb_compact_to_table(const FrbCompact *b, const FrbFormat *format, FrbTable *table) {
     FrbError e;
     if (!b || !table) return FRB_ERR_ARG;
-    if (!format) format = frb_format(b->info.source_version);
-    if (!format) format = frb_format_for_bits(b->info.bits);
+    format = format_of(b, format);
+    if (!format) return FRB_ERR_ARG;
     e = frb_table_create_as(table, b->info.bits, format);
     for (uint32_t t = 0; e == FRB_OK; t++) {
         RevGraph g;
@@ -643,6 +647,63 @@ FrbError frb_compact_to_table(const FrbCompact *b, const FrbFormat *format, FrbT
     }
     if (e != FRB_OK) frb_table_destroy(table);
     return e;
+}
+
+FrbError frb_compact_table_crc(const FrbCompact *b, const FrbFormat *format, uint32_t *table_crc) {
+    uint8_t entry[FRB_MAX_ENTRY_BYTES];
+    uint32_t crc = 0;
+    if (!b || !table_crc) return FRB_ERR_ARG;
+    format = format_of(b, format);
+    if (!format) return FRB_ERR_ARG;
+    for (uint32_t t = 0;; t++) {
+        RevGraph g;
+        FrbError e = frb_compact_graph(b, b->info.bits, t, &g);
+        if (e == FRB_OK) e = frb_entry_encode_as(format, FRB_MINIMAL, &g, entry);
+        if (e != FRB_OK) return e;
+        crc = frb_crc32(crc, entry, (size_t)format->entry_bytes);
+        if (t == b->info.count - 1) break;
+    }
+    *table_crc = crc;
+    return FRB_OK;
+}
+
+FrbError frb_compact_expand(const FrbCompact *b, const FrbFormat *format, const char *path, uint32_t *table_crc) {
+    FrbWriter *writer = NULL;
+    FrbSummary summary;
+    FrbFileInfo info;
+    FrbTable back;
+    uint32_t crc = 0;
+    FrbError e;
+    if (!b || !path) return FRB_ERR_ARG;
+    format = format_of(b, format);
+    if (!format) return FRB_ERR_ARG;
+    e = frb_writer_open(path, b->info.bits, format, &writer);
+    if (e != FRB_OK) return e;
+    for (uint32_t t = 0;; t++) {
+        RevGraph g;
+        e = frb_compact_graph(b, b->info.bits, t, &g);
+        if (e == FRB_OK) e = frb_writer_put(writer, FRB_MINIMAL, &g); /* runs it */
+        if (e != FRB_OK) {
+            frb_writer_abort(writer);
+            return e;
+        }
+        if (t == b->info.count - 1) break;
+    }
+    e = frb_writer_finish(writer, &summary, &crc);
+    if (e != FRB_OK) return e;
+    /* What is on disk now, read as any reader would, against this Bomb. */
+    e = frb_file_read(path, &back, &info, NULL);
+    if (e == FRB_OK) {
+        if (!info.complete || info.table_crc != crc || info.version != format->version) e = FRB_ERR_EVIDENCE;
+        else e = frb_compact_equals_table(b, &back, NULL);
+        frb_table_destroy(&back);
+    }
+    if (e != FRB_OK) {
+        remove(path);
+        return e;
+    }
+    if (table_crc) *table_crc = crc;
+    return FRB_OK;
 }
 
 /* The bytes of a file being made: a shared mapping of the temporary file

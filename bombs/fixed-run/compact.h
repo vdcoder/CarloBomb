@@ -152,13 +152,27 @@ FrbError frb_compact_write(const char *path, const FrbTable *table, int source_v
 /* The same REVs, the same order of preference: every string of L bits has
  * the REV the table has for it (FRB_ERR_EVIDENCE and *bad_index otherwise),
  * and every shorter string is answered by its extension with the fewest
- * nodes and, among those, the lowest index. */
+ * nodes and, among those, the lowest index, worked out from the table
+ * alone.  One pass over both, in a constant amount of memory. */
 FrbError frb_compact_equals_table(const FrbCompact *bomb, const FrbTable *table, uint32_t *bad_index);
 
 /* The fixed-width table a compact Bomb stands for, on the heap, in the
  * given format (NULL: the format of the file it was made from, or the one
  * its length calls for).  Written with frb_file_write it is that file. */
 FrbError frb_compact_to_table(const FrbCompact *bomb, const FrbFormat *format, FrbTable *table);
+
+/* The table checksum that file has, without making it: for a compact file
+ * that names its source, this must be the checksum it names. */
+FrbError frb_compact_table_crc(const FrbCompact *bomb, const FrbFormat *format, uint32_t *table_crc);
+
+/*
+ * That file, written entry by entry without holding the table, then read
+ * back as any reader would and compared with the compact Bomb, REV for REV
+ * and prefix for prefix.  A file that fails the comparison is removed.
+ * *table_crc, if not NULL, receives its table checksum.
+ */
+FrbError frb_compact_expand(const FrbCompact *bomb, const FrbFormat *format, const char *path,
+                            uint32_t *table_crc);
 
 #ifdef __cplusplus
 }

@@ -341,6 +341,14 @@ if(MODE STREQUAL "small")
   run(1 "11 bits: [^\n]*exists and is not the compact file of.*  11 +NOT MIGRATED.*  12 +139,328"
       bomb migrate --dir ${W}/lad3 --output ${W}/v4-other)
   expect_same_file(${W}/v4-other/fixed-run-11.v4.frb ${W}/c10.frb)
+  # nor is a compact file of the right length that was made from another table of that length:
+  # cb.frb is the compact file of b.frb, which certifies the minima of a.frb with other REVs
+  file(MAKE_DIRECTORY ${W}/lad10)
+  file(MAKE_DIRECTORY ${W}/v4-10)
+  file(COPY_FILE ${W}/a.frb ${W}/lad10/fixed-run-10.frb)
+  file(COPY_FILE ${W}/cb.frb ${W}/v4-10/fixed-run-10.v4.frb)
+  run(1 "10 bits: [^\n]*exists and is not the compact file of.*  10 +NOT MIGRATED" bomb migrate --dir ${W}/lad10 --output ${W}/v4-10)
+  expect_same_file(${W}/v4-10/fixed-run-10.v4.frb ${W}/cb.frb)
   # a partial table is skipped; a directory without Bombs, and the ladder's own directory, are refused
   file(MAKE_DIRECTORY ${W}/partial)
   file(COPY_FILE ${W}/a-partial.frb ${W}/partial/fixed-run-10.frb)

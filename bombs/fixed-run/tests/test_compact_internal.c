@@ -440,6 +440,46 @@ int main(int argc, char **argv) {
         CHECK(frb_compact_against_table(&b, &t, NULL, &bad) == FRB_OK);
     }
 
+    /* Two small REVs that have changed places in memory since the reader accepted the file: each
+     * is a valid REV of the right number of nodes, and neither emits its string.  The comparison
+     * runs every REV, and stops at the first of the two. */
+    {
+        uint32_t first = 0, second = 0;
+        int found = 0;
+        for (uint32_t i = 0; i < t.count / 2 && !found; i++) {
+            unsigned n = nodes_at(b.nodes, i);
+            if (n < 3 || n > FRB_COMPACT_PLAIN_NODES) continue;
+            for (uint32_t j = i + 1; j < t.count / 2 && !found; j++) {
+                if (nodes_at(b.nodes, j) != n) continue;
+                if (record_at(b.classes[n], rank_of(&b, i, n), b.info.class_bits[n]) ==
+                    record_at(b.classes[n], rank_of(&b, j, n), b.info.class_bits[n]))
+                    continue;
+                first = i, second = j, found = 1;
+            }
+        }
+        CHECK(found);
+        if (found) {
+            unsigned n = nodes_at(b.nodes, first), width = b.info.class_bits[n];
+            uint8_t *class_bytes = image + b.info.class_offset[n];
+            uint64_t one = record_at(class_bytes, rank_of(&b, first, n), width);
+            uint64_t two = record_at(class_bytes, rank_of(&b, second, n), width);
+            for (int swap = 0; swap < 2; swap++) { /* exchanged, and exchanged back */
+                uint64_t at[2] = {rank_of(&b, first, n), rank_of(&b, second, n)};
+                uint64_t value[2] = {swap ? one : two, swap ? two : one};
+                for (int k = 0; k < 2; k++) {
+                    for (unsigned bit = 0; bit < width; bit++) {
+                        uint64_t place = at[k] * width + bit;
+                        class_bytes[place >> 3] &= (uint8_t)~(1u << (place & 7u));
+                    }
+                    record_put(class_bytes, at[k], width, value[k]);
+                }
+                bad = ~0u;
+                if (!swap) CHECK(frb_compact_against_table(&b, &t, NULL, &bad) == FRB_ERR_EVIDENCE && bad == first);
+                else CHECK(frb_compact_against_table(&b, &t, NULL, &bad) == FRB_OK);
+            }
+        }
+    }
+
     /* The fixed-width version a Bomb expands to: the one asked for if it can hold the length,
      * else none; unasked, the one it was made from, or the one its length calls for. */
     {
@@ -481,10 +521,13 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Records at every place of a byte, of every width, next to their neighbours. */
+    /* Records at every place of a byte, of every width, next to their neighbours.  The widest
+     * record of the format has 58 bits and never begins at an odd bit; the two functions are
+     * written for any width up to 63, where a record can reach into a ninth byte, and are
+     * tested as written. */
     {
         static uint8_t bytes[64 * 8 + 16];
-        for (unsigned width = 1; width <= 58; width++) {
+        for (unsigned width = 1; width <= 63; width++) {
             uint64_t mask = ((uint64_t)1 << width) - 1u, x = 0x9E3779B97F4A7C15ull;
             memset(bytes, 0, sizeof bytes);
             for (uint64_t i = 0; i < 64; i++) {

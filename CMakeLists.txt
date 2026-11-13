@@ -244,8 +244,9 @@ endif()
 add_test(NAME test_fixed_run_ladder
   COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_test_work)
 set_tests_properties(test_fixed_run_ladder PROPERTIES TIMEOUT 600)
-# The compact format (version 4): packing, layout, conversion both ways, the
-# prefix index against a scan of the table, and damaged files.
+# The compact format (version 4): the graph of a REV as a rank and its colors
+# found again; packing, layout, conversion both ways, every answer against a
+# scan of the table, and damaged files.
 add_executable(test_topology bombs/fixed-run/tests/test_topology.c)
 target_include_directories(test_topology PRIVATE tests)
 target_link_libraries(test_topology PRIVATE carlobomb_fixed_run carlobomb_minimal)

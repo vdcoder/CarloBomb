@@ -166,10 +166,12 @@ static int plain_unpack(uint64_t code, int nodes, FrbTopology *t, uint32_t *colo
     return 1;
 }
 
-/* Record number `index` of a class of records of `width` bits (58 at most):
- * bit k of the class is bit k % 8 of its byte k / 8.  Reads up to 9 bytes
- * from the first byte of the record, which the 8 zero bytes at the end of
- * the file make safe for the last record of the last class. */
+/* Record number `index` of a class of records of `width` bits (63 at most):
+ * bit k of the class is bit k % 8 of its byte k / 8.  Reads 8 bytes from the
+ * first byte of the record, and a ninth where the record reaches into one,
+ * which the 8 zero bytes at the end of the file make safe for the last record
+ * of the last class.  (No record of the format does reach into a ninth byte:
+ * the widest has 58 bits, and a multiple of 58 is an even bit.) */
 static inline uint64_t record_at(const uint8_t *class_bytes, uint64_t index, unsigned width) {
     uint64_t bit = index * width;
     const uint8_t *p = class_bytes + (bit >> 3);
@@ -499,9 +501,14 @@ static FrbError stored_rev(const FrbCompact *b, uint32_t s, FrbTopology *t, uint
         FrbTopology canonical;
         uint8_t order[FRB_TOPOLOGY_MAX_NODES];
         uint32_t found = 0;
+        int reached;
         if (!frb_topology_unrank((int)n, record, &canonical)) return FRB_ERR_ENTRY;
         /* the colors, and with them the order in which the machine reaches the nodes: the numbering */
-        if (frb_topology_find_colors(&canonical, s, b->info.bits, &found, order) != (int)n) return FRB_ERR_OUTPUT;
+        reached = frb_topology_find_colors(&canonical, s, b->info.bits, &found, order);
+        if (reached == 0) return FRB_ERR_OUTPUT; /* no colors with which this graph emits the string */
+        /* It emits the string and does not need all its nodes for it: not the record of a REV of
+         * this many nodes for this string, and no numbering of its nodes follows from the string. */
+        if (reached != (int)n) return FRB_ERR_ENTRY;
         frb_topology_renumber(&canonical, found, order, t, colors);
     }
     return FRB_OK;

@@ -153,7 +153,11 @@ typedef struct FrbCompact FrbCompact;
  * under it call for; every REV decoded, its colors found, and run for L bits
  * against its string.  The file is mapped where the system can, else read.
  * On FRB_ERR_ENTRY or FRB_ERR_OUTPUT *bad_index (if not NULL) is the first
- * string of L bits at which the file is wrong.
+ * string of L bits at which the file is wrong.  FRB_ERR_OUTPUT: a REV that
+ * does not emit its string, with any colors.  FRB_ERR_ENTRY: a node count, a
+ * count of a block or a navigation bit that is not what the others make it;
+ * a record that is no graph; a graph that emits the string without one of
+ * its nodes, which is the REV of that string for no number of nodes.
  *
  * A file that passes is consistent in itself.  That its node counts are
  * minima is certified by the construction of its source and by nothing in

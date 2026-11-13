@@ -24,9 +24,9 @@ struct RevFixedBomb {
     size_t entry_bytes, graph_bytes; /* of the table's format */
     int max_nodes;    /* the largest minimum in the table */
     /*
-     * A Bomb in the compact format (version 4) carries its prefix index in
-     * the file and its node counts in its class directory: nothing above is
-     * used for it, and nothing is built when it is opened.
+     * A Bomb in the compact format (version 4) carries its navigation bits
+     * and its node counts in the file: nothing above is used for it, and
+     * nothing is built when it is opened.
      */
     FrbCompact *compact;
 };

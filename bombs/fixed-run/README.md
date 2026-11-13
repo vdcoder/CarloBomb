@@ -371,13 +371,16 @@ carlobomb bomb migrate --dir ladder --output ladder-v4
 
 For every complete `fixed-run-L.frb` in `ladder` this writes
 `ladder-v4/fixed-run-L.v4.frb`, exactly as `bomb compact` would, and prints
-a table of sizes at the end. The 24-bit Bomb takes about 40 seconds and the
-memory of its fixed-width file; each length twice the one before.
+a table of sizes at the end. On the development machine the 24-bit Bomb
+takes 35 seconds and each length twice the one before; the nine Bombs of 16
+to 24 bits take 67 seconds together. The command needs no memory of its own
+to speak of: the files are mapped, and what is resident are pages of the
+fixed-width file, which the system can take back.
 
 - **The ladder directory is only read.** Nothing in it is written, renamed
   or removed, and the output has to be another directory. A ladder that is
-  running is not disturbed in its files; it will feel the processor and the
-  memory, so a quiet hour is the better time.
+  running is not disturbed in its files; it will feel one core being used
+  for that time.
 - **Nothing is replaced.** A compact file that is there already is left as
   it is if it was made from the same table, and reported if it was not. Run
   the command again after the next length is finished and it does only that

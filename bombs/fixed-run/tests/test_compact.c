@@ -604,6 +604,30 @@ static void test_other_revs(void) {
 
 /* ---- what the writer refuses ------------------------------------------------- */
 
+/* A link of the REV that the machine does not follow while it emits `bits` bits; 0 if it follows all. */
+static int unused_link(const RevGraph *g, int bits, int *node, int *port) {
+    int used[REV_MAX_NODES][2], fp = 0, cp = 0;
+    memset(used, 0, sizeof used);
+    for (int k = 0; k < bits; k++) {
+        int c;
+        if (k) {
+            c = g->nodes[cp].color;
+            used[fp][c] = 1;
+            fp = g->nodes[fp].links[c];
+        }
+        c = g->nodes[fp].color;
+        used[cp][c] = 1;
+        cp = g->nodes[cp].links[c];
+    }
+    for (int i = 0; i < g->node_count; i++)
+        for (int c = 0; c < 2; c++)
+            if (!used[i][c]) {
+                *node = i, *port = c;
+                return 1;
+            }
+    return 0;
+}
+
 static void test_write_refusals(void) {
     const char *path = file("w.frb"), *tmp = file("w.frb.tmp");
     FrbTable t, bad;
@@ -650,6 +674,40 @@ static void test_write_refusals(void) {
         CHECK(frb_table_put(&seven, 5 ^ (seven.count - 1u), FRB_MINIMAL, &c) == FRB_OK);
         CHECK(frb_compact_write(path, &seven, 1, 0) == FRB_ERR_EVIDENCE && !file_exists(path) && !file_exists(tmp));
         frb_table_destroy(&seven);
+    }
+
+    /* The same where a link does lead to the node, a link the machine never follows: a REV of 5
+     * nodes with a sixth behind such a link.  Its colors can be found; they leave the sixth node
+     * out, and with it the numbering of the nodes is not settled. */
+    {
+        FrbTable eleven;
+        int made = 0;
+        solved_table(&eleven, 11, frb_format(1));
+        for (uint32_t at = 0; at < eleven.count / 2 && !made; at++) {
+            FrbTopology topology, canonical;
+            uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+            uint32_t colors = 0, found = 0;
+            int node = 0, port = 0;
+            if (frb_table_nodes(&eleven, at) != 5 || frb_table_get(&eleven, at, &status, &g) != FRB_OK ||
+                !unused_link(&g, 11, &node, &port))
+                continue;
+            padded = g;
+            padded.nodes[node].links[port] = 5;
+            padded.nodes[5].color = 0;
+            padded.nodes[5].links[0] = padded.nodes[5].links[1] = 5;
+            padded.node_count = 6;
+            if (!frb_topology_from_graph(&padded, &topology, &colors) ||
+                frb_topology_canonical(&topology, &canonical, NULL) != 6 ||
+                frb_topology_find_colors(&canonical, at, 11, &found, order) != 5)
+                continue;
+            frb_graph_complement(&padded, &c);
+            CHECK(frb_table_put(&eleven, at, FRB_MINIMAL, &padded) == FRB_OK);
+            CHECK(frb_table_put(&eleven, at ^ (eleven.count - 1u), FRB_MINIMAL, &c) == FRB_OK);
+            CHECK(frb_compact_write(path, &eleven, 1, 0) == FRB_ERR_EVIDENCE && !file_exists(path) && !file_exists(tmp));
+            made = 1;
+        }
+        CHECK(made);
+        frb_table_destroy(&eleven);
     }
 
     /* more than 12 nodes */
@@ -776,6 +834,8 @@ static void test_refusals(void) {
             {16, 1, FRB_ERR_HEADER},     {20, 0, FRB_ERR_HEADER},   {20, 3, FRB_ERR_HEADER}, {24, 1, FRB_ERR_HEADER},
             {28, 1, FRB_ERR_HEADER},     {32, 5, FRB_ERR_HEADER},   {33, 7, FRB_ERR_HEADER}, {34, 4, FRB_ERR_HEADER},
             {49, 0xEE, FRB_ERR_HEADER},  {53, 1, FRB_ERR_HEADER},   {59, 1, FRB_ERR_HEADER},
+            /* the checksum of the directory, with a directory that is right in every field */
+            {36, 0x5A, FRB_ERR_HEADER},  {39, 0xA5, FRB_ERR_HEADER},
         };
         for (size_t k = 0; k < sizeof fields / sizeof fields[0]; k++) {
             FrbError e;
@@ -793,6 +853,20 @@ static void test_refusals(void) {
         image[34] = 2;
         wr32(image + 60, frb_crc32(0, image, 60));
         CHECK(open_image(image, size, &bad) == FRB_OK);
+        /* The checksum of the index, with an index that is right in every bit: nothing in the
+         * header shows it, and a single question is answered; a reader that validates refuses. */
+        memcpy(image, good, size);
+        image[41] ^= 0x10;
+        wr32(image + 60, frb_crc32(0, image, 60));
+        CHECK(open_image(image, size, &bad) == FRB_ERR_CHECKSUM);
+        CHECK(frb_compact_file_info(file("d.frb"), NULL) == FRB_OK && lookup_image(image, size, 3, 5) == FRB_OK);
+        /* and the checksum of a class, with a class that is right in every bit */
+        memcpy(image, good, size);
+        image[FRB_HEADER_BYTES + 5 * FRB_COMPACT_ROW_BYTES + 25] ^= 0x04;
+        wr32(image + 36, frb_crc32(0, image + FRB_HEADER_BYTES, FRB_COMPACT_MAX_NODES * FRB_COMPACT_ROW_BYTES));
+        wr32(image + 60, frb_crc32(0, image, 60));
+        CHECK(open_image(image, size, &bad) == FRB_ERR_CHECKSUM);
+        CHECK(frb_compact_file_info(file("d.frb"), NULL) == FRB_OK && lookup_image(image, size, 3, 5) == FRB_OK);
     }
 
     /* 4. The directory, with its checksum and the header's made right. */
@@ -901,6 +975,73 @@ static void test_refusals(void) {
         DAMAGE(image[info.class_offset[3] + 1] ^= 0x80, FRB_ERR_OUTPUT, -1);
         /* a link to a node that is not there: 3 nodes, links of 2 bits, one of them 3 */
         DAMAGE(image[info.class_offset[3]] |= 0x18, FRB_ERR_ENTRY, -1);
+        /* the same for each link of each node, on either color, whether the string ever follows it
+         * or not: the first REV of 3 nodes (links of 2 bits, 3 is no node) and of 5 (3 bits, 7) */
+        for (int n = 3; n <= 5; n += 2) {
+            int w = n == 3 ? 2 : 3;
+            CHECK(info.class_count[n] > 0);
+            for (int field = 0; field < 2 * n; field++) {
+                FrbError e;
+                memcpy(image, good, size);
+                for (int k = 0; k < w; k++) {
+                    int bit = n + field * w + k;
+                    image[info.class_offset[n] + (uint64_t)(bit >> 3)] |= (uint8_t)(1u << (bit & 7));
+                }
+                reseal(image, &info);
+                e = open_image(image, size, &bad);
+                CHECK_MSG(e == FRB_ERR_ENTRY, "%d nodes, link %d of node %d set to a node that is not there: %s", n,
+                          field & 1, field >> 1, frb_error_str(e));
+            }
+        }
+        /*
+         * A graph that emits the string and has a node the string does not need.  Made from the REV
+         * of a string of 5 nodes: a sixth node, at the end of a link the machine never follows.
+         * The string is given 6 as its node count and that graph as its record, in the place of the
+         * next REV of 6 nodes.  The colors can be found, and they do not reach the sixth node: this
+         * is not the record of a REV of 6 nodes for the string, and nothing says how to number it.
+         */
+        {
+            int made = 0;
+            for (uint32_t at = 0; at < stored && !made; at++) {
+                FrbTopology topology, canonical;
+                FrbStatus status;
+                RevGraph g;
+                uint8_t order[FRB_TOPOLOGY_MAX_NODES];
+                uint32_t colors = 0, found = 0, place = 0;
+                uint64_t rank, first;
+                int node = 0, port = 0;
+                FrbError e;
+                if (frb_table_nodes(&t, at) != 5 || frb_table_get(&t, at, &status, &g) != FRB_OK ||
+                    !unused_link(&g, L, &node, &port))
+                    continue;
+                g.nodes[node].links[port] = 5;
+                g.nodes[5].color = 0;
+                g.nodes[5].links[0] = g.nodes[5].links[1] = 5;
+                g.node_count = 6;
+                if (!frb_topology_from_graph(&g, &topology, &colors) || frb_topology_canonical(&topology, &canonical, NULL) != 6 ||
+                    frb_topology_find_colors(&canonical, at, L, &found, order) != 5)
+                    continue;
+                for (uint32_t before = 0; before < at; before++)
+                    place += ((good[info.nodes_offset + (before >> 1)] >> (4 * (before & 1))) & 15) == 6;
+                if (place >= info.class_count[6]) continue; /* no REV of 6 nodes after it to take the place of */
+                memcpy(image, good, size);
+                nodes[at >> 1] ^= (uint8_t)((5u ^ 6u) << (4 * (at & 1)));
+                rank = frb_topology_rank(&canonical);
+                first = (uint64_t)place * info.class_bits[6];
+                for (unsigned k = 0; k < info.class_bits[6]; k++) {
+                    uint8_t *byte = image + info.class_offset[6] + ((first + k) >> 3);
+                    *byte = (uint8_t)((*byte & ~(1u << ((first + k) & 7))) | (((rank >> k) & 1u) << ((first + k) & 7)));
+                }
+                reseal(image, &info);
+                bad = 0xFFFFFFFFu;
+                e = open_image(image, size, &bad);
+                CHECK_MSG(e == FRB_ERR_ENTRY && bad == at, "a graph with a node its string does not need: %s at %u, not %u",
+                          frb_error_str(e), (unsigned)bad, (unsigned)at);
+                CHECK(lookup_image(image, size, L, at) == FRB_ERR_ENTRY);
+                made = 1;
+            }
+            CHECK(made);
+        }
         /* bits after the last record of a class, and the bytes after the last class */
         {
             uint64_t used = (uint64_t)info.class_count[6] * info.class_bits[6];
@@ -931,6 +1072,25 @@ static void test_refusals(void) {
         wr32(image + 60, frb_crc32(0, image, 60));
         CHECK(open_image(image, size, &bad) == FRB_ERR_HEADER);
 
+        /* The comparison put to a file in which a node count is none: no answer, where the file as
+         * it was gives one.  Nothing validates such a file before a single question. */
+        {
+            int which = -1, counts[2] = {0, 0};
+            spit(file("d.frb"), good, size);
+            CHECK(frb_compact_file_compare(file("d.frb"), L - 1, six >> 1, NULL, &which, counts) == FRB_OK &&
+                  counts[six & 1] == 6 && which >= 0);
+            for (int k = 0; k < 2; k++) {
+                memcpy(image, good, size);
+                if (k) nodes[six >> 1] |= (uint8_t)(15u << (4 * (six & 1)));
+                else nodes[six >> 1] &= (uint8_t)~(15u << (4 * (six & 1)));
+                spit(file("d.frb"), image, size);
+                which = -1;
+                CHECK(frb_compact_file_compare(file("d.frb"), L - 1, six >> 1, NULL, &which, counts) == FRB_ERR_ENTRY &&
+                      which == -1);
+            }
+            CHECK(frb_compact_file_compare(file("d.frb"), L, six, NULL, &which, counts) == FRB_ERR_ARG);
+            CHECK(frb_compact_file_compare(file("d.frb"), L - 1, six >> 1, NULL, NULL, counts) == FRB_ERR_ARG);
+        }
         /* A single question put to a damaged file is answered from what it finds, without the
          * checksums: it must not read outside the file, and must not return a REV that does not
          * emit the string. */
@@ -985,6 +1145,72 @@ static void test_refusals(void) {
            flips);
 }
 
+/*
+ * Everything in a file that no string stands on has to be zero.  In a file of
+ * some size most of that is whole bytes; the single bits (navigation bits
+ * after the last, node counts after the last, the bits after the last record
+ * of a class) only exist where the numbers are small.  So: the Bombs of 1 to
+ * 7 bits, and in each every bit of that kind set in turn, the checksums made
+ * right.
+ */
+static void test_unused_bits(void) {
+    int tried = 0, kinds[5] = {0, 0, 0, 0, 0};
+    for (int L = 1; L <= 7; L++) {
+        const char *path = file("u.frb");
+        FrbTable t;
+        FrbCompactInfo info;
+        uint8_t *good, *image;
+        size_t size;
+        uint32_t bad = 0;
+        solved_table(&t, L, frb_format(1));
+        remove(path);
+        CHECK(frb_compact_write(path, &t, 1, 0) == FRB_OK && frb_compact_file_info(path, &info) == FRB_OK);
+        good = slurp(path, &size);
+        image = malloc(size);
+        CHECK(good && image && size == info.file_bytes);
+        if (good && image) {
+            /* [first, last) in bits of the file, for each part: what is used ends at first */
+            uint64_t from[5 + FRB_COMPACT_MAX_NODES], to[5 + FRB_COMPACT_MAX_NODES];
+            int kind[5 + FRB_COMPACT_MAX_NODES], parts = 0;
+            from[parts] = 8 * info.nav_offset, to[parts] = 8 * info.nav_offset + 1, kind[parts++] = 0; /* place 0 */
+            from[parts] = 8 * info.nav_offset + info.stored, to[parts] = 8 * (info.nav_offset + info.nav_bytes);
+            kind[parts++] = 0;
+            from[parts] = 8 * info.nodes_offset + 4 * (uint64_t)info.stored;
+            to[parts] = 8 * (info.nodes_offset + info.nodes_bytes), kind[parts++] = 1;
+            from[parts] = 8 * (info.blocks_offset + (uint64_t)info.block_rows * (uint64_t)info.max_nodes * 4u);
+            to[parts] = 8 * (info.blocks_offset + info.blocks_bytes), kind[parts++] = 2;
+            for (int n = 1; n <= FRB_COMPACT_MAX_NODES; n++) {
+                from[parts] = 8 * info.class_offset[n] + (uint64_t)info.class_count[n] * info.class_bits[n];
+                to[parts] = 8 * (info.class_offset[n] + info.class_bytes[n]), kind[parts++] = 3;
+            }
+            from[parts] = 8 * (info.file_bytes - 8), to[parts] = 8 * info.file_bytes, kind[parts++] = 4;
+            for (int k = 0; k < parts; k++) {
+                for (uint64_t bit = from[k]; bit < to[k]; bit++) {
+                    FrbError e;
+                    memcpy(image, good, size);
+                    image[bit >> 3] |= (uint8_t)(1u << (bit & 7));
+                    reseal(image, &info);
+                    e = open_image(image, size, &bad);
+                    CHECK_MSG(e == FRB_ERR_HEADER, "%d bits, bit %llu of the file set: %s", L, (unsigned long long)bit,
+                              frb_error_str(e));
+                    tried++;
+                    /* a bit within a byte that is otherwise used: the kind no test of whole bytes meets */
+                    kinds[kind[k]] += (bit & 7) != 0 && bit == from[k];
+                }
+            }
+        }
+        free(good);
+        free(image);
+        remove(path);
+        remove(file("d.frb"));
+        frb_table_destroy(&t);
+    }
+    /* each kind was met at a bit inside a used byte at least once, but for the last 8 bytes, which are whole */
+    CHECK(kinds[0] > 0 && kinds[1] > 0 && kinds[3] > 0 && tried > 1000);
+    printf("unused bits: in the Bombs of 1 to 7 bits, each of the %d bits no string stands on, set by itself: refused\n",
+           tried);
+}
+
 int main(int argc, char **argv) {
     if (argc > 1) snprintf(scratch, sizeof scratch, "%s", argv[1]);
     frb_topology_init();
@@ -997,5 +1223,6 @@ int main(int argc, char **argv) {
     test_other_revs();
     test_write_refusals();
     test_refusals();
+    test_unused_bits();
     return t_report("test_compact");
 }

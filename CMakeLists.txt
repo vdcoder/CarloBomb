@@ -370,4 +370,19 @@ if(CARLOBOMB_EXPERIMENTS AND CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND CMAKE_S
     # counting node counts in a word needs the population count instruction
     target_compile_options(colorless_lookup PRIVATE -mpopcnt)
   endif()
+  if(UNIX)
+    # Lookups with the files out of the page cache.
+    add_executable(colorless_cold experiments/colorless/colorless_cold.c)
+    target_include_directories(colorless_cold PRIVATE benchmarks)
+    target_link_libraries(colorless_cold PRIVATE carlobomb_fixed_run)
+  endif()
+  if(CARLOBOMB_HAVE_BOMB_BUILD)
+    # The tools on a 13-bit Bomb built for the occasion.
+    add_test(NAME colorless_smoke
+      COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DSCAN=$<TARGET_FILE:colorless_scan>
+              -DLOOKUP=$<TARGET_FILE:colorless_lookup> -DBENCH=$<TARGET_FILE:colorless_bench>
+              -DWORK=${CMAKE_CURRENT_BINARY_DIR}
+              -P ${CMAKE_CURRENT_SOURCE_DIR}/experiments/colorless/smoke.cmake)
+    set_tests_properties(colorless_smoke PROPERTIES TIMEOUT 600)
+  endif()
 endif()

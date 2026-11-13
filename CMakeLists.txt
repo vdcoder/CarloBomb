@@ -237,6 +237,15 @@ endif()
 add_test(NAME test_fixed_run_ladder
   COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_test_work)
 set_tests_properties(test_fixed_run_ladder PROPERTIES TIMEOUT 600)
+# The compact format (version 4): packing, layout, conversion both ways, the
+# prefix index against a scan of the table, and damaged files.
+add_executable(test_compact bombs/fixed-run/tests/test_compact.c)
+target_include_directories(test_compact PRIVATE tests)
+target_link_libraries(test_compact PRIVATE carlobomb_fixed_run carlobomb_minimal)
+add_test(NAME test_compact COMMAND test_compact ${CMAKE_CURRENT_BINARY_DIR}/compact_test)
+add_test(NAME test_compact_unmapped COMMAND test_compact ${CMAKE_CURRENT_BINARY_DIR}/compact_test_unmapped)
+set_tests_properties(test_compact_unmapped PROPERTIES ENVIRONMENT "CARLOBOMB_NO_MMAP=1")
+
 # The same with tables read into memory instead of mapped from their files.
 add_test(NAME test_fixed_run_ladder_unmapped
   COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_unmapped_work)

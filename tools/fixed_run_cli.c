@@ -742,9 +742,15 @@ static int cmd_compact(const BombArgs *a) {
         fprintf(stderr, "error: %s is in the compact format already\n", a->file);
         return X_USAGE;
     }
+    memset(&info, 0, sizeof info);
     e = frb_file_read(a->file, &t, &info, &bad); /* header, length, both checksums, every REV run */
     if (e == FRB_ERR_IO) {
         fprintf(stderr, "cannot read %s\n", a->file);
+        return X_USAGE;
+    }
+    if (e == FRB_OK && a->index_bytes >= 0 && (a->index_bytes < (info.bits + 7) / 8 || a->index_bytes > 4)) {
+        fprintf(stderr, "error: --index-bytes must be %d..4 for %d-bit targets\n", (info.bits + 7) / 8, info.bits);
+        frb_table_destroy(&t);
         return X_USAGE;
     }
     if (e == FRB_OK && !output_is_free(a->output)) {
@@ -770,10 +776,6 @@ static int cmd_compact(const BombArgs *a) {
     fflush(stdout);
     e = frb_compact_write(a->output, &t, info.version, info.table_crc, a->index_bytes > 0 ? (int)a->index_bytes : 0);
     frb_table_destroy(&t);
-    if (e == FRB_ERR_ARG) {
-        fprintf(stderr, "error: --index-bytes must be %d..4 for %d-bit targets\n", (info.bits + 7) / 8, info.bits);
-        return X_USAGE;
-    }
     if (e != FRB_OK) {
         fprintf(stderr, "error: cannot write %s: %s.  Nothing was written.\n", a->output, frb_error_str(e));
         return X_FAIL;

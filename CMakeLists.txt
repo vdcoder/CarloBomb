@@ -65,7 +65,8 @@ target_link_libraries(carlobomb_minimal PUBLIC carlobomb_level)
 
 # FixedRunBomb.  The file format and the enumerator are plain C11; building a
 # table (journal, worker processes) needs POSIX.
-add_library(carlobomb_fixed_run STATIC bombs/fixed-run/fixed_run.c bombs/fixed-run/enumerate.c)
+add_library(carlobomb_fixed_run STATIC bombs/fixed-run/fixed_run.c bombs/fixed-run/enumerate.c
+  bombs/fixed-run/compact.c)
 target_include_directories(carlobomb_fixed_run PUBLIC bombs/fixed-run)
 target_link_libraries(carlobomb_fixed_run PUBLIC carlobomb_rev)
 set(CARLOBOMB_HAVE_BOMB_BUILD OFF)

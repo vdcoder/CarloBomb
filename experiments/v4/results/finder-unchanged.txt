@@ -41,5 +41,4 @@ Is the finder what it was?  13 November 2026, development container
 
    Each of the six runs: 4,778,891,950, 16,902,096,386 and 47,431,541,189 steps, and the same 19-bit table.
    The two builds are equally fast; the container is slower today than on the day of the recorded ladder
-   (54.2 s at level 19 then).  The same shows in the lookups: 343 ns then, 393 ns now, for a verified REV
-   from the fixed-width file.
+   (54.2 s at level 19 then).

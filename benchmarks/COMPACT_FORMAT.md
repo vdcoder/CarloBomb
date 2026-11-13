@@ -34,9 +34,10 @@ with any other copy.
   string, every node count is unchanged, every shorter string gets the
   answer the FixedSolver gives from the fixed-width file, and each
   fixed-width file comes back from its compact file byte for byte.
-- **It is format version 4, not 3.** Version 3 was taken while the issue was
-  open: it is what the owner's ladder writes for 25 bits and more tonight.
-  Details and the alternative are in "The version number" below.
+- **It is format version 4, not 3.** Version 3 is the fixed-width format for
+  25 to 31 bits that Milestone 5 asked for under that number, and the
+  owner's ladder has been writing it since. Details and the alternative are
+  in "The version number" below.
 - **A compact file is 38% of a fixed-width one, and nearly half of it is the
   prefix index.** The REVs alone shrink to a fifth.
 - **A lookup of a REV costs one more memory access** than in a fixed-width
@@ -107,11 +108,12 @@ Two things follow from the design itself and cannot be decided away:
 ### The version number
 
 The issue reserves "v3" for this layout and says, rightly, that two
-incompatible formats must not ship under one number. While it was open,
-Milestone 5 implemented the fixed-width format for 25 to 31 bits as version
-3, and the owner's machine is writing version-3 journals and tables with it
-now. So one of the two had to take another number, and it could only be the
-one with no files yet: **the compact layout is format version 4.**
+incompatible formats must not ship under one number. The Milestone 5 brief
+of the same evening asked for the fixed-width format for 25 to 31 bits as
+version 3; it was built as that, and the owner's machine has been writing
+version-3 journals and tables with it since. So one of the two had to take
+another number, and it could only be the one with no files yet: **the
+compact layout is format version 4.**
 
 Nothing about versions 1, 2 and 3 changed: not a byte of any file means
 something else, and the readers of the fixed-width formats reject a
@@ -152,9 +154,10 @@ memory from the compact file and measures it against the one in the format:
 
 Half the index for 55 ns on a node count of a shorter string, and nothing
 measurable on a REV: the walk ends at the L-bit string, so the extension is
-known without running the REV on, which pays for the walk. The walk reaches the REV the ordinal names for
-every one of the 8,388,606 shorter strings. From 25 bits, where an ordinal
-is 4 bytes, this saves 2^(L+2) bytes: 134 MB at 25 bits, 268 MB at 26.
+known without running the REV on, which pays for the walk. The walk reaches
+the REV the ordinal names for every one of the 8,388,606 shorter strings.
+From 25 bits, where an ordinal is 4 bytes, this saves nearly 2^(L+2) bytes:
+130 MB at 25 bits, 260 MB at 26.
 
 **D. Complement symmetry.** In every Bomb the ladder has built, the REV of
 a string's complement is exactly the complement of the string's REV, node
@@ -189,9 +192,9 @@ equal REVs equal bytes, but the file would no longer be the source, and
 **Recommendation.** Merge the format as approved: it is correct, verified
 on real data, and reversible, so nothing is lost by having it. Decide on D
 and A before compact Bombs of 25 bits and more are published, because that
-is where they count most (the index is larger than the REVs from 25 bits),
-and because either would be a new version number rather than a change to
-this one.
+is where they count most (from 25 bits an ordinal is 4 bytes, and the index
+is then as large as the REVs or larger), and because either would be a new
+version number rather than a change to this one.
 
 ## The real Bombs, converted
 
@@ -409,10 +412,26 @@ while a ladder builds the next level on the same table.
 
 | Test | Covers |
 |---|---|
-| `test_compact`, `test_compact_unmapped` | Strides and packing against bytes worked out by hand; the layout arithmetic to 31 bits; conversion of every table of 1 to 10 bits from each fixed-width version and back, byte for byte; every string of every length against a scan of the table; all 31 classes; a table that differs in one REV; 1,123 single-bit changes; structural damage with every checksum made right again; version confusion in both directions. 102,134 checks, once with mapped files and once without |
-| `test_compact_internal` | The two independent checks of the index, each shown to refuse a wrong answer for a shorter string on its own, by changing the bytes of an opened Bomb |
-| `test_fixed_bomb_solver` | The 16-bit Bomb in both formats through the solver: the same answer for all 131,070 strings |
-| `bomb_small`, `bomb_16`, `bomb_16full` | The commands end to end: round trips from versions 1, 2 and 3, sizes and SHA-256 of the compact 16- and 17-bit Bombs, lookups of shorter strings, and every refusal |
+| `test_compact`, `test_compact_unmapped` | Strides and packing against bytes worked out by hand; the layout arithmetic to 31 bits; the worked example of the specification, all 1,082 bytes; conversion of every table of 1 to 10 bits from each fixed-width version and back, byte for byte; every string of every length against a scan of the table; all 31 classes; a table that differs in one REV, one link or one color; 1,123 single-bit changes; every field of the header and directory wrong by itself with the checksums made right; structural damage; version confusion in both directions. 104,935 checks, once with mapped files and once without |
+| `test_compact_internal` | The compact code compiled into the test. The two independent checks of the index, each refusing a wrong answer for a shorter string on its own. A writer told to write another REV, or a wrong one, and a file that reads back as another: each found before a file gets its name, nothing left behind |
+| `test_fixed_bomb_solver` | The 16-bit Bomb in both formats through the solver: the same answer for all 131,070 strings, budgets, longer targets; a compact file whose node counts are not symmetric refused |
+| `test_fixed_bomb_internal` | A compact Bomb changed in memory after it was opened: no REV for the strings changed, the others as before |
+| `bomb_small`, `bomb_16`, `bomb_16full` | The commands end to end: round trips from versions 1, 2 and 3, sizes and SHA-256 of the compact 16- and 17-bit Bombs, lookups of shorter strings, a compact file that names a false source, and every refusal |
 
-22 tests with GCC and with Clang, 21 under AddressSanitizer and
-UndefinedBehaviorSanitizer, 19 without the assembly engine: all pass.
+23 tests with GCC and with Clang, 22 under AddressSanitizer and
+UndefinedBehaviorSanitizer, 20 without the assembly engine: all pass.
+
+**Tests of the tests.** 62 bugs were put into the new code one at a time,
+in the reader, the writer, the comparison, the solver and the commands: a
+link one bit too wide, a checksum not compared, the order of the ordinals
+not checked, the larger extension written for a shorter string, an existing
+file replaced, and so on. The tests as first written let six through: the
+reserved bytes of the header, the version an expansion goes to, the
+read-back of an expansion, the opening of a new file before it gets its
+name, the removal of the temporary file after a failed conversion, and the
+solver's last comparison of a compact answer with its target. Four of them
+are checks that only a fault elsewhere can trip, which is why nothing
+exercised them; each now has a test that injects the fault. 61 of the 62
+are caught now. The one that is not removes a second check of a REV's links
+in the solver, behind the same check in the unpacker; it is kept because
+the code after it follows those links.

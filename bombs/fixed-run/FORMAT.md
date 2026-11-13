@@ -607,11 +607,11 @@ and the search revision is a third number, for the reasons given in section
 9.1.
 
 One number means one layout. The proposal for the compact format (issue 6)
-calls it "v3", from a time when version 3 was not taken; by the time it was
-built, tables of 25 bits and more were being written as version 3 of the
-fixed-width format, and those files exist. The compact format therefore has
-the next number, 4, and nothing was renumbered: no byte of any file of
-versions 1 to 3 means anything else than it did.
+calls it "v3"; by the time it was built, tables of 25 bits and more were
+being written as version 3 of the fixed-width format, and those files
+exist. The compact format therefore has the next number, 4, and nothing was
+renumbered: no byte of any file of versions 1 to 3 means anything else than
+it did.
 
 ## 12. The compact format (version 4)
 

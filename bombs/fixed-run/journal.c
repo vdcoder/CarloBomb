@@ -9,13 +9,21 @@
  *   - a witness counts only after it has been unpacked, validated and run on
  *     the interpreter of core/rev;
  *   - a node budget is excluded for a string only by a completed exhaustive
- *     enumeration that did not produce the string, or by a search that
- *     returned PROVEN_UNSAT.  A search stopped by a limit excludes nothing;
+ *     enumeration that did not produce the string, by a search that returned
+ *     PROVEN_UNSAT, or by the certified minimum of the string's first bits
+ *     in the base Bomb the construction builds on.  A search stopped by a
+ *     limit excludes nothing;
  *   - a minimum is certified only when a witness has exactly as many nodes
  *     as the first budget that is not excluded.
+ *
+ * Segments are read as streams, one record at a time, so a journal of any
+ * size is replayed in constant memory beyond the state itself.
  */
 #if defined(__APPLE__)
 #define _DARWIN_C_SOURCE
+#endif
+#if !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64 /* a segment of a long construction passes 2 GB */
 #endif
 
 #include "fixed_run_build.h"
@@ -31,7 +39,7 @@
 
 static const uint8_t frj_magic[8] = {'C', 'B', 'F', 'R', 'J', 0x0D, 0x0A, 0x1A};
 
-enum { SEG_HEADER_BYTES = 64, RECORD_BYTES = 64 };
+enum { SEG_HEADER_BYTES = 64, MAX_RECORD_BYTES = 96 };
 
 /* Segment header field offsets. */
 enum {
@@ -52,7 +60,10 @@ enum {
     S_CRC = 60
 };
 
-/* Record field offsets. */
+/* Record field offsets.  The packed graph follows at R_GRAPH; after it come
+ * reserved bytes up to the checksum in the last four bytes of the record.
+ * Journal version 1 (18-byte graphs): 64 bytes.  Version 2 (33): 80 bytes.
+ * Version 3 (43): 96 bytes. */
 enum {
     R_TYPE = 0,
     R_RESULT = 1,
@@ -65,13 +76,21 @@ enum {
     R_TIME = 32,
     R_AUX = 36,
     R_NODES = 40,
-    R_GRAPH = 41, /* 18 bytes */
-    R_RESERVED = 59,
-    R_CRC = 60
+    R_GRAPH = 41
 };
+
+static int record_bytes(const FrbFormat *f) { return (R_GRAPH + f->graph_bytes + 1 + 4 + 7) / 8 * 8; }
+
+int frb_journal_record_bytes(const FrbFormat *format) { return format ? record_bytes(format) : 0; }
+
+uint64_t frb_state_bytes(int bits, const FrbFormat *format) {
+    if (!format || bits < 1 || bits > format->max_bits) return 0;
+    return ((uint64_t)sizeof(FrbTargetState) + (uint64_t)format->graph_bytes) << bits;
+}
 
 struct FrbSegment {
     FILE *f;
+    const FrbFormat *format;
 };
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...) {
@@ -119,9 +138,10 @@ FrbError frb_segment_create(const char *dir, const FrbConfig *cfg, uint32_t numb
     FrbSegment *s;
     if (!dir || !cfg || !seg) return FRB_ERR_ARG;
     *seg = NULL;
-    if (!segment_path(path, sizeof path, dir, number)) return FRB_ERR_ARG;
+    if (!frb_format(cfg->format) || !segment_path(path, sizeof path, dir, number)) return FRB_ERR_ARG;
     s = malloc(sizeof *s);
     if (!s) return FRB_ERR_MEMORY;
+    s->format = frb_format(cfg->format);
     s->f = fopen(path, "wbx"); /* exclusive: a segment is never opened twice for writing */
     if (!s->f) {
         free(s);
@@ -129,7 +149,7 @@ FrbError frb_segment_create(const char *dir, const FrbConfig *cfg, uint32_t numb
     }
     memset(h, 0, sizeof h);
     memcpy(h + S_MAGIC, frj_magic, sizeof frj_magic);
-    put16(h + S_VERSION, FRB_JOURNAL_VERSION);
+    put16(h + S_VERSION, (unsigned)cfg->format); /* the journal version is the format version */
     put16(h + S_HEADER_SIZE, SEG_HEADER_BYTES);
     h[S_BITS] = (uint8_t)cfg->bits;
     h[S_SYMMETRY] = (uint8_t)(cfg->symmetry ? 1 : 0);
@@ -153,8 +173,9 @@ FrbError frb_segment_create(const char *dir, const FrbConfig *cfg, uint32_t numb
     return FRB_OK;
 }
 
-static void record_encode(const FrbRecord *rec, uint8_t out[RECORD_BYTES]) {
-    memset(out, 0, RECORD_BYTES);
+static void record_encode(const FrbFormat *f, const FrbRecord *rec, uint8_t *out) {
+    int size = record_bytes(f);
+    memset(out, 0, (size_t)size);
     out[R_TYPE] = rec->type;
     out[R_RESULT] = rec->result;
     out[R_BUDGET] = rec->budget;
@@ -166,14 +187,16 @@ static void record_encode(const FrbRecord *rec, uint8_t out[RECORD_BYTES]) {
     put32(out + R_TIME, rec->time);
     put32(out + R_AUX, rec->aux);
     out[R_NODES] = rec->nodes;
-    memcpy(out + R_GRAPH, rec->graph, FRB_GRAPH_BYTES);
-    put32(out + R_CRC, frb_crc32(0, out, R_CRC));
+    memcpy(out + R_GRAPH, rec->graph, (size_t)f->graph_bytes);
+    put32(out + size - 4, frb_crc32(0, out, (size_t)size - 4));
 }
 
-/* 1 if the 64 bytes are a record written by record_encode. */
-static int record_decode(const uint8_t in[RECORD_BYTES], FrbRecord *rec) {
-    if (get32(in + R_CRC) != frb_crc32(0, in, R_CRC)) return 0;
-    if (in[R_RESERVED] != 0) return 0;
+/* 1 if the bytes are a record written by record_encode. */
+static int record_decode(const FrbFormat *f, const uint8_t *in, FrbRecord *rec) {
+    int size = record_bytes(f);
+    if (get32(in + size - 4) != frb_crc32(0, in, (size_t)size - 4)) return 0;
+    for (int i = R_GRAPH + f->graph_bytes; i < size - 4; i++)
+        if (in[i] != 0) return 0;
     if (in[R_TYPE] < FRB_REC_SESSION_BEGIN || in[R_TYPE] > FRB_REC_SEARCH) return 0;
     rec->type = in[R_TYPE];
     rec->result = in[R_RESULT];
@@ -186,15 +209,18 @@ static int record_decode(const uint8_t in[RECORD_BYTES], FrbRecord *rec) {
     rec->time = get32(in + R_TIME);
     rec->aux = get32(in + R_AUX);
     rec->nodes = in[R_NODES];
-    memcpy(rec->graph, in + R_GRAPH, FRB_GRAPH_BYTES);
+    memset(rec->graph, 0, sizeof rec->graph);
+    memcpy(rec->graph, in + R_GRAPH, (size_t)f->graph_bytes);
     return 1;
 }
 
 FrbError frb_segment_append(FrbSegment *seg, const FrbRecord *rec) {
-    uint8_t buf[RECORD_BYTES];
+    uint8_t buf[MAX_RECORD_BYTES];
+    size_t size;
     if (!seg || !seg->f || !rec) return FRB_ERR_ARG;
-    record_encode(rec, buf);
-    return fwrite(buf, 1, sizeof buf, seg->f) == sizeof buf ? FRB_OK : FRB_ERR_IO;
+    size = (size_t)record_bytes(seg->format);
+    record_encode(seg->format, rec, buf);
+    return fwrite(buf, 1, size, seg->f) == size ? FRB_OK : FRB_ERR_IO;
 }
 
 FrbError frb_segment_flush(FrbSegment *seg, int sync) {
@@ -261,137 +287,132 @@ static FrbError list_segments(const char *dir, uint32_t **numbers, size_t *count
     return FRB_OK;
 }
 
-static FrbError read_whole(const char *path, uint8_t **data, size_t *size) {
-    FILE *f = fopen(path, "rb");
-    long end;
-    uint8_t *buf;
-    *data = NULL;
-    *size = 0;
-    if (!f) return FRB_ERR_IO;
-    if (fseek(f, 0, SEEK_END) != 0 || (end = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
-        fclose(f);
-        return FRB_ERR_IO;
-    }
-    buf = malloc((size_t)end + 1);
-    if (!buf) {
-        fclose(f);
-        return FRB_ERR_MEMORY;
-    }
-    /* A writer may be appending: take what is there now. */
-    *size = fread(buf, 1, (size_t)end, f);
-    fclose(f);
-    *data = buf;
-    return FRB_OK;
-}
-
-/* Is there a valid record at or after offset `from` (on the record grid)? */
-static int any_record_after(const uint8_t *data, size_t size, size_t from) {
+/* Is there a valid record among the records that are still unread? */
+static int any_record_ahead(FILE *f, const FrbFormat *format) {
+    uint8_t buf[MAX_RECORD_BYTES];
+    size_t size = (size_t)record_bytes(format);
     FrbRecord rec;
-    for (size_t off = from; off + RECORD_BYTES <= size; off += RECORD_BYTES)
-        if (record_decode(data + off, &rec)) return 1;
+    while (fread(buf, 1, size, f) == size)
+        if (record_decode(format, buf, &rec)) return 1;
     return 0;
 }
 
 static FrbError scan_segment(const char *dir, const FrbConfig *cfg, uint32_t number,
                              FrbRecordVisit visit, void *ctx, FrbJournalInfo *info, char *err,
                              size_t errlen) {
+    const FrbFormat *format = frb_format(cfg->format);
+    uint8_t h[SEG_HEADER_BYTES], buf[MAX_RECORD_BYTES];
+    size_t rec_size = (size_t)record_bytes(format), got;
     char path[4096];
     FrbSegmentInfo seg;
-    uint8_t *data;
-    size_t size, off;
-    FrbError e;
+    uint64_t size, valid_end;
+    off_t end;
+    FILE *f;
+    FrbError e = FRB_OK;
     int header_ok;
 
     if (!segment_path(path, sizeof path, dir, number)) return FRB_ERR_ARG;
-    e = read_whole(path, &data, &size);
-    if (e != FRB_OK) {
+    f = fopen(path, "rb");
+    if (!f) {
         set_err(err, errlen, "cannot read %s", path);
-        return e;
+        return FRB_ERR_IO;
     }
+    setvbuf(f, NULL, _IOFBF, (size_t)1 << 20);
+    if (fseeko(f, 0, SEEK_END) != 0 || (end = ftello(f)) < 0 || fseeko(f, 0, SEEK_SET) != 0) {
+        fclose(f);
+        set_err(err, errlen, "cannot read %s", path);
+        return FRB_ERR_IO;
+    }
+    size = (uint64_t)end; /* a writer may be appending: this much is there now */
     memset(&seg, 0, sizeof seg);
     seg.number = number;
     seg.bytes = size;
     info->segments++;
     info->bytes += size;
 
-    header_ok = size >= SEG_HEADER_BYTES && memcmp(data + S_MAGIC, frj_magic, sizeof frj_magic) == 0 &&
-                get32(data + S_CRC) == frb_crc32(0, data, S_CRC);
+    got = fread(h, 1, sizeof h, f);
+    header_ok = got == sizeof h && memcmp(h + S_MAGIC, frj_magic, sizeof frj_magic) == 0 &&
+                get32(h + S_CRC) == frb_crc32(0, h, S_CRC);
     if (!header_ok) {
         /* A writer that died while creating the file leaves nothing usable;
          * anything else with records in it is damage. */
-        if (any_record_after(data, size, SEG_HEADER_BYTES)) {
+        int records = got == sizeof h && any_record_ahead(f, format);
+        fclose(f);
+        if (records) {
             set_err(err, errlen, "%s: damaged header", path);
-            free(data);
             return FRB_ERR_JOURNAL;
         }
         info->torn_segments++;
         info->torn_bytes += size;
-        free(data);
         return FRB_OK;
     }
-    if (get16(data + S_VERSION) != FRB_JOURNAL_VERSION ||
-        get16(data + S_HEADER_SIZE) != SEG_HEADER_BYTES) {
-        set_err(err, errlen, "%s: journal format version %u, this program reads version %d", path,
-                get16(data + S_VERSION), FRB_JOURNAL_VERSION);
-        free(data);
-        return FRB_ERR_INCOMPATIBLE;
-    }
-    if (get32(data + S_REVISION) != FRB_SEARCH_REVISION) {
+    if ((int)get16(h + S_VERSION) != cfg->format || get16(h + S_HEADER_SIZE) != SEG_HEADER_BYTES) {
+        set_err(err, errlen, "%s: journal format version %u, this work directory uses version %d",
+                path, get16(h + S_VERSION), cfg->format);
+        e = FRB_ERR_INCOMPATIBLE;
+    } else if (get32(h + S_REVISION) != FRB_SEARCH_REVISION) {
         set_err(err, errlen, "%s: written by search revision %u, this program is revision %d", path,
-                (unsigned)get32(data + S_REVISION), FRB_SEARCH_REVISION);
-        free(data);
-        return FRB_ERR_INCOMPATIBLE;
-    }
-    if (data[S_BITS] != cfg->bits || data[S_SYMMETRY] != (cfg->symmetry ? 1 : 0) ||
-        data[S_ENUM_MAX] != cfg->enumerate_max || get32(data + S_NUMBER) != number) {
+                (unsigned)get32(h + S_REVISION), FRB_SEARCH_REVISION);
+        e = FRB_ERR_INCOMPATIBLE;
+    } else if (h[S_BITS] != cfg->bits || h[S_SYMMETRY] != (cfg->symmetry ? 1 : 0) ||
+               h[S_ENUM_MAX] != cfg->enumerate_max || get32(h + S_NUMBER) != number) {
         set_err(err, errlen,
                 "%s: written with bits %d, symmetry %d, enumeration up to %d; "
                 "the work directory is configured for %d, %d, %d",
-                path, data[S_BITS], data[S_SYMMETRY], data[S_ENUM_MAX], cfg->bits,
-                cfg->symmetry ? 1 : 0, cfg->enumerate_max);
-        free(data);
-        return FRB_ERR_INCOMPATIBLE;
+                path, h[S_BITS], h[S_SYMMETRY], h[S_ENUM_MAX], cfg->bits, cfg->symmetry ? 1 : 0,
+                cfg->enumerate_max);
+        e = FRB_ERR_INCOMPATIBLE;
     }
-    seg.session = get32(data + S_SESSION);
-    seg.worker = get32(data + S_WORKER);
-    seg.created = get64(data + S_CREATED);
-    memcpy(seg.engine, data + S_ENGINE, FRB_ENGINE_NAME);
+    if (e != FRB_OK) {
+        fclose(f);
+        return e;
+    }
+    seg.session = get32(h + S_SESSION);
+    seg.worker = get32(h + S_WORKER);
+    seg.created = get64(h + S_CREATED);
+    memcpy(seg.engine, h + S_ENGINE, FRB_ENGINE_NAME);
     seg.engine[FRB_ENGINE_NAME] = '\0';
 
     if (visit) {
         int v = visit(ctx, &seg, NULL);
         if (v) {
-            free(data);
+            fclose(f);
             return (FrbError)v;
         }
     }
-    for (off = SEG_HEADER_BYTES; off + RECORD_BYTES <= size; off += RECORD_BYTES) {
+    valid_end = SEG_HEADER_BYTES;
+    while (fread(buf, 1, rec_size, f) == rec_size) {
         FrbRecord rec;
-        if (!record_decode(data + off, &rec)) {
-            if (any_record_after(data, size, off + RECORD_BYTES)) {
-                set_err(err, errlen, "%s: damaged record at byte %zu, with valid records after it",
-                        path, off);
-                free(data);
+        if (!record_decode(format, buf, &rec)) {
+            if (any_record_ahead(f, format)) {
+                /* Without the file the construction goes on, makes the
+                 * searches it held again, and has concluded nothing wrong. */
+                set_err(err, errlen,
+                        "%s: damaged record at byte %llu, with valid records after it; move that "
+                        "file away to go on without its records",
+                        path, (unsigned long long)valid_end);
+                fclose(f);
                 return FRB_ERR_JOURNAL;
             }
             break; /* the tail of an interrupted writer */
         }
+        valid_end += rec_size;
         seg.records++;
         if (visit) {
             int v = visit(ctx, &seg, &rec);
             if (v) {
-                free(data);
+                fclose(f);
                 return (FrbError)v;
             }
         }
     }
-    seg.torn_bytes = size - off;
+    fclose(f);
+    seg.torn_bytes = size > valid_end ? size - valid_end : 0;
     info->records += seg.records;
     if (seg.torn_bytes) {
         info->torn_segments++;
         info->torn_bytes += seg.torn_bytes;
     }
-    free(data);
     return FRB_OK;
 }
 
@@ -401,7 +422,7 @@ FrbError frb_journal_scan(const char *dir, const FrbConfig *cfg, FrbRecordVisit 
     uint32_t *numbers;
     size_t count;
     FrbError e;
-    if (!dir || !cfg) return FRB_ERR_ARG;
+    if (!dir || !cfg || !frb_format(cfg->format)) return FRB_ERR_ARG;
     if (!info) info = &local;
     memset(info, 0, sizeof *info);
     info->next_segment = 1;
@@ -427,17 +448,33 @@ typedef struct {
     uint32_t cur_count;
 } Loader;
 
+const uint8_t *frb_state_graph(const FrbState *state, uint32_t index) {
+    return state->graphs + (size_t)index * (size_t)state->format->graph_bytes;
+}
+
+/* Which of two witnesses of the same size is kept: the base Bomb's first,
+ * then enumeration, then search, then the ring. */
+static int rank(int source) {
+    switch (source) {
+    case FRB_SRC_BASE: return 0;
+    case FRB_SRC_ENUM: return 1;
+    case FRB_SRC_SEARCH: return 2;
+    default: return 3;
+    }
+}
+
 static int better(const FrbTargetState *ts, int nodes, int source, int part) {
     if (ts->nodes == 0) return 1;
     if (nodes != ts->nodes) return nodes < ts->nodes;
-    if (source != ts->source) return source < ts->source;
+    if (source != ts->source) return rank(source) < rank(ts->source);
     if (source == FRB_SRC_ENUM) return part < ts->part; /* first in enumeration order */
     return 0;                                           /* otherwise first read stays */
 }
 
 static void offer(FrbState *s, uint32_t index, int nodes, int source, int part, int mirrored,
-                  const uint8_t graph[FRB_GRAPH_BYTES]) {
+                  const uint8_t *graph) {
     FrbTargetState *ts = &s->targets[index];
+    size_t bytes = (size_t)s->format->graph_bytes;
     if (source == FRB_SRC_ENUM && (ts->enum_nodes == 0 || nodes < ts->enum_nodes))
         ts->enum_nodes = (uint8_t)nodes;
     if (!better(ts, nodes, source, part)) return;
@@ -445,7 +482,8 @@ static void offer(FrbState *s, uint32_t index, int nodes, int source, int part, 
     ts->source = (uint8_t)source;
     ts->mirrored = (uint8_t)mirrored;
     ts->part = (uint16_t)part;
-    memcpy(ts->graph, graph, FRB_GRAPH_BYTES);
+    if (graph) memcpy(s->graphs + (size_t)index * bytes, graph, bytes);
+    else memset(s->graphs + (size_t)index * bytes, 0, bytes);
 }
 
 static int bad_record(Loader *L, const FrbSegmentInfo *seg, const char *what) {
@@ -454,26 +492,34 @@ static int bad_record(Loader *L, const FrbSegmentInfo *seg, const char *what) {
     return (int)FRB_ERR_JOURNAL;
 }
 
-/* Admit the graph of a record as a witness for its target and, under
- * symmetry, its complement as a witness for the complementary target.
- * Nothing is taken on trust: both are run. */
+/* Admit a verified graph as a witness for `target` and, under symmetry, its
+ * complement as a witness for the complementary target.  Nothing is taken on
+ * trust: the complement is run as well.  Returns 0, or 1 if the complement
+ * does not emit the complement (which no REV can do). */
+static int admit(FrbState *s, uint32_t mask, uint32_t target, const RevGraph *g, int source, int part) {
+    uint8_t packed[FRB_MAX_GRAPH_BYTES];
+    RevGraph c;
+    if (frb_graph_pack_as(s->format, g, packed) != FRB_OK) return 1;
+    offer(s, target, g->node_count, source, part, 0, packed);
+    if (s->symmetry) {
+        frb_graph_complement(g, &c);
+        if (frb_graph_output(&c, s->bits) != (target ^ mask)) return 1;
+        if (frb_graph_pack_as(s->format, &c, packed) != FRB_OK) return 1;
+        offer(s, target ^ mask, g->node_count, source, part, 1, packed);
+    }
+    return 0;
+}
+
 static int take_witness(Loader *L, const FrbSegmentInfo *seg, const FrbRecord *rec, int source,
                         int part) {
     FrbState *s = L->s;
-    RevGraph g, c;
-    uint8_t packed[FRB_GRAPH_BYTES];
-    if (frb_graph_unpack(rec->graph, rec->nodes, &g) != FRB_OK)
+    RevGraph g;
+    if (frb_graph_unpack_as(s->format, rec->graph, rec->nodes, &g) != FRB_OK)
         return bad_record(L, seg, "malformed graph");
     if (frb_graph_output(&g, s->bits) != rec->target)
         return bad_record(L, seg, "graph does not emit the target it is recorded for");
-    offer(s, rec->target, rec->nodes, source, part, 0, rec->graph);
-    if (s->symmetry) {
-        frb_graph_complement(&g, &c);
-        if (frb_graph_output(&c, s->bits) != (rec->target ^ L->mask))
-            return bad_record(L, seg, "complement graph does not emit the complement target");
-        if (frb_graph_pack(&c, packed) != FRB_OK) return bad_record(L, seg, "cannot pack complement");
-        offer(s, rec->target ^ L->mask, rec->nodes, source, part, 1, packed);
-    }
+    if (admit(s, L->mask, rec->target, &g, source, part))
+        return bad_record(L, seg, "complement graph does not emit the complement target");
     return 0;
 }
 
@@ -554,7 +600,7 @@ static int replay(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
         FrbTargetState *ts;
         FrbBudgetEffort *be;
         int b = rec->budget;
-        if (b < 1 || b > FRB_NODE_CAPACITY || rec->target > L->mask)
+        if (b < 1 || b > s->format->node_capacity || rec->target > L->mask)
             return bad_record(L, seg, "impossible search record");
         ts = &s->targets[rec->target];
         be = &s->budget[b];
@@ -595,10 +641,75 @@ static int replay(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
     return bad_record(L, seg, "unknown record type");
 }
 
+/*
+ * The base Bomb.  For each of its strings q, with certified minimum m(q):
+ * the stored REV is run for `bits` bits.  It must emit q first (it is run,
+ * not trusted), and what it emits in all is one string of this construction
+ * that therefore has a REV of m(q) nodes.  base_nodes[q] = m(q) is kept for
+ * the lower bounds: no string that starts with q can need fewer.
+ */
+static FrbError seed_from_base(FrbState *s, const FrbConfig *cfg, uint8_t **base_nodes, char *err,
+                               size_t errlen) {
+    int shift = cfg->bits - cfg->base_bits;
+    uint32_t mask = s->count - 1u;
+    FrbFileInfo info;
+    FrbTable base;
+    uint8_t *nodes;
+    FrbError e = frb_file_read_raw(cfg->base_file, &base, &info);
+    *base_nodes = NULL;
+    if (e != FRB_OK) {
+        set_err(err, errlen, "cannot use the base Bomb %s: %s", cfg->base_file, frb_error_str(e));
+        return e == FRB_ERR_IO ? FRB_ERR_IO : FRB_ERR_INCOMPATIBLE;
+    }
+    if (info.bits != cfg->base_bits || info.table_crc != cfg->base_crc) {
+        set_err(err, errlen,
+                "%s is not the Bomb this construction was started on (%d bits, checksum %08x; "
+                "expected %d bits, %08x)",
+                cfg->base_file, info.bits, (unsigned)info.table_crc, cfg->base_bits,
+                (unsigned)cfg->base_crc);
+        frb_table_destroy(&base);
+        return FRB_ERR_INCOMPATIBLE;
+    }
+    if (!info.complete) {
+        set_err(err, errlen, "the base Bomb %s is not complete: nothing can be built on it",
+                cfg->base_file);
+        frb_table_destroy(&base);
+        return FRB_ERR_INCOMPLETE;
+    }
+    nodes = malloc(base.count);
+    if (!nodes) {
+        frb_table_destroy(&base);
+        return FRB_ERR_MEMORY;
+    }
+    for (uint32_t q = 0; q < base.count && e == FRB_OK; q++) {
+        FrbStatus st;
+        RevGraph g;
+        uint32_t emitted;
+        e = frb_entry_decode_as(base.format, frb_table_entry(&base, q), &st, &g);
+        if (e == FRB_OK && st != FRB_MINIMAL) e = FRB_ERR_INCOMPLETE;
+        if (e != FRB_OK) break;
+        emitted = frb_graph_output(&g, cfg->bits);
+        if ((emitted >> shift) != q) {
+            e = FRB_ERR_OUTPUT;
+            break;
+        }
+        nodes[q] = (uint8_t)g.node_count;
+        if (admit(s, mask, emitted, &g, FRB_SRC_BASE, 0)) e = FRB_ERR_OUTPUT;
+    }
+    frb_table_destroy(&base);
+    if (e != FRB_OK) {
+        set_err(err, errlen, "the base Bomb %s has a bad entry: %s", cfg->base_file, frb_error_str(e));
+        free(nodes);
+        return e;
+    }
+    *base_nodes = nodes;
+    return FRB_OK;
+}
+
 /* The rules of evidence.  See the comment at the top of this file. */
-static void derive(FrbState *s, const FrbConfig *cfg) {
-    uint8_t ring[FRB_GRAPH_BYTES];
-    RevGraph g;
+static void derive(FrbState *s, const FrbConfig *cfg, const uint8_t *base_nodes) {
+    int shift = cfg->base_bits ? cfg->bits - cfg->base_bits : 0;
+    int capacity = s->format->node_capacity;
     int e = 0;
 
     for (int n = 1; n <= s->enumerate_max && n <= FRB_NODE_CAPACITY; n++) {
@@ -608,16 +719,16 @@ static void derive(FrbState *s, const FrbConfig *cfg) {
     s->enum_complete = e;
     memset(s->by_status, 0, sizeof s->by_status);
     s->conflicts = 0;
+    s->base_settled = 0;
 
     for (uint32_t i = 0; i < s->count; i++) {
         FrbTargetState *ts = &s->targets[i];
         int excluded = ts->unsat_max; /* a search that found nothing with at most b nodes
                                          excludes every budget up to b */
-        if (cfg->fallback_ring) {
-            frb_ring_witness(i, s->bits, &g);
-            if (frb_graph_pack(&g, ring) == FRB_OK)
-                offer(s, i, s->bits, FRB_SRC_RING, 0, 0, ring);
-        }
+        /* The ring emits the string with as many nodes as it has bits.  It
+         * is generated when a table is written, not stored here. */
+        if (cfg->fallback_ring && ts->nodes == 0 && s->bits <= capacity)
+            offer(s, i, s->bits, FRB_SRC_RING, 0, 0, NULL);
         /* A complete enumeration of n-node graphs excludes budget n for
          * every string it did not produce. */
         if (e > excluded) {
@@ -625,6 +736,8 @@ static void derive(FrbState *s, const FrbConfig *cfg) {
             if (ts->nodes && ts->nodes - 1 < upto) upto = ts->nodes - 1;
             if (upto > excluded) excluded = upto;
         }
+        /* A string cannot need fewer nodes than its first bits do. */
+        if (base_nodes && base_nodes[i >> shift] - 1 > excluded) excluded = base_nodes[i >> shift] - 1;
         ts->lower_bound = (uint8_t)(excluded + 1);
 
         ts->conflict = 0;
@@ -635,17 +748,19 @@ static void derive(FrbState *s, const FrbConfig *cfg) {
 
         if (ts->nodes && !ts->conflict && ts->lower_bound == ts->nodes) ts->status = FRB_MINIMAL;
         else if (ts->nodes) ts->status = FRB_WITNESS;
-        else if (ts->lower_bound > FRB_NODE_CAPACITY) ts->status = FRB_UNSUPPORTED;
+        else if (ts->lower_bound > capacity) ts->status = FRB_UNSUPPORTED;
         else if (ts->lower_bound > 1 || ts->limit_budget) ts->status = FRB_UNRESOLVED;
         else ts->status = FRB_EMPTY;
 
         s->by_status[ts->status]++;
         s->conflicts += ts->conflict;
+        if (ts->status == FRB_MINIMAL && ts->source == FRB_SRC_BASE) s->base_settled++;
     }
 }
 
 FrbError frb_state_load(const char *dir, const FrbConfig *cfg, FrbState **state, char *err,
                         size_t errlen) {
+    uint8_t *base_nodes = NULL;
     Loader L;
     FrbState *s;
     FrbError e;
@@ -658,10 +773,14 @@ FrbError frb_state_load(const char *dir, const FrbConfig *cfg, FrbState **state,
     s->bits = cfg->bits;
     s->symmetry = cfg->symmetry ? 1 : 0;
     s->enumerate_max = cfg->enumerate_max;
+    s->base_bits = cfg->base_bits;
+    s->format = frb_format(cfg->format);
     s->count = (uint32_t)1 << cfg->bits;
     s->targets = calloc(s->count, sizeof *s->targets);
-    if (!s->targets) {
-        free(s);
+    s->graphs = calloc(s->count, (size_t)s->format->graph_bytes);
+    if (!s->targets || !s->graphs) {
+        frb_state_free(s);
+        set_err(err, errlen, "not enough memory for the state of a %d-bit construction", cfg->bits);
         return FRB_ERR_MEMORY;
     }
     memset(&L, 0, sizeof L);
@@ -671,11 +790,13 @@ FrbError frb_state_load(const char *dir, const FrbConfig *cfg, FrbState **state,
     L.mask = s->count - 1u;
     L.cur_nodes = L.cur_part = -1;
     e = frb_journal_scan(dir, cfg, replay, &L, &s->journal, err, errlen);
+    if (e == FRB_OK && cfg->base_bits) e = seed_from_base(s, cfg, &base_nodes, err, errlen);
     if (e != FRB_OK) {
         frb_state_free(s);
         return e;
     }
-    derive(s, cfg);
+    derive(s, cfg, base_nodes);
+    free(base_nodes);
     *state = s;
     return FRB_OK;
 }
@@ -683,22 +804,26 @@ FrbError frb_state_load(const char *dir, const FrbConfig *cfg, FrbState **state,
 void frb_state_free(FrbState *state) {
     if (!state) return;
     free(state->targets);
+    free(state->graphs);
     free(state);
 }
 
 FrbError frb_state_table(const FrbState *state, FrbTable *table) {
     FrbError e;
     if (!state || !table) return FRB_ERR_ARG;
-    e = frb_table_create(table, state->bits);
+    e = frb_table_create_as(table, state->bits, state->format);
     if (e != FRB_OK) return e;
     for (uint32_t i = 0; i < state->count && e == FRB_OK; i++) {
         const FrbTargetState *ts = &state->targets[i];
-        if (ts->nodes) {
-            RevGraph g;
-            e = frb_graph_unpack(ts->graph, ts->nodes, &g);
-            if (e == FRB_OK) e = frb_table_put(table, i, (FrbStatus)ts->status, &g);
-        } else {
+        RevGraph g;
+        if (!ts->nodes) {
             e = frb_table_put(table, i, (FrbStatus)ts->status, NULL);
+        } else if (ts->source == FRB_SRC_RING) {
+            frb_ring_witness(i, state->bits, &g);
+            e = frb_table_put(table, i, (FrbStatus)ts->status, &g);
+        } else {
+            e = frb_graph_unpack_as(state->format, frb_state_graph(state, i), ts->nodes, &g);
+            if (e == FRB_OK) e = frb_table_put(table, i, (FrbStatus)ts->status, &g); /* runs it */
         }
     }
     if (e != FRB_OK) frb_table_destroy(table);

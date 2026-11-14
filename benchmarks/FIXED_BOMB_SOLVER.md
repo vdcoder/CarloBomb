@@ -112,6 +112,12 @@ Lookups are timed over all 131,070 strings of 1 to 16 bits in a shuffled
 order, best of 9 passes. 4.7 million verified answers per second on one
 core.
 
+(Measured again on the same machine after the solver learned to read the
+24-bit format, with its entry size taken from the table instead of fixed:
+loading 12.3 ms, index construction 0.22 ms, the two lookups 5.1 and 6.5 ns,
+solve 0.16 µs, 6.4 million verified answers per second. Nothing below
+depends on the differences.)
+
 Loading is 99.5% of opening a Bomb and is validation: nothing is trusted
 that has not been run. Building the index is 0.5%. **A stored index would
 save 0.1 ms of 18.6 and add a file format, so there is none.** A one-off

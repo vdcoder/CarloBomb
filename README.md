@@ -16,8 +16,14 @@ build it restartably and in parallel and to check it. Milestone 3 adds the
 solver that reads it: for any target of 1 to 16 bits it returns the certified
 minimum-node REV by lookup, with no search. Every string of L ≤ 16 bits
 needs at most ⌈2√L⌉ − 1 nodes, 7 at 16 bits (`benchmarks/FIXED_RUN_16.md`,
-`benchmarks/FIXED_BOMB_SOLVER.md`). No neural guidance and no
-LevelSearchBomb yet.
+`benchmarks/FIXED_BOMB_SOLVER.md`). A longer table is built as a ladder,
+each length from the complete table for one bit fewer: to 24 bits in format
+version 2 (`bombs/fixed-run/OVERNIGHT.md`,
+`benchmarks/FIXED_RUN_24_FEASIBILITY.md`), and from 25 to 31 bits in format
+version 3 (`bombs/fixed-run/BEYOND_24.md`,
+`benchmarks/FIXED_RUN_31_FEASIBILITY.md`). The format reaches 31 bits; what
+one machine can compute is 26 in a day and 28 in a week. No neural guidance
+and no LevelSearchBomb yet.
 
 ## Build and test
 
@@ -101,6 +107,18 @@ The whole 16-bit table takes seconds to build. What the commands do, the
 options, and what is and is not certified: `bombs/fixed-run/README.md`. The
 file format: `bombs/fixed-run/FORMAT.md`.
 
+```bash
+./build/carlobomb bomb ladder --dir ladder --from fixed-run-16.frb --to 20 --workers 8   # 17, 18, 19, 20 bits
+./build/carlobomb bomb ladder --dir ladder --status                                       # what is there
+./build/carlobomb bomb verify --file ladder/fixed-run-20.frb --work-dir ladder/work-20 --against fixed-run-16.frb
+```
+
+Longer tables, up to 31 bits, are built one length at a time on the table
+below; each finished length is a complete certified Bomb, and the command
+continues where it stopped. To 20 bits takes about a minute; to 24, hours
+(`bombs/fixed-run/OVERNIGHT.md`); 25 and 26 on a finished 24-bit Bomb, a
+night and a day (`bombs/fixed-run/BEYOND_24.md`).
+
 ### Bomb-backed FixedSolver
 
 ```bash
@@ -108,6 +126,7 @@ file format: `bombs/fixed-run/FORMAT.md`.
 ./build/carlobomb fixed --bomb fixed-run-16.frb --target 01001000 --max-nodes 2   # proven impossible
 ./build/carlobomb fixed --bomb fixed-run-16.frb --target 0100100011010110 --profile
 ./build/carlobomb fixed --bomb fixed-run-16.frb --stats                       # every length, 1 to 16 bits
+./build/carlobomb fixed --bomb ladder/fixed-run-20.frb --stats                # every length, 1 to 20 bits
 ```
 
 Any target of 1 to 16 bits is answered from the table: the certified
@@ -195,6 +214,12 @@ tests and wins a reproducible benchmark.
    MinimalSolver, interrupt and kill constructions and resume them, damage
    and forge journal records, feed in engines that lie, and build the whole
    16-bit table and compare a checksum of the file.
+   `tests/test_fixed_run_ladder.c` does the same for format versions 2 and
+   3 and the ladder, levels of one version built on tables of another
+   included: every level of small ladders against the MinimalSolver string
+   by string, stopped and resumed, on base tables that are partial, missing,
+   exchanged or forged; and one level above the 16-bit table, whose checksum
+   is compared.
 
 7. **Bomb-backed FixedSolver** (`solvers/fixed/bomb/tests/`,
    `tests/fixed_smoke.cmake`). All 131,070 strings of 1 to 16 bits are

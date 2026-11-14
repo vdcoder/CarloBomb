@@ -72,7 +72,7 @@ static void scan(const FrbTable *t, int bits, uint32_t value, int *nodes, uint32
     *nodes = 99;
     *index = 0;
     for (uint32_t i = first; i < first + span; i++) {
-        int n = t->entries[(size_t)i * FRB_ENTRY_BYTES + FRB_GRAPH_BYTES] & 31;
+        int n = frb_table_nodes(t, i);
         if (n < *nodes) {
             *nodes = n;
             *index = i;

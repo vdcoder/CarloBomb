@@ -94,10 +94,10 @@ uint32_t rev_fixed_bomb_extension(const RevFixedBomb *bomb, int bits, uint32_t v
 
 /*
  * counts[n] = number of strings of `bits` bits whose minimum is n nodes, for
- * n = 0..FRB_NODE_CAPACITY (counts[0] stays 0).  Costs 2^bits lookups.
+ * n = 0..FRB_MAX_NODES (counts[0] stays 0).  Costs 2^bits lookups.
  */
 void rev_fixed_bomb_histogram(const RevFixedBomb *bomb, int bits,
-                              uint32_t counts[FRB_NODE_CAPACITY + 1]);
+                              uint32_t counts[FRB_MAX_NODES + 1]);
 
 /* ---- solving ------------------------------------------------------------- */
 

@@ -1,7 +1,9 @@
 # Bomb-backed FixedSolver
 
 The exact minimum-node REV for any binary string of 1 to 16 bits, read out
-of the complete FixedRunBomb(16) of Milestone 2. No search is run.
+of the complete FixedRunBomb(16) of Milestone 2. No search is run. With a
+longer complete Bomb the same solver answers strings up to that length
+([below](#longer-bombs)).
 
 ```bash
 build/carlobomb fixed --bomb fixed-run-16.frb --target 01001000
@@ -77,6 +79,24 @@ comparisons: 0.1 ms. A lookup is then one array read, or none for a 16-bit
 target. The graphs are not copied; they stay in the Bomb's entries. There is
 no index file, since building the index costs less than a hundredth of
 reading the Bomb.
+
+## Longer Bombs
+
+The solver opens a complete FixedRunBomb of any length the format has: up
+to 16 bits in format version 1, up to 24 in version 2
+(`bombs/fixed-run/FORMAT.md`). Nothing changes for a Bomb of up to 16 bits.
+Above that a table index no longer fits in 16 bits and the prefix index
+holds 32-bit numbers: 0.5 MiB for 17 bits, 64 MiB for 24, next to a table
+of 544 MiB. Opening validates the whole table as before, which for 24 bits
+means running 16,777,216 REVs.
+
+```bash
+build/carlobomb fixed --bomb ladder/fixed-run-20.frb --stats
+```
+
+prints the minimum-node distribution of every length from 1 to 20 bits. Its
+rows for 1 to 16 bits are those of the 16-bit Bomb, as they must be: a
+complete Bomb for more bits answers everything a shorter one does.
 
 ## Interface
 
@@ -214,6 +234,11 @@ building (for random targets: no).
 - The suffix fact on all 983,040 cuts, and the lower bound on longer
   targets: never above the MinimalSolver's minimum on random and regular
   targets of 17 to 35 bits, and exact on the 983,040 continuations.
+
+- A 17-bit Bomb, built in the test as one rung of the ladder above the
+  16-bit one (format version 2, 32-bit index): all 262,142 strings of 1 to
+  17 bits against a direct scan of its table, every graph run, and for 1 to
+  16 bits the same minimum as the 16-bit Bomb gives.
 
 `fixed_smoke` runs the `fixed` command end to end on a Bomb built for the
 occasion, including refusals and exit codes, and runs

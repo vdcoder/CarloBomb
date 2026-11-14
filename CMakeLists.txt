@@ -141,8 +141,19 @@ add_executable(fixed_bomb_lookup benchmarks/fixed_bomb_lookup.c)
 target_link_libraries(fixed_bomb_lookup PRIVATE carlobomb_fixed_bomb)
 
 # What the Bomb knows about targets longer than it covers, against the search.
+# A table of full size without the search: files of many gigabytes written,
+# addressed and read (benchmarks/FIXED_RUN_31_FEASIBILITY.md).
+add_executable(big_table benchmarks/big_table.c)
+target_link_libraries(big_table PRIVATE carlobomb_fixed_run)
+
 add_executable(fixed_bomb_longer benchmarks/fixed_bomb_longer.c)
 target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_fixed_bomb carlobomb_minimal m)
+
+# What a Bomb beyond 16 bits would cost: samples the ladder construction.
+if(UNIX)
+  add_executable(ladder_pilot benchmarks/ladder_pilot.c)
+  target_link_libraries(ladder_pilot PRIVATE carlobomb_minimal m)
+endif()
 
 add_executable(baseline benchmarks/baseline.c)
 target_include_directories(baseline PRIVATE tests)
@@ -198,6 +209,9 @@ if(CARLOBOMB_HAVE_AMD64_ASM)
   target_link_libraries(characterize PRIVATE carlobomb_level_amd64 m)
   target_compile_definitions(characterize PRIVATE CARLOBOMB_REVISION="${CARLOBOMB_REVISION}")
   add_test(NAME perf_counter_plumbing COMMAND characterize --perf-selftest)
+  # It times a busy loop against the task clock: not next to tests that keep
+  # every processor busy with worker processes.
+  set_tests_properties(perf_counter_plumbing PROPERTIES RUN_SERIAL TRUE)
 endif()
 
 # FixedRunBomb: format, enumerator, construction, interruption, damage.
@@ -210,6 +224,23 @@ endif()
 add_test(NAME test_fixed_run
   COMMAND test_fixed_run ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_test_work)
 set_tests_properties(test_fixed_run PROPERTIES TIMEOUT 600)
+
+# FixedRunBomb format version 2 (up to 24 bits) and the ladder construction:
+# every level of small ladders against the MinimalSolver, string by string.
+add_executable(test_fixed_run_ladder bombs/fixed-run/tests/test_fixed_run_ladder.c)
+target_include_directories(test_fixed_run_ladder PRIVATE tests)
+target_link_libraries(test_fixed_run_ladder PRIVATE carlobomb_fixed_run carlobomb_minimal)
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  target_link_libraries(test_fixed_run_ladder PRIVATE carlobomb_fixed_run_build)
+endif()
+add_test(NAME test_fixed_run_ladder
+  COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_test_work)
+set_tests_properties(test_fixed_run_ladder PROPERTIES TIMEOUT 600)
+# The same with tables read into memory instead of mapped from their files.
+add_test(NAME test_fixed_run_ladder_unmapped
+  COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_unmapped_work)
+set_tests_properties(test_fixed_run_ladder_unmapped PROPERTIES TIMEOUT 600
+  ENVIRONMENT "CARLOBOMB_NO_MMAP=1")
 
 # Bomb-backed FixedSolver: every string of 1 to 16 bits against a direct scan
 # of the table and against the MinimalSolver.  The comparison with the search
@@ -224,6 +255,9 @@ endif()
 if(CARLOBOMB_HAVE_AMD64_ASM)
   target_link_libraries(test_fixed_bomb_solver PRIVATE carlobomb_level_amd64)
   target_link_libraries(fixed_bomb_longer PRIVATE carlobomb_level_amd64)
+  if(UNIX)
+    target_link_libraries(ladder_pilot PRIVATE carlobomb_level_amd64)
+  endif()
 endif()
 set(CARLOBOMB_FIXED_CROSS_BITS 16)
 if(CARLOBOMB_SANITIZE AND NOT CARLOBOMB_HAVE_AMD64_ASM)
@@ -260,6 +294,11 @@ if(CARLOBOMB_HAVE_BOMB_BUILD)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixed_smoke.cmake)
   set_tests_properties(fixed_smoke PROPERTIES TIMEOUT 900)
 endif()
+
+# The same check of size that is run by hand on 26 to 28 bits, on a table
+# small enough for every run of the tests.
+add_test(NAME big_table_small COMMAND big_table --bits 18 --out ${CMAKE_CURRENT_BINARY_DIR}/big_table_18.frb)
+set_tests_properties(big_table_small PROPERTIES PASS_REGULAR_EXPRESSION "PASS")
 
 add_test(NAME legacy_original_runs COMMAND legacy_original)
 set_tests_properties(legacy_original_runs PROPERTIES

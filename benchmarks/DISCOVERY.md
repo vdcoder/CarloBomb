@@ -8,7 +8,10 @@ result that changes the order of magnitude.
 Measured on 14 November 2026 in the development container (4 virtual CPUs,
 Intel Xeon under KVM, 15.7 GB, GCC 13.3 `-O3`), on the ladder of 17 to 24
 bits built there, with the owner's reports of levels 25 and 26 for the
-lengths beyond. No construction of 25 bits or more was run here.
+lengths beyond. The shared search was afterwards run in full at 25 and 26
+bits, with the CTO's approval: `experiments/shared-search/FULL_RUNS.md` has
+those runs, and `experiments/shared-search/PROPOSAL.md` what it would take
+to make the method a construction.
 
 ## In short
 
@@ -21,8 +24,8 @@ builds the same table from a fraction of a percent of the steps.
 | 20 | 142,813,952,259 | 2,558,807,314 | 1/56 | run in full; every string compared with the Bomb |
 | 22 | 2,356,037,716,175 | 11,511,995,978 | 1/205 | run in full; every string compared |
 | 24 | 20,867,501,480,268 | 84,837,784,898 | 1/246 | run in full; every string compared |
-| 25 | 63,140,927,147,534 | about 2.2·10^11 | 1/280 | 64 of 512 classes run, scaled |
-| 26 | 257,971,379,632,128 | about 4.8·10^11 | 1/540 | 64 of 1,024 classes |
+| 25 | 63,140,927,147,534 | 223,274,268,884 | 1/283 | run in full; the histogram of the certified Bomb, every entry |
+| 26 | 257,971,379,632,128 | 428,024,955,093 | 1/603 | run in full; the histogram of the certified Bomb, every entry |
 | 27 | about 1.06·10^15 (projected) | about 1.06·10^12 | 1/1,000 | 64 of 2,048 classes |
 | 28 | about 3.8·10^15 (projected) | about 3.0·10^12 | 1/1,300 | 64 of 4,096 classes |
 
@@ -30,14 +33,21 @@ builds the same table from a fraction of a percent of the steps.
   finds the node count of the Bomb for every string, 8,388,608 of 8,388,608
   pairs at 24 bits, and for every string of 6 nodes or more the same REV,
   link for link and color for color. Run as a level of the ladder, on the
-  Bomb below, it reproduces the 20-bit and the 24-bit table entry for entry.
+  Bomb below, it writes the ladder's table byte for byte at every length
+  from 17 to 24 bits, and at 25 and 26 bits a table with the checksum of the
+  owner's certified one.
+- **It accounts for every search the ladder made.** Counting its steps by
+  string, it arrives at the result and the exact number of logical steps of
+  every search in the journals of levels 17 to 24, and at the totals of the
+  owner's levels 25 and 26 to the last digit (`FULL_RUNS.md`).
 - **It is a prototype in plain C**, a quarter to a fifth as fast per step as
   the assembly kernels, and it still builds level 24 in 140 seconds on the 4
-  processors that took two hours for it. Level 26 would be minutes on the owner's
-  machine, where it took 9 hours.
+  processors that took two hours for it, and all of 26 bits from nothing in
+  11 minutes, where the ladder's level 26 took 9 hours on the owner's
+  machine.
 - **It is not in the construction.** It writes no journal and certifies
-  nothing. What it needs to become the construction is listed below; the
-  decision is the CTO's.
+  nothing. What it needs to become the construction is in `PROPOSAL.md`;
+  the decision is the CTO's.
 - **The other ideas, measured the same way, are small next to it**: starting
   a string's first search at the REV the Bomb below already has saves 17 to
   25% of the steps; a REV built from the last bits' REV instead of searched
@@ -166,10 +176,10 @@ graphs of up to 5 nodes, which is another order than the search's. Run as a
 level of the ladder, those strings come from the base as they do in the
 ladder, and the table is the ladder's table.
 
-The samples at 25 and 26 bits agree with the owner's histograms as far as a
-sample can: scaled, 23.1 and 54.3 million strings of 8 nodes against
-23,375,506 and 54,455,992, and 1.21 million of 9 nodes at 26 bits against
-1,187,852.
+At 25 and 26 bits, run in full, it finds the histogram of the owner's
+certified Bombs in every entry: 61,704 strings of 9 nodes at 25 bits;
+54,455,992 of 8, 1,187,852 of 9 and the 2 of 10 at 26. No string is left
+without a REV, and every REV runs on the reference interpreter.
 
 ### What it costs
 
@@ -195,44 +205,19 @@ Time, on this machine:
 | Level 24 | 29,864 s of solver time, about 2 hours | 140 s |
 | Steps a second, one process | 7·10^8 | 1.6·10^8 |
 
-At the prototype's speed, 10 processes would need about 2 minutes for 25
-bits, 5 for 26, 11 for 27 and half an hour for 28. Those are the sampled
-step counts divided by a rate measured here; they are estimates, and no run
-of those lengths stands behind them.
+The full runs took 343 seconds at 25 bits and 643 at 26, on these 4
+processors. At that rate 27 bits would be about half an hour and 28 an hour
+and a half here; those two are the sampled step counts divided by a rate,
+and no run of those lengths stands behind them.
 
 ### What it would take to make it the construction
 
-Nothing here is decided or built.
-
-1. **Jobs.** The strings with one beginning of P bits are a class; a class,
-   with all its passes, is a job. Jobs are independent, so any number of
-   workers gives the same outcome, which the experiment shows (1 class or
-   256, 1 process or 4: the same table). 256 classes cost 4% more steps at
-   24 bits. The largest job at 28 bits in the sample is 1.6·10^9 steps:
-   seconds, which is also what an interruption would lose.
-2. **Journal.** A record for each string found, with its REV (the journal
-   has that record: it is the one an enumeration part writes), and one for
-   each finished job.
-3. **A rule of evidence.** "A finished job at budget N excludes N for every
-   string of its class that was wanted in that pass and for which it wrote
-   no REV." It is the rule the enumeration of graphs has had since the
-   16-bit Bomb, for a search that visits fewer graphs. Which strings a pass
-   wanted follows from the records before it and the base Bomb.
-4. **Independent verification** stays what it is: every REV run by the
-   reader, the chain check against the Bomb below, `--recertify` by the
-   MinimalSolver from one node up, and the per-string search as a second
-   implementation to draw samples with.
-5. **A kernel.** The prototype is the reference search with one more case.
-   The register kernels were built for exactly this loop; a kernel of that
-   kind would be worth the factor of 4 to 5 the prototype gives away.
-6. **Memory.** Two bits a string for what is wanted, instead of the 40 bytes
-   and a packed REV a string that the coordinator holds today: at 28 bits,
-   64 MB where the ladder needs 20 GB.
-
-Risks and unknowns: the costs beyond 24 bits are samples of 64 classes,
-good to perhaps a quarter; nothing was measured beyond 28 bits, where the
-9- and 10-node passes take over; and a search that is exact in a prototype
-still has to be made restartable and reviewed as evidence.
+`experiments/shared-search/PROPOSAL.md`. It replaces the sketch that stood
+here, in one point above all: the sketch asked for a new rule of evidence
+("a finished job excludes N for every string it did not find"). None is
+needed. The shared search can write, for every string and budget, the
+record the ladder writes, with the LevelSolver's own number of steps, and
+the journal that results is read by the rules there are.
 
 ## Starting a search where the last one ended
 
@@ -314,13 +299,11 @@ rather than a saving. No sidecar format is proposed.
 2. Do not build the seeded search or the prepend witness. They are the best
    improvements of the per-string search and are worth a quarter and a
    twentieth of a number that the shared search divides by hundreds.
-3. Decide on the shared search as the construction of a level: points 1 to
-   6 above. The first step that costs little and settles most doubts is to
-   run the prototype in full at 25 and 26 bits and compare its histogram,
-   string for string where the Bombs are at hand, with the owner's
-   certified tables. That was not done here because no construction of
-   those lengths is to be run in this container; it is 6 and 12 minutes of
-   4 processors.
+3. Decide on the shared search as the construction of a level. The runs
+   in full at 25 and 26 bits that this report asked for have been made
+   (`FULL_RUNS.md`): the certified histograms, the certified tables'
+   checksums, the ladder's searches to the last step. What remains is the
+   proposal (`PROPOSAL.md`).
 4. Leave the running ladder alone. Bomb(27) is certified by the journal it
    is writing; a table from a new method should be compared with it, not
    replace it.

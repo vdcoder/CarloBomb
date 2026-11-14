@@ -350,3 +350,14 @@ add_test(NAME cli_smoke
   COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
           -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM}
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
+
+# ---- experiments ---------------------------------------------------------
+# Shared search: one search for all strings of a length at once
+# (experiments/shared-search/README.md).  Not part of the construction.
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  add_executable(shared_search experiments/shared-search/shared_search.c)
+  target_link_libraries(shared_search PRIVATE carlobomb_fixed_bomb)
+  add_test(NAME shared_search_small
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DSHARED=$<TARGET_FILE:shared_search>
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/experiments/shared-search/smoke.cmake)
+endif()

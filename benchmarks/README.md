@@ -124,3 +124,11 @@ string of every length gets the answer it has to get from both.
 
 How the format was chosen and the results on the real Bombs of 16 to 24 bits
 are in `COMPACT_FORMAT.md`.
+
+## Faster discovery
+
+`DISCOVERY.md` is the audit of the ladder (where a level's time and steps
+go, from the journals) and what was measured about each way to make it
+cheaper. Its main result is from `experiments/shared-search`: one search
+for all strings of a length builds the same table from under one percent of
+the ladder's steps.

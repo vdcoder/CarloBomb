@@ -112,6 +112,7 @@ Settings of `build`:
 |---|---|---|
 | `--bits L` | required | Target length, 1..31 |
 | `--base FILE` | none | Build on this complete table for fewer bits; turns enumeration off |
+| `--suffix-bound on\|off` | on | With `--base`: bound a string from below by its later stretches too, less one node (below). Fixed when the directory is created |
 | `--max-nodes N` | 16, 24 or 31: all an entry of the table's format holds | Largest node budget searched. Changeable on resume |
 | `--engine E` | `amd64-auto`, else `c` | LevelSolver engine. Changeable on resume |
 | `--workers W` | 1 | Worker processes. Changeable on resume |
@@ -270,6 +271,19 @@ The table for L bits is built on the complete table for L − 1 bits
   is settled this way.
 - The other extension is searched from that bound upward. Usually the first
   or the second budget tried has a REV.
+- **The suffix bound** can put the start higher. If n nodes emit a string,
+  n + 1 nodes emit it without its first bit; so a string needs at least one
+  node fewer than its last L − 1 bits do, and their minimum is in the table
+  below as well: `LB(S) = max(m(first L−1 bits), m(last L−1 bits) − 1)`.
+  For 00000001 that is max(1, 5 − 1) = 4, and the searches at budgets 1, 2
+  and 3 are not made. A cheap beginning says nothing about what follows it.
+  On finished levels of 17 to 24 bits the rule spares about one search in a
+  hundred, the cheap ones: one logical step in a thousand
+  (`benchmarks/SUFFIX_BOUND.md`). The tables are the same, byte for byte.
+  A construction says in its `config.txt` whether it was started with the
+  rule, and keeps to that for as long as it lives: `--suffix-bound off`
+  starts one as before the rule existed, and a directory made before it is
+  continued without it.
 
 The base table is evidence, not an assumption: each time a journal is
 replayed, every REV of the base is run again, and the base must be the one

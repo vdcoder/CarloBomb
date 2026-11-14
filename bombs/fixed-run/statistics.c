@@ -61,8 +61,11 @@ static void print_settings(FILE *out, const FrbConfig *cfg) {
     }
     if (cfg->base_bits)
         fprintf(out, "\n  built on                the complete %d-bit Bomb %s\n"
-                     "                          (table checksum %08x)",
-                cfg->base_bits, cfg->base_file, (unsigned)cfg->base_crc);
+                     "                          (table checksum %08x)\n"
+                     "  bounds from it          %s",
+                cfg->base_bits, cfg->base_file, (unsigned)cfg->base_crc,
+                cfg->suffix_bound ? "a string's first bits, and every later stretch of it less one node"
+                                  : "a string's first bits");
     fprintf(out, "\n  search revision %d, journal format %d, table format %d\n", FRB_SEARCH_REVISION,
             cfg->format, cfg->format);
 }
@@ -123,6 +126,10 @@ static void print_stage_b(FILE *out, const FrbConfig *cfg, const FrbState *s) {
         fprintf(out, "\nStage B: search for the targets the %d-bit Bomb left open\n", cfg->base_bits);
         fprintf(out, "  minimum certified, REV of the %2d-bit Bomb    %10s\n", cfg->base_bits,
                 commas(by_base));
+        if (cfg->suffix_bound)
+            fprintf(out, "  suffix bound: strings that begin higher      %10s  (%s node budgets excluded,\n"
+                         "                                                          as many searches not made)\n",
+                    commas(s->suffix_raised), commas(s->suffix_budgets));
     } else {
         fprintf(out, "\nStage B: search for the targets enumeration left open\n");
     }
@@ -426,9 +433,30 @@ FrbError frb_report_target(FILE *out, const char *dir, const FrbConfig *cfg, con
         int by_search = ts->unsat_max, by_enum = s->enum_complete;
         if (ts->nodes && ts->nodes - 1 < by_enum) by_enum = ts->nodes - 1;
         fprintf(out, "node budgets 1..%d are excluded\n", ts->lower_bound - 1);
-        if (s->base_bits && ts->lower_bound - 1 > by_search && ts->lower_bound - 1 > by_enum)
-            fprintf(out, "                 1..%d by the %d-bit Bomb: the first %d bits alone need %d nodes\n",
-                    ts->lower_bound - 1, s->base_bits, s->base_bits, ts->lower_bound);
+        if (s->base_bits) {
+            /* What the base says, asked of it again: one entry for each stretch of the string. */
+            int shift = s->bits - s->base_bits, first = 0, later = 0, later_at = 0, ok = 1;
+            uint32_t base_mask = (((uint32_t)1 << (s->base_bits - 1)) << 1) - 1u;
+            for (int j = 0; j <= (cfg->suffix_bound ? shift : 0) && ok; j++) {
+                FrbStatus st;
+                RevGraph g;
+                ok = frb_file_lookup(cfg->base_file, (index >> (shift - j)) & base_mask, NULL, &st, &g) == FRB_OK;
+                if (!ok) break;
+                if (j == 0) first = g.node_count;
+                else if (g.node_count > later) later = g.node_count, later_at = j;
+            }
+            if (ok && first > 1)
+                fprintf(out, "                 1..%d by the %d-bit Bomb: the first %d bits alone need %d nodes\n", first - 1,
+                        s->base_bits, s->base_bits, first);
+            if (ok && later - 1 > first)
+                fprintf(out, "                 1..%d by the %d-bit Bomb: the %d bits after the first %s need %d nodes, and\n"
+                             "                 what is left of a string without its first bits needs at most one node\n"
+                             "                 more than the string (the suffix bound)\n",
+                        later - 2, s->base_bits, s->base_bits, later_at == 1 ? "bit" : "bits", later);
+            if (!ok && ts->lower_bound - 1 > by_search && ts->lower_bound - 1 > by_enum)
+                fprintf(out, "                 1..%d by the %d-bit Bomb (which cannot be read now)\n", ts->lower_bound - 1,
+                        s->base_bits);
+        }
         if (by_enum >= 1)
             fprintf(out, "                 1..%d by exhaustive enumeration: no graph of that size emits it\n",
                     by_enum);

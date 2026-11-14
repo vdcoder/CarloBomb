@@ -10,9 +10,11 @@
  *     the interpreter of core/rev;
  *   - a node budget is excluded for a string only by a completed exhaustive
  *     enumeration that did not produce the string, by a search that returned
- *     PROVEN_UNSAT, or by the certified minimum of the string's first bits
- *     in the base Bomb the construction builds on.  A search stopped by a
- *     limit excludes nothing;
+ *     PROVEN_UNSAT, or by the base Bomb the construction builds on: by the
+ *     certified minimum of the string's first bits, and, where the
+ *     construction was started with that rule (FrbConfig.suffix_bound), by
+ *     the certified minimum of any later stretch of it, less one node.  A
+ *     search stopped by a limit excludes nothing;
  *   - a minimum is certified only when a witness has exactly as many nodes
  *     as the first budget that is not excluded.
  *
@@ -709,6 +711,8 @@ static FrbError seed_from_base(FrbState *s, const FrbConfig *cfg, uint8_t **base
 /* The rules of evidence.  See the comment at the top of this file. */
 static void derive(FrbState *s, const FrbConfig *cfg, const uint8_t *base_nodes) {
     int shift = cfg->base_bits ? cfg->bits - cfg->base_bits : 0;
+    uint32_t base_mask = cfg->base_bits ? (((uint32_t)1 << (cfg->base_bits - 1)) << 1) - 1u : 0;
+    uint32_t top = (uint32_t)1 << (s->bits - 1);
     int capacity = s->format->node_capacity;
     int e = 0;
 
@@ -720,6 +724,8 @@ static void derive(FrbState *s, const FrbConfig *cfg, const uint8_t *base_nodes)
     memset(s->by_status, 0, sizeof s->by_status);
     s->conflicts = 0;
     s->base_settled = 0;
+    s->suffix_raised = 0;
+    s->suffix_budgets = 0;
 
     for (uint32_t i = 0; i < s->count; i++) {
         FrbTargetState *ts = &s->targets[i];
@@ -736,8 +742,22 @@ static void derive(FrbState *s, const FrbConfig *cfg, const uint8_t *base_nodes)
             if (ts->nodes && ts->nodes - 1 < upto) upto = ts->nodes - 1;
             if (upto > excluded) excluded = upto;
         }
-        /* A string cannot need fewer nodes than its first bits do. */
-        if (base_nodes && base_nodes[i >> shift] - 1 > excluded) excluded = base_nodes[i >> shift] - 1;
+        if (base_nodes) {
+            /* A string cannot need fewer nodes than its first bits do. */
+            int first = base_nodes[i >> shift], bound = first;
+            /* Nor fewer than a later stretch of it does, less one: n nodes that emit the string
+             * become n + 1 that emit it without its first j bits, and those emit the stretch. */
+            if (cfg->suffix_bound)
+                for (int j = 1; j <= shift; j++) {
+                    int later = base_nodes[(i >> (shift - j)) & base_mask] - 1;
+                    if (later > bound) bound = later;
+                }
+            if (bound > first && !(s->symmetry && (i & top))) {
+                s->suffix_raised++;
+                s->suffix_budgets += (uint64_t)(bound - first);
+            }
+            if (bound - 1 > excluded) excluded = bound - 1;
+        }
         ts->lower_bound = (uint8_t)(excluded + 1);
 
         ts->conflict = 0;

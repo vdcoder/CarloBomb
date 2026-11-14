@@ -374,7 +374,8 @@ It is what was always written:
     workers 4
     max_steps 0
 
-Layout 2, written in every other case:
+Layout 2, written for a table of another version, or one built on a base
+Bomb that bounds a string by its first bits only:
 
     carlobomb-fixed-run-work 2
     journal_version 2
@@ -392,12 +393,28 @@ Layout 2, written in every other case:
     workers 10
     max_steps 0
 
+Layout 3, written for a table built on a base Bomb with the suffix bound
+(section 9.5), which is how `bomb build --base` and `bomb ladder` start a
+construction unless told `--suffix-bound off`. It is layout 2 with one more
+line after `base_file`:
+
+    carlobomb-fixed-run-work 3
+    ...
+    base_file /home/me/frb31/fixed-run-27.frb
+    base_bounds prefix+suffix
+    max_nodes 31
+    ...
+
+`prefix+suffix` is the only value there is. A program that does not know
+layout 3 refuses the directory at its first line, and has to: under the
+rule, some node budgets are excluded that no search in the journal excludes.
+
 One `name value` per line after the first; `#` starts a comment line. The
 value of `base_file` is the rest of its line and may contain spaces. The
 file is replaced atomically (temporary file, then rename).
 
-`bits`, `symmetry`, `enumerate_max`, `format`, `base_bits` and `base_crc`
-are fixed for the life of the directory. The first three shape the records;
+`bits`, `symmetry`, `enumerate_max`, `format`, `base_bits`, `base_crc` and
+`base_bounds` are fixed for the life of the directory. The first three shape the records;
 every segment repeats them in its header and a segment that disagrees is
 refused. `journal_version` must equal `format`, and `search_revision` that
 of the program. The **search revision** identifies the LevelSolver's move
@@ -518,7 +535,10 @@ What is then concluded, per target (`derive()` in `journal.c`):
      every smaller budget as well.) Under symmetry a result for a target
      counts for its complement; or
    - if b is less than the certified minimum, in the base Bomb, of the
-     target's first bits.
+     target's first bits; or
+   - where `config.txt` says `base_bounds prefix+suffix`: if b is less than
+     the certified minimum, in the base Bomb, of any later stretch of the
+     target, less one (the suffix bound, section 9.5).
 
    **A RESOURCE_LIMIT record excludes nothing**, whatever its step count.
 3. **Lower bound.** The smallest budget that is not excluded.
@@ -536,7 +556,7 @@ What is then concluded, per target (`derive()` in `journal.c`):
 ### 9.5 The base Bomb
 
 A construction for L bits may build on a complete table for B < L bits.
-Two facts about REVs are used, and nothing else:
+Three facts about REVs are used, and nothing else:
 
 - A REV that emits an L-bit string emits its first B bits. So the string
   needs at least as many nodes as those B bits do: every smaller budget is
@@ -545,6 +565,36 @@ Two facts about REVs are used, and nothing else:
   on emitting. Its first L output bits are one L-bit string that starts
   with q, and that string therefore has a REV of m nodes, and by the first
   fact cannot have fewer: it is MINIMAL at once (rules 1 and 4).
+- **The suffix bound.** If a REV of n nodes emits a string, a REV of n + 1
+  nodes emits the string without its first j bits, for every j: one new
+  root, colored against the bit that comes next, with one link to where the
+  control pointer goes for that bit and the other to where the flow pointer
+  goes after it (the proof is in `solvers/fixed/bomb/README.md`, "Longer
+  targets", and the test suite builds that REV for every way to cut a
+  16-bit string). That REV emits, first, the B bits that begin after bit j.
+  So for j = 1 … L − B, the L-bit string needs at least one node fewer than
+  the B bits of it that begin after its first j: every budget below
+  m(stretch) − 1 is excluded. It is **m − 1, not m**: a string can need one
+  node fewer than what is left of it without its first bit (of the 983,040
+  ways to cut the front off a 16-bit string, 5,924 leave a remainder that
+  needs one more). With B = L − 1 this is one more number per string:
+
+      LB(S) = max( m(first L−1 bits of S), m(last L−1 bits of S) − 1 )
+
+  For S = 00000001: its first 7 bits need 1 node, its last 7 bits, 0000001,
+  need 5, so S needs at least 4 (it needs 5), and its search begins at
+  budget 4 where it would have begun at 1.
+
+  The rule is a setting of the work directory, fixed when it is created
+  (`base_bounds` in layout 3 of `config.txt`), because a journal made under
+  it is not complete evidence without it: the budgets it excludes were never
+  searched. A directory in layout 2 was made without the rule and is read
+  without it by every program, this one included. Which REV a string gets
+  does not depend on the rule: it is the first the search finds at the
+  budget that is the string's minimum, and neither that budget nor that
+  search changes. `benchmarks/SUFFIX_BOUND.md` has what the rule saves, counted
+  on finished levels: about one search in a hundred, and one logical step in
+  a thousand.
 
 Each time the journal is read the base is read with it. Its header, length
 and both checksums are verified and its table checksum must be the
@@ -568,7 +618,8 @@ table that was built on none.
 
 With B = L − 1 the base settles one of the two extensions of every string,
 half the table, without a search, and the other extension is searched from
-the minimum of its first L − 1 bits upward. **The ladder**
+its lower bound upward: the minimum of its first L − 1 bits, or, with the
+suffix bound, that of its last L − 1 bits less one if that is more. **The ladder**
 (`carlobomb bomb ladder`) builds the tables for B + 1, B + 2, … in turn,
 each on the one before:
 

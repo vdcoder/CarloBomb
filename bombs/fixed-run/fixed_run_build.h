@@ -65,6 +65,15 @@ typedef struct {
     int base_bits;
     uint32_t base_crc;    /* table checksum of the base Bomb, from its header */
     char base_file[1024]; /* where it is */
+    /*
+     * 1: the base Bomb also bounds a string by its later stretches.  If n
+     * nodes emit a string, n + 1 nodes emit it without its first j bits (the
+     * suffix theorem, solvers/fixed/bomb/README.md), so the string needs at
+     * least one node fewer than any stretch of base_bits bits that begins
+     * after its first bit.  0: by its first bits only, as every construction
+     * made before this rule existed.  Means nothing without a base.
+     */
+    int suffix_bound;
 
     /* May be changed when a construction is resumed. */
     int max_nodes;     /* largest node budget searched, 1..node capacity of the format */
@@ -213,6 +222,12 @@ typedef struct {
 
     /* The base Bomb: how many targets its stored REVs settled. */
     uint32_t base_settled;
+    /* The suffix bound, over the strings a search is planned for (one of each
+     * complement pair under symmetry): how many it gives a higher lower bound
+     * than their first bits do, and by how many node budgets in all.  Each of
+     * those budgets is a search the construction does not make. */
+    uint32_t suffix_raised;
+    uint64_t suffix_budgets;
 
     /* Stage B: LevelSolver calls, by node budget. */
     FrbBudgetEffort budget[FRB_MAX_NODES + 1];

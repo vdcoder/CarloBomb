@@ -112,6 +112,19 @@ hardware counter readings. For counters use bare-metal Linux with
 virtual machine the report will normally contain timings and instruction-set
 selection but no counters.
 
+## A finished level, looked back on
+
+`ladder_retro.c` reads the journal of a finished level of the ladder and
+the Bomb it was built on, and changes nothing. It says where the level's
+effort went (by node budget, by result, by the place of a search in its
+string's sequence) and counts, on the searches that were actually made, what
+a rule would have saved that excludes node budgets without a search: the
+suffix bound, one cut and every cut, and with `--witnesses` the REVs that
+can be had without a search. `SUFFIX_BOUND.md` has the results for the
+levels of 17 to 24 bits.
+
+    ./build/ladder_retro --work LADDER/work-24 --base LADDER/fixed-run-23.frb --witnesses
+
 ## The compact format
 
 `compact_bench.c` puts the fixed-width file of a Bomb and its compact file

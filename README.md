@@ -22,8 +22,11 @@ version 2 (`bombs/fixed-run/OVERNIGHT.md`,
 `benchmarks/FIXED_RUN_24_FEASIBILITY.md`), and from 25 to 31 bits in format
 version 3 (`bombs/fixed-run/BEYOND_24.md`,
 `benchmarks/FIXED_RUN_31_FEASIBILITY.md`). The format reaches 31 bits; what
-one machine can compute is 26 in a day and 28 in a week. No neural guidance
-and no LevelSearchBomb yet.
+one machine can compute is 26 in a day and 28 in a week. A complete Bomb can
+also be written in the compact format, version 4: a fifteenth of the size,
+with the answer for every shorter string in the file as well
+(`benchmarks/COMPACT_FORMAT.md`). No neural guidance and no LevelSearchBomb
+yet.
 
 ## Build and test
 
@@ -118,6 +121,21 @@ below; each finished length is a complete certified Bomb, and the command
 continues where it stopped. To 20 bits takes about a minute; to 24, hours
 (`bombs/fixed-run/OVERNIGHT.md`); 25 and 26 on a finished 24-bit Bomb, a
 night and a day (`bombs/fixed-run/BEYOND_24.md`).
+
+A complete table in the compact format, and back:
+
+```bash
+./build/carlobomb bomb compact --file ladder/fixed-run-20.frb --output fixed-run-20.v4.frb   # 35.7 MB -> 2.1 MB
+./build/carlobomb bomb verify  --file fixed-run-20.v4.frb --against ladder/fixed-run-20.frb
+./build/carlobomb bomb lookup  --file fixed-run-20.v4.frb --target 01001000        # any length up to 20 bits
+./build/carlobomb bomb compare --file fixed-run-20.v4.frb --target 0101010         # does 01010100 or 01010101 need fewer nodes?
+./build/carlobomb bomb expand  --file fixed-run-20.v4.frb --output again.frb       # the same bytes as the source
+./build/carlobomb bomb migrate --dir ladder --output ladder-v4                     # every complete Bomb of a ladder
+```
+
+The source is only read, and no file is ever replaced. The compact file is
+derived from the fixed-width one, which stays the certified artifact and
+what a ladder builds on (`bombs/fixed-run/README.md`, "The compact format").
 
 ### Bomb-backed FixedSolver
 
@@ -227,6 +245,18 @@ tests and wins a reproducible benchmark.
    with the MinimalSolver searching from one node up; the returned graph is
    run against the target. A Bomb that is missing, damaged, partial or
    self-contradicting is refused. The lookup library links no search solver.
+
+8. **Compact format** (`bombs/fixed-run/tests/test_topology.c`,
+   `test_compact.c`, `test_compact_internal.c`, `tests/bomb_smoke.cmake`).
+   A compact file has to give back the table it was made from. Every table
+   of 1 to 11 bits is converted from each fixed-width version and expanded
+   again to the same bytes; every string of every length is compared with a
+   scan of the table; the graph of a REV goes to its rank and back, and its
+   colors are found again, against a second implementation; and a file that
+   is damaged in any bit, or wrong in a way its checksums do not show, is
+   refused. The checks that only a fault can trip are tripped by putting
+   the fault in. `benchmarks/COMPACT_FORMAT.md` has the same for the Bombs
+   of 16 to 24 bits, string for string.
 
 ## Limits
 

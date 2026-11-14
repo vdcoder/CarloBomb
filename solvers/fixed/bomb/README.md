@@ -98,6 +98,32 @@ prints the minimum-node distribution of every length from 1 to 20 bits. Its
 rows for 1 to 16 bits are those of the 16-bit Bomb, as they must be: a
 complete Bomb for more bits answers everything a shorter one does.
 
+## Compact Bombs
+
+`rev_fixed_bomb_open` also opens a Bomb in the compact format, version 4
+(`bombs/fixed-run/FORMAT.md`, section 12), and everything here is answered
+from it. The file is validated in full by its own reader when it is opened.
+No prefix index is built, because the file carries one navigation bit for
+every shorter string, and nothing is allocated: the 24-bit Bomb is 37 MiB of
+mapped file, where the fixed-width one is 544 MiB and 64 MiB of index.
+
+Node counts are the same from both files, for every string of every length.
+The REV of a B-bit string is the same REV, for every Bomb this project has
+built. For a shorter string there is one difference. A compact file stores
+the strings that start with 0 and answers a string that starts with 1 with
+the complement of the answer for its complement. So a tie goes to the lowest
+index for a string that starts with 0, as above, and to the **highest** for
+one that starts with 1. Where the two differ the solver returns another REV
+than it does from the fixed-width file: of the same certified minimum
+number of nodes, for the same string.
+
+A REV from a compact file is not stored as it is returned: its colors and
+the numbering of its nodes are worked out from its graph and its string.
+That, and the run for all B bits that tells which extension the REV stands
+for, make an answer cost about twice what it costs from a fixed-width file;
+[`benchmarks/COMPACT_FORMAT.md`](../../../benchmarks/COMPACT_FORMAT.md) has
+the numbers.
+
 ## Interface
 
 ```c

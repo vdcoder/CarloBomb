@@ -56,6 +56,14 @@ typedef struct RevFixedBomb RevFixedBomb;
  * What opening cannot establish is that each stored node count really is a
  * minimum: that is the evidence of the Bomb's construction (see
  * bombs/fixed-run/README.md, and `carlobomb bomb verify --recertify`).
+ *
+ * A file in the compact format (version 4, FORMAT.md section 12) is opened
+ * as well, and validated in full by its own reader (section 12.10): every
+ * checksum, every node count and navigation bit, every REV decoded and run.
+ * It is complete by its format and keeps one node count for a string and
+ * its complement.  It answers as a fixed-width Bomb does, with one
+ * difference, at rev_fixed_bomb_extension below; no index is built for it,
+ * and it takes no memory beyond its file.
  */
 FrbError rev_fixed_bomb_open(const char *path, RevFixedBomb **bomb, uint32_t *bad_index);
 
@@ -79,7 +87,8 @@ int rev_fixed_bomb_max_nodes(const RevFixedBomb *bomb);
  * A string of `bits` bits is given as the integer whose binary digits it is,
  * first emitted bit most significant (the convention of FixedRunBomb
  * indices).  1 <= bits <= B and value < 2^bits; anything else returns 0.
- * Both are a single array read.
+ * Both are a single array read; in a compact Bomb, one step along its
+ * navigation bits for every bit the string is shorter than B.
  */
 
 /* The certified minimum node count of the string. */
@@ -89,6 +98,13 @@ int rev_fixed_bomb_min_nodes(const RevFixedBomb *bomb, int bits, uint32_t value)
  * The table index of the B-bit extension whose entry answers the string:
  * the one with the fewest nodes and, among those, the lowest index (the
  * lexicographically first).  For bits = B it is the string itself.
+ *
+ * A compact Bomb stores the strings that start with 0 and answers a string
+ * that starts with 1 with the complement of the answer for its complement.
+ * So for such a string it gives, among the extensions with the fewest
+ * nodes, the highest index where a fixed-width Bomb gives the lowest: where
+ * those differ, another extension, and from rev_fixed_bomb_solve another
+ * REV, of the same certified minimum number of nodes.
  */
 uint32_t rev_fixed_bomb_extension(const RevFixedBomb *bomb, int bits, uint32_t value);
 
@@ -133,7 +149,9 @@ typedef struct {
  * On REV_FIXED_BOMB_MINIMAL *result is the stored graph, complete and
  * executable, and it has been run on the interpreter against the target
  * once more before being returned.  On any other answer result->node_count
- * is 0.  result and info may be NULL.
+ * is 0.  result and info may be NULL.  From a compact Bomb the graph is the
+ * one its reader arrives at (colors found, nodes numbered), run for all B
+ * bits: info->extension is the B-bit string it emits.
  *
  * A target longer than B bits is REV_FIXED_BOMB_UNSUPPORTED, whatever the
  * budget.  The Bomb is never used to call a REV for a longer string minimal.
@@ -161,7 +179,8 @@ int rev_fixed_bomb_lower_bound(const RevFixedBomb *bomb, const char *target, siz
 /*
  * Benchmark interface: build the prefix index again from the table, exactly
  * as opening does.  It stores the values that are already there, but it does
- * write: not for use while other threads query the Bomb.
+ * write: not for use while other threads query the Bomb.  A compact Bomb has
+ * no such index, and nothing is done for it.
  */
 void rev_fixed_bomb_reindex(RevFixedBomb *bomb);
 

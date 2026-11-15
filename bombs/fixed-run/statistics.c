@@ -54,10 +54,19 @@ static void print_settings(FILE *out, const FrbConfig *cfg) {
             cfg->fallback_ring ? "ring (as many nodes as bits)" : "none");
     fprintf(out, "  engine                  %s\n", cfg->engine);
     fprintf(out, "  worker processes        %d\n", cfg->workers);
-    fprintf(out, "  step limit per search   ");
-    for (int i = 0; i < cfg->passes; i++) {
-        if (cfg->max_steps[i]) fprintf(out, "%s%s", i ? ", then " : "", commas(cfg->max_steps[i]));
-        else fprintf(out, "%snone", i ? ", then " : "");
+    if (cfg->shared) {
+        uint64_t classes = (uint64_t)1 << (cfg->class_bits - (cfg->symmetry && cfg->class_bits ? 1 : 0));
+        fprintf(out, "  search                  shared: the strings with the same first %d bits are a class\n"
+                     "                          (%s classes of %s strings); a pass searches the open\n"
+                     "                          strings of a class at one node budget, and its results\n"
+                     "                          count once its pass record is written",
+                cfg->class_bits, commas(classes), commas((uint64_t)1 << (cfg->bits - cfg->class_bits)));
+    } else {
+        fprintf(out, "  step limit per search   ");
+        for (int i = 0; i < cfg->passes; i++) {
+            if (cfg->max_steps[i]) fprintf(out, "%s%s", i ? ", then " : "", commas(cfg->max_steps[i]));
+            else fprintf(out, "%snone", i ? ", then " : "");
+        }
     }
     if (cfg->base_bits)
         fprintf(out, "\n  built on                the complete %d-bit Bomb %s\n"
@@ -134,6 +143,10 @@ static void print_stage_b(FILE *out, const FrbConfig *cfg, const FrbState *s) {
     fprintf(out, "  open: search stopped by a resource limit     %10s\n", commas(limited));
     if (beyond)
         fprintf(out, "  open: every budget up to max-nodes excluded  %10s\n", commas(beyond));
+    if (s->uncommitted)
+        fprintf(out, "  search records of passes that were cut off   %10s  (they establish nothing;\n"
+                     "                                                          the passes are made again)\n",
+                commas(s->uncommitted));
     if (s->conflicts)
         fprintf(out, "  CONTRADICTORY RESULTS                        %10s\n", commas(s->conflicts));
     if (s->symmetry)
@@ -248,6 +261,40 @@ static void print_effort(FILE *out, const FrbState *s) {
         fprintf(out, "   total   %10s   %10s   %10s   %6s   %16s   %8.2f\n", commas(total.searches),
                 commas(total.solved), commas(total.unsat), commas(total.limited),
                 commas(total.steps), secs(total.ns));
+    if (total.searches)
+        fprintf(out, "  record checksum of the searches that ended (string, budget, result, steps): %016llx\n",
+                (unsigned long long)s->search_checksum);
+
+    if (s->shared) {
+        FrbPassEffort all;
+        memset(&all, 0, sizeof all);
+        fprintf(out, "\nThe searches above were made in passes of the shared search.  A search record says\n"
+                     "what the search of its string by itself gives, and its logical steps; these are the\n"
+                     "steps that were made:\n");
+        fprintf(out, "  Budget       Passes      Strings        Found         Steps made   Time (s)\n");
+        for (int b = 1; b <= FRB_MAX_NODES; b++) {
+            const FrbPassEffort *e = &s->pass[b];
+            if (!e->passes) continue;
+            fprintf(out, "  %6d   %10s   %10s   %10s   %16s   %8.2f\n", b, commas(e->passes), commas(e->wanted),
+                    commas(e->found), commas(e->steps), secs(e->ns));
+            all.passes += e->passes;
+            all.wanted += e->wanted;
+            all.found += e->found;
+            all.steps += e->steps;
+            all.ns += e->ns;
+        }
+        if (all.passes)
+            fprintf(out, "   total   %10s   %10s   %10s   %16s   %8.2f\n", commas(all.passes), commas(all.wanted),
+                    commas(all.found), commas(all.steps), secs(all.ns));
+        else fprintf(out, "  no pass yet\n");
+        if (all.steps)
+            fprintf(out, "  one step made for every %.1f logical steps of the searches\n",
+                    (double)total.steps / (double)all.steps);
+        if (s->passes_repeated)
+            fprintf(out, "  %s pass(es) are in the journal a second time, with the same results\n",
+                    commas(s->passes_repeated));
+        total.ns = all.ns; /* the time of the searches is the time of their passes */
+    }
 
     steps = malloc((size_t)s->count * sizeof *steps);
     if (steps) {

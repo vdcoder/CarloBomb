@@ -560,10 +560,13 @@ static void tape_remove(Tape *t, size_t at, size_t count) {
 }
 
 static void tape_insert(Tape *t, size_t at, const FrbRecord *rec, size_t count) {
+    FrbRecord *copy = malloc(count * sizeof *copy); /* rec may be records of the tape itself */
+    memcpy(copy, rec, count * sizeof *copy);
     t->rec = realloc(t->rec, (t->n + count + 64) * sizeof *t->rec);
     memmove(&t->rec[at + count], &t->rec[at], (t->n - at) * sizeof *t->rec);
-    memcpy(&t->rec[at], rec, count * sizeof *t->rec);
+    memcpy(&t->rec[at], copy, count * sizeof *t->rec);
     t->n += count;
+    free(copy);
 }
 
 static void test_admission(void) {

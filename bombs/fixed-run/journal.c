@@ -261,6 +261,11 @@ uint64_t frb_pass_checksum(uint64_t sum, const FrbRecord *rec, const FrbFormat *
     return mix64(sum ^ frb_crc32(0, rec->graph, (size_t)format->graph_bytes));
 }
 
+uint64_t frb_search_check(uint32_t target, int budget, int result, uint64_t steps) {
+    uint64_t what = (uint64_t)target | ((uint64_t)(unsigned)budget << 32) | ((uint64_t)(unsigned)result << 40);
+    return mix64(mix64(what) ^ steps);
+}
+
 enum { PASS_FOUND = 0, PASS_CHECKSUM = 4, PASS_USED = 12 }; /* in the graph field */
 
 void frb_pass_pack(const FrbPass *pass, FrbRecord *rec) {
@@ -622,11 +627,13 @@ static int apply_search(Loader *L, const FrbSegmentInfo *seg, const FrbRecord *r
     switch ((RevSolveResult)rec->result) {
     case REV_SOLVE_SOLVED:
         be->solved++;
+        s->search_checksum += frb_search_check(rec->target, b, 0, rec->steps);
         if (rec->nodes < 1 || rec->nodes > b)
             return bad_record(L, seg, "search witness exceeds its node budget");
         return take_witness(L, seg, rec, FRB_SRC_SEARCH, 0);
     case REV_SOLVE_PROVEN_UNSAT:
         be->unsat++;
+        s->search_checksum += frb_search_check(rec->target, b, 1, rec->steps);
         if (rec->nodes != 0) return bad_record(L, seg, "unsat record carries a graph");
         if (b > ts->unsat_max) ts->unsat_max = (uint8_t)b;
         if (s->symmetry) {

@@ -177,6 +177,14 @@ int frb_pass_unpack(const FrbRecord *rec, FrbPass *pass); /* 1 if rec is a well-
  */
 uint64_t frb_pass_checksum(uint64_t sum, const FrbRecord *rec, const FrbFormat *format);
 
+/*
+ * A search as one number: its string, its node budget, its result (0 a REV,
+ * 1 none) and its logical steps.  The numbers of a set of searches are added
+ * up, so the sum does not depend on their order.  It is there to compare
+ * journals, not to resist anyone.
+ */
+uint64_t frb_search_check(uint32_t target, int budget, int result, uint64_t steps);
+
 typedef struct {
     uint32_t number;  /* the NNNNNN of the file name */
     uint32_t session; /* construction session that wrote it */
@@ -274,6 +282,10 @@ typedef struct {
 
     /* Stage B: searches of strings, by node budget. */
     FrbBudgetEffort budget[FRB_MAX_NODES + 1];
+    /* One number for all of them that ended (frb_search_check, added up):
+     * two journals that hold the same searches with the same results and
+     * steps have the same, however they came by them. */
+    uint64_t search_checksum;
     /* Shared search: the passes those searches came out of; and what was
      * not admitted as evidence. */
     int shared, class_bits;

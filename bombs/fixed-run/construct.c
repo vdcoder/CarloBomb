@@ -1039,7 +1039,7 @@ static FrbError do_class(Worker *w, const Job *job) {
             break;
         }
         w->steps_before += st.steps;
-        qsort(w->found, w->found_n, sizeof *w->found, cmp_found);
+        if (w->found_n) qsort(w->found, w->found_n, sizeof *w->found, cmp_found);
 
         /* The results, in the order of their strings. */
         now = (uint32_t)time(NULL);
@@ -1998,7 +1998,7 @@ static FrbError replay_by_shared(Replayer *R, const FrbPass *p) {
         replay_differs(R, p, NULL, "the SharedSolver did not complete it");
         return FRB_OK;
     }
-    qsort(R->found, R->found_n, sizeof *R->found, cmp_found);
+    if (R->found_n) qsort(R->found, R->found_n, sizeof *R->found, cmp_found);
     R->out->steps += st.steps;
     if (st.steps != p->steps) replay_differs(R, p, NULL, "made again, it takes another number of steps");
     for (size_t i = 0; i < R->n; i++) {
@@ -2201,6 +2201,7 @@ typedef struct {
     uint32_t sessions, killed, base_settled;
     int shared;
     uint64_t passes, pass_steps; /* shared search: what was done to have those searches */
+    uint64_t search_checksum;
 } LevelCost;
 
 static void level_report(FILE *out, int bits, const char *file, const FrbSummary *sum,
@@ -2218,6 +2219,7 @@ static void level_report(FILE *out, int bits, const char *file, const FrbSummary
     fprintf(out, "  settled by the REVs of the Bomb below   %s strings\n", commas(cost->base_settled));
     fprintf(out, "  searches                                %s, %s logical steps\n",
             commas(cost->searches), commas(cost->steps));
+    fprintf(out, "  record checksum of the searches         %016llx\n", (unsigned long long)cost->search_checksum);
     if (cost->shared)
         fprintf(out, "  made as                                 %s passes of the shared search, %s steps:\n"
                      "                                          the searches above are what each string's own\n"
@@ -2359,6 +2361,7 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
         return FRB_OK;
     }
     cost->shared = state->shared;
+    cost->search_checksum = state->search_checksum;
     for (int b = 1; b <= FRB_MAX_NODES; b++) {
         cost->searches += state->budget[b].searches;
         cost->steps += state->budget[b].steps;

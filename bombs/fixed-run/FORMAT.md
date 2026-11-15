@@ -392,12 +392,39 @@ Layout 2, written in every other case:
     workers 10
     max_steps 0
 
+Layout 4, written for a construction by shared search (section 9.6). It is
+layout 2 with two settings more:
+
+    carlobomb-fixed-run-work 4
+    journal_version 3
+    search_revision 1
+    bits 26
+    symmetry 1
+    enumerate_max 0
+    format 3
+    base_bits 25
+    base_crc 7dfdbcd7
+    base_file /home/me/frb31/fixed-run-25.frb
+    search shared
+    class_bits 8
+    max_nodes 31
+    fallback ring
+    engine shared-c
+    workers 10
+    max_steps 0
+
+The first line is the layout, and a program refuses a layout it does not
+know: one that knows only layouts 1 and 2 refuses a layout-4 directory,
+which is right, because it would take the search records there for more
+than they are without their pass records. The number 3 is not a layout of
+this program.
+
 One `name value` per line after the first; `#` starts a comment line. The
 value of `base_file` is the rest of its line and may contain spaces. The
 file is replaced atomically (temporary file, then rename).
 
-`bits`, `symmetry`, `enumerate_max`, `format`, `base_bits` and `base_crc`
-are fixed for the life of the directory. The first three shape the records;
+`bits`, `symmetry`, `enumerate_max`, `format`, `base_bits`, `base_crc`,
+`search` and `class_bits` are fixed for the life of the directory. The first three shape the records;
 every segment repeats them in its header and a segment that disagrees is
 refused. `journal_version` must equal `format`, and `search_revision` that
 of the program. The **search revision** identifies the LevelSolver's move
@@ -470,7 +497,8 @@ target and the 2^31 entries of the largest table.
 | 2 | SESSION_END | target = session number; elapsed = wall-clock time of the session; result = 0 if the table was complete |
 | 3 | ENUM_WITNESS | node count n; auxiliary = part; target; graph (n nodes). The first graph of that part of the enumeration to emit the target (or, under symmetry, the target or its complement) |
 | 4 | ENUM_PART | node count n; auxiliary = part; steps = graphs run; target = number of ENUM_WITNESS records the part wrote; elapsed. That part of the enumeration ran to completion |
-| 5 | SEARCH | One LevelSolver call: target; node budget; result (0 SOLVED, 1 PROVEN_UNSAT, 2 RESOURCE_LIMIT); steps; step limit; elapsed; auxiliary = peak stack depth. SOLVED: the witness graph. RESOURCE_LIMIT: limit kind (1 stack, 2 steps) |
+| 5 | SEARCH | The search of one target at one node budget: target; node budget; result (0 SOLVED, 1 PROVEN_UNSAT, 2 RESOURCE_LIMIT); steps; step limit; elapsed; auxiliary = peak stack depth. SOLVED: the witness graph. RESOURCE_LIMIT: limit kind (1 stack, 2 steps). In layouts 1 and 2 it is written by a LevelSolver call. In layout 4 it is written by a pass and says what that LevelSolver call gives: the same result, the same graph, the same steps; step limit, elapsed and auxiliary are 0 |
+| 6 | PASS | Layout 4 only. One pass of the shared search ran to completion: node budget; limit kind = `class_bits`; target = the class (the first `class_bits` bits of its strings, as a number); steps = steps the shared search made; step limit = the steps of its search records, added up; auxiliary = number of its search records; elapsed. In the graph field, least significant byte first: bytes 0–3 the number of its search records that are SOLVED, bytes 4–11 the checksum of its search records (section 9.6); the rest zero. Result and node count are 0 |
 
 The enumeration of the graphs with exactly n nodes is cut into n² parts by
 the two links of node 0: part p fixes link 0 of node 0 to p mod n and link 1
@@ -500,7 +528,13 @@ record at a time: the memory a reader needs does not grow with the journal.
   and run. A graph that does not emit its target is refused, as is a SOLVED
   graph with more nodes than its budget.
 
-What is then concluded, per target (`derive()` in `journal.c`):
+- In a layout-4 directory a SEARCH record is not read as evidence by
+  itself. It is held until the PASS record that closes its pass and is
+  admitted with the whole pass or not at all (section 9.6). A PASS record
+  in a directory of another layout is refused.
+
+What is then concluded, per target (`derive()` in `journal.c`), from the
+records that were admitted:
 
 1. **Witnesses.** Every graph admitted above is a witness for its target.
    Under symmetry its complement graph, which is run as well, is a witness
@@ -580,6 +614,103 @@ each on the one before:
 A level's table is finalized, read back and validated before the next
 level is started on it.
 
+### 9.6 Shared search
+
+`search shared` in `config.txt`. The strings of the table with the same
+first `class_bits` bits are a **class** (under symmetry, the classes whose
+strings start with 0: the other half of the table follows by complement, as
+always). A **pass** searches the open strings of one class at one node
+budget, together, with the SharedSolver (`solvers/shared`): a string is
+open at budget b if b is its lower bound and it has no witness of b nodes or
+fewer. A class is searched pass after pass, each at the smallest budget at
+which one of its strings is open, until none is.
+
+**What a pass says.** For every string it searched, what the LevelSolver
+says of that string alone at that budget: SOLVED with the first REV the
+LevelSolver finds, or PROVEN_UNSAT; and the number of logical steps the
+LevelSolver takes for it. The SharedSolver counts those steps, string by
+string, while it searches the strings together
+(`solvers/shared/shared_solver.h` says how, and `tests/test_shared_solver.c`
+holds it to the LevelSolver). So the search records of a layout-4 journal
+are the search records a layout-2 construction of the same table writes:
+the same strings at the same budgets with the same results, graphs and
+steps. `bomb status` prints a checksum over them (below) that is the same
+for both.
+
+**What is written, and when.** Nothing while a pass runs. When it has
+ended: one SEARCH record for each string it searched, in ascending order of
+their indices, and then one PASS record. All of it goes to the segment of
+the process that made the pass, and that process then hands it to the
+operating system.
+
+**The PASS record is where results become evidence.** A reader holds the
+SEARCH records of a segment back as it reads them. At a PASS record it
+checks the pass, and admits its search records to the rules of section 9.4
+only if every check holds; if one does not, the journal is refused. SEARCH
+records that are not followed by a PASS record in their segment (the
+segment ends, or a record of another type comes first) are **not
+evidence**: they are what a process had written of a pass when it was cut
+off. They are skipped, counted (`bomb status` shows the number), and the
+pass is made again when the construction goes on. An interrupted pass
+therefore excludes nothing and certifies nothing, wherever it was
+interrupted: in the search (nothing was written) or in the writing (search
+records without their PASS record).
+
+The checks of a pass, all of them made before any of its records counts:
+
+1. *Whole.* The number of SEARCH records in front of the PASS record is the
+   number it states, and not zero. Each is of its node budget and of a
+   string of its class. Their indices ascend, so no string is there twice.
+   Each is SOLVED or PROVEN_UNSAT, without a step limit. The number that
+   are SOLVED is the number it states; their steps add up to the sum it
+   states; their checksum is the checksum it states.
+2. *Of this construction.* Its `class_bits` is that of `config.txt`; its
+   class exists and, under symmetry, is one whose strings start with 0.
+3. *In its place.* By the evidence admitted before it (the base Bomb, the
+   enumeration, and earlier passes) the strings it searched are **exactly**
+   the strings of its class that are open at its budget: none missing, none
+   besides. And no string of its class is open at a smaller budget: the
+   passes of a class come in the order of their budgets, each on what the
+   one before left.
+4. *Once.* If a pass of the same class and budget was admitted before, this
+   one must state the same number of records, of SOLVED, of steps and the
+   same checksum. It is then skipped: the same pass twice adds nothing. If
+   it states anything else, the two contradict each other and the journal
+   is refused.
+
+After that the rules of section 9.4 apply to the admitted records as they
+apply to the records of any journal, unchanged. In particular every SOLVED
+graph is unpacked and run.
+
+**The checksum of a pass** is a 64-bit number computed over its search
+records in their order, starting from 0: for each record, in turn, the
+target index, the steps, the number result + 256 · node count + 65536 ·
+budget, and the CRC-32 of the graph field are each combined into it by
+`sum = mix(sum XOR value)`, where `mix` adds 9E3779B97F4A7C15 and applies
+the finalizer of SplitMix64 (`frb_pass_checksum` in `journal.c`). It ties
+the PASS record to the records it closes; like the CRC of a record it is
+there against accidents.
+
+**The checksum of the searches** that `bomb status` and the report of a
+ladder level print is another number, and is defined for every layout: the
+sum, over all admitted SEARCH records that are SOLVED or PROVEN_UNSAT, of
+`mix(mix(target + 2^32 · budget + 2^40 · result) XOR steps)`
+(`frb_search_check`). Being a sum it does not depend on the order of the
+records or on which process wrote them. Two constructions of the same table
+have the same, whether they searched string by string or by classes.
+
+**Checking a pass independently.** What the reader checks is that a pass is
+whole and in its place. That what it says is *true* is, as for every search
+record there ever was, a claim about a search, and is checked by making the
+search again. `carlobomb bomb verify --work-dir DIR --replay-passes level`
+does that for whole passes: for every search record of a pass it calls the
+LevelSolver for that string at that budget and requires the result, the
+graph and the steps of the record. The LevelSolver and the SharedSolver
+have no code in common. `--replay-passes shared` makes the pass again with
+the SharedSolver and requires the same records and the steps the PASS
+record states for the shared search. `--passes K` takes K passes at random
+instead of all.
+
 ## 10. Determinism
 
 Which minimum-node witness is stored for a target depends on the settings
@@ -587,7 +718,9 @@ Which minimum-node witness is stored for a target depends on the settings
 enumeration, search and a base REV run on generally give different graphs
 of the same size. It does not depend on the engine, the number of worker
 processes, which worker ran which search, the step limits used on the way,
-or how often the construction was interrupted and resumed. With equal
+how often the construction was interrupted and resumed, or whether the
+strings were searched one by one or by classes, and into how many classes
+they were cut. With equal
 settings the table file is identical byte for byte, so one checksum of the
 file is enough to compare two machines' results. In particular every level
 of a ladder from the same starting Bomb is the same file everywhere. The
@@ -606,7 +739,9 @@ header size field lets a later version add header fields without moving the
 table; readers of versions 1 to 4 require it to be 64. The journal carries
 the version of the table format it serves, which is 1, 2 or 3 and never 4,
 and the search revision is a third number, for the reasons given in section
-9.1.
+9.1. The layout of `config.txt` (1, 2 or 4) is a fourth: it says which
+settings the file holds and, for layout 4, that search records count only
+with their pass records.
 
 One number means one layout. The proposal for the compact format (issue 6)
 calls it "v3"; by the time it was built, tables of 25 bits and more were

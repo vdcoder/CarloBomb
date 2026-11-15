@@ -195,6 +195,50 @@ if(MODE STREQUAL "small")
   run(0 "Result: MINIMAL.*Verification: PASS" fixed --bomb ${W}/v2-11.frb --target 0110100110)
   run(2 "--against takes a Bomb for fewer bits" bomb verify --file ${W}/a.frb --against ${W}/v2-11.frb)
   run(1 "Against [^\n]*a-partial.frb: FAIL \\(table is not complete" bomb verify --file ${W}/v2-11.frb --against ${W}/a-partial.frb)
+  # The same ladder by shared search, stopped once on the way: the same files,
+  # and a journal with the same searches.  Its passes made again, every record
+  # of them, by the LevelSolver and by the SharedSolver.
+  run(3 "shared search in classes of 4 bits.*Stopped at the requested job cap, sample size or time limit"
+      bomb ladder --dir ${W}/slad --from ${W}/a.frb --to 13 --workers 2 --search shared --class-bits 4 --limit-jobs 3 --progress 0)
+  run(3 "search +shared: the strings with the same first 4 bits.*NOT COMPLETE" bomb status --work-dir ${W}/slad/work-11)
+  run(0 "Level 11:[^\n]*continued.*FixedRunBomb\\(13\\) is complete.*made as +[0-9,]+ passes of the shared search.*The ladder is complete"
+      bomb ladder --dir ${W}/slad --to 13 --workers 2 --search shared --class-bits 4 --progress 0)
+  foreach(level 11 12 13)
+    expect_same_file(${W}/slad/fixed-run-${level}.frb ${W}/lad/fixed-run-${level}.frb)
+    foreach(kind lad slad)
+      execute_process(COMMAND ${CLI} bomb status --work-dir ${W}/${kind}/work-${level} OUTPUT_VARIABLE status_out)
+      string(REGEX MATCH "record checksum of the searches that ended[^:]*: ([0-9a-f]+)" found "${status_out}")
+      set(checksum_${kind} "${CMAKE_MATCH_1}")
+    endforeach()
+    if(NOT checksum_lad OR NOT checksum_lad STREQUAL checksum_slad)
+      message(FATAL_ERROR "level ${level}: the searches of the ladder have checksum '${checksum_lad}', those of the shared search '${checksum_slad}'")
+    endif()
+  endforeach()
+  run(0 "were made in passes of the shared search.*one step made for every [0-9.]+ logical steps" bomb status --work-dir ${W}/slad/work-13)
+  run(0 "against the journal[^\n]*PASS.*Passes made again, every search record of each held against a LevelSolver call for its string: PASS.* 0 not reproduced.*Verification: PASS \\(complete certified table\\)"
+      bomb verify --file ${W}/slad/fixed-run-13.frb --work-dir ${W}/slad/work-13 --replay-passes level --engine c)
+  run(0 "held against the pass made again: PASS[^\n]*\n +3 of the [0-9]+ passes in the journal.* 0 not reproduced"
+      bomb verify --file ${W}/slad/fixed-run-13.frb --work-dir ${W}/slad/work-13 --replay-passes shared --passes 3)
+  run(2 "--replay-passes needs --work-dir" bomb verify --file ${W}/slad/fixed-run-13.frb --replay-passes level)
+  run(2 "--replay-passes must be level" bomb verify --file ${W}/slad/fixed-run-13.frb --work-dir ${W}/slad/work-13 --replay-passes all)
+  run(2 "is not a construction by shared search" bomb verify --file ${W}/lad/fixed-run-13.frb --work-dir ${W}/lad/work-13 --replay-passes shared)
+  # How a directory is searched is fixed when it is made.
+  run(2 "was started with --search shared --class-bits 4" bomb resume --work-dir ${W}/slad/work-13 --search level)
+  run(2 "was started with --search shared --class-bits 4" bomb resume --work-dir ${W}/slad/work-13 --class-bits 5)
+  run(2 "was started with --search shared --class-bits 4" bomb resume --work-dir ${W}/slad/work-13 --max-steps 1000)
+  run(2 "was started with a search string by string" bomb resume --work-dir ${W}/lad/work-13 --search shared)
+  run(2 "--class-bits belongs to --search shared" bomb build --bits 9 --work-dir ${W}/nosuch --class-bits 3)
+  run(2 "--search must be level" bomb build --bits 9 --work-dir ${W}/nosuch --search fast)
+  run(2 "has no step limit" bomb build --bits 9 --work-dir ${W}/nosuch --search shared --max-steps 1000)
+  run(2 "class-bits must be 0..9 for 9-bit targets" bomb build --bits 9 --work-dir ${W}/nosuch --search shared --class-bits 10)
+  # Without a base: enumeration, then the shared search, and the table of the search string by string.
+  run(0 "engine shared-c.*COMPLETE" bomb build --bits 10 --work-dir ${W}/sdirect --search shared --enumerate-max 3 --workers 2 --progress 0)
+  run(0 "COMPLETE" bomb build --bits 10 --work-dir ${W}/ldirect --enumerate-max 3 --workers 2 --progress 0 --engine c)
+  run(0 "COMPLETE" bomb finalize --work-dir ${W}/sdirect --output ${W}/sdirect.frb)
+  run(0 "COMPLETE" bomb finalize --work-dir ${W}/ldirect --output ${W}/ldirect.frb)
+  expect_same_file(${W}/sdirect.frb ${W}/ldirect.frb)
+  run(0 "with engine shared-c.*COMPLETE" bomb resume --work-dir ${W}/sdirect --progress 0)
+
   # The 31-bit format, and a ladder that crosses from one format into the next:
   # levels 11 and 12 in version 2, then 13 in version 3 on the version-2 table.
   run(0 "The ladder is complete" bomb ladder --dir ${W}/lad3 --from ${W}/a.frb --to 12 --format 2 --workers 2 --progress 0)

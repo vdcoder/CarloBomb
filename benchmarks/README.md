@@ -124,3 +124,10 @@ string of every length gets the answer it has to get from both.
 
 How the format was chosen and the results on the real Bombs of 16 to 24 bits
 are in `COMPACT_FORMAT.md`.
+
+## The construction by shared search
+
+`SHARED_CONSTRUCTION.md` holds `bomb ladder --search shared` against the
+ladder that searches string by string: the same files and the same
+searches at every level from 17 to 26 bits, a level killed eight times and
+gone on with, and passes made again record for record by the LevelSolver.

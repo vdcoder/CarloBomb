@@ -63,6 +63,12 @@ add_library(carlobomb_minimal STATIC solvers/minimal/minimal_solver.c)
 target_include_directories(carlobomb_minimal PUBLIC solvers/minimal)
 target_link_libraries(carlobomb_minimal PUBLIC carlobomb_level)
 
+# SharedSolver: the LevelSolver's search for the strings of a class at once.
+# It links the REV core and nothing else: no line of the LevelSolver is in it.
+add_library(carlobomb_shared STATIC solvers/shared/shared_solver.c)
+target_include_directories(carlobomb_shared PUBLIC solvers/shared)
+target_link_libraries(carlobomb_shared PUBLIC carlobomb_rev)
+
 # FixedRunBomb.  The file format and the enumerator are plain C11; building a
 # table (journal, worker processes) needs POSIX.
 add_library(carlobomb_fixed_run STATIC bombs/fixed-run/fixed_run.c bombs/fixed-run/enumerate.c
@@ -180,6 +186,12 @@ foreach(t test_rev test_level_solver test_minimal_solver test_oracle test_legacy
   target_link_libraries(${t} PRIVATE carlobomb_minimal)
   add_test(NAME ${t} COMMAND ${t})
 endforeach()
+
+# The SharedSolver against the LevelSolver, string by string: result, REV and
+# logical steps.
+add_executable(test_shared_solver tests/test_shared_solver.c)
+target_link_libraries(test_shared_solver PRIVATE carlobomb_shared carlobomb_level)
+add_test(NAME test_shared_solver COMMAND test_shared_solver)
 
 if(NOT MSVC)
   # Code included from the unmodified legacy source.

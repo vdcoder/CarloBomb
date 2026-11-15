@@ -1,0 +1,24 @@
+$ carlobomb bomb verify --file y25.frb --recertify --sample 2000 --seed 2026
+Minima recomputed from node budget 1, engine amd64-auto: PASS
+  2000 targets solved again in 26.53 s (1.775e+10 steps): 2000 certified minima reproduced,
+  0 differ, 0 uncertified witnesses are larger than the minimum, 0 undecided
+
+exit code 0
+$ carlobomb bomb verify --file y26.frb --recertify --sample 2000 --seed 2026
+Minima recomputed from node budget 1, engine amd64-auto: PASS
+  2000 targets solved again in 43.20 s (3e+10 steps): 2000 certified minima reproduced,
+  0 differ, 0 uncertified witnesses are larger than the minimum, 0 undecided
+
+exit code 0
+$ carlobomb bomb verify --file y25.frb --recertify --hardest --sample 200
+The 61704 strings certified at the largest minimum, 9 nodes, recomputed from node
+budget 1, engine amd64-auto: PASS
+  200 targets solved again in 5.29 s (4.744e+09 steps): 200 certified minima reproduced,
+  0 differ, 0 uncertified witnesses are larger than the minimum, 0 undecided
+exit code 0
+$ carlobomb bomb verify --file y26.frb --recertify --hardest
+The 2 strings certified at the largest minimum, 10 nodes, recomputed from node
+budget 1, engine amd64-auto: PASS
+  2 targets solved again in 1.89 s (8.141e+08 steps): 2 certified minima reproduced,
+  0 differ, 0 uncertified witnesses are larger than the minimum, 0 undecided
+exit code 0

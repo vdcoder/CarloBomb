@@ -1,0 +1,24 @@
+$ shared_search --bits 22 --prefix-bits 10 --jobs 1 --base LADDER/fixed-run-21.frb --bound prefix
+Strings of 22 bits that start with 0: 2,097,152 in 512 classes of 512; built on the Bomb one bit shorter, each string from what its first bits need; 1 process
+  budget           wanted            found                  steps
+  1                     1                0                    102
+  2                     4                0                    986
+  3                    36                0                 30,032
+  4                   520                0              1,477,697
+  5                 9,409               71             22,807,066
+  6               188,563           14,623            347,147,330
+  7             1,009,543          833,488          7,295,183,517
+  8               200,393          200,392          6,138,797,899
+  9                     2                2              3,971,145
+  total: 13,809,415,774 steps; 1,048,576 strings found by search, 1,048,576 settled by the REV of the base
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 1.4 s to set up, 81.0 s searching (1.7e+08 steps a second, all processes)
+  memory: the largest process had 153 MB resident; the tables all processes share are 76 MB
+  jobs: 512; steps of a job: least 10,998,035, median 25,343,829, most 65,395,198 (0.47% of all)
+  strings by nodes (both strings of a pair counted):  1: 2  2: 6  3: 64  4: 968  5: 17,920  6: 387,696  7: 3,338,182  8: 449,460  9: 6
+  REVs run on the reference interpreter: 2,097,152; emit their string with every node, and their complement the
+  complement: 2,097,152 (1,048,576 from the search, 1,048,576 from the base)
+  (1.0 s)
+  node-count digest (SHA-256 of 4,194,304 bytes, the nodes of each string in index order):
+    318611e761cc5450008dcdf86a021eb8207271c161ae9f8be1cf111401044954
+exit code 0; 83.435448339 s from start to end

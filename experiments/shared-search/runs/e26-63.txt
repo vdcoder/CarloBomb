@@ -1,0 +1,32 @@
+$ shared_search --bits 26 --prefix-bits 10 --class 63 --base RUNS/y25.frb --bound prefix --count --jobs-out RUNS/e26-63.jobs
+Strings of 26 bits that start with 0: 65,536 in 1 class of 512; built on the Bomb one bit shorter, each string from what its first bits need; 1 process
+  budget           wanted            found                  steps
+  4                     1                0                  2,064
+  5                     2                0                 26,333
+  6                   118                0                593,254
+  7                 4,407              217             13,554,775
+  8                31,889           26,401            407,439,355
+  9                 6,150            6,150          1,565,855,735
+  total: 1,987,471,516 steps; 32,768 strings found by search, 32,768 settled by the REV of the base
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 16.4 s to set up, 12.1 s searching (1.65e+08 steps a second, all processes)
+  memory: the largest process had 1540 MB resident; the tables all processes share are 1,216 MB
+  jobs: 1; steps of a job: least 1,987,471,516, median 1,987,471,516, most 1,987,471,516 (100.00% of all); scaled to all 512 classes: 1.018e+12 steps
+  strings by nodes (both strings of a pair counted):  4: 2  5: 2  6: 232  7: 9,012  8: 108,200  9: 13,624
+  counted as searches of one string each, the searches a ladder makes and journals:
+  budget         searches        steps where a REV         steps where none
+  4                     1                        0                    2,025
+  5                     2                        0                   43,786
+  6                   118                        0               31,953,298
+  7                 4,407              519,803,345           16,948,134,487
+  8                31,889          558,303,001,505          356,312,920,827
+  9                 6,150           97,886,341,869                        0
+  total: 42,567 searches, 1,030,002,201,142 logical steps: 518.2 times the steps made here
+  record checksum (every search: string, budget, result, steps): 1cc0e361ead483e1
+  of them, at a budget the last bits of the string, less one node, excludes: 123 searches, 149,030,125 steps (0.014%)
+  of them, at a budget every stretch of the string, less one node, excludes: 126 searches, 159,694,415 steps (0.016%)
+  REVs run on the reference interpreter: 65,536; emit their string with every node, and their complement the
+  complement: 65,536 (32,768 from the search, 32,768 from the base)
+  (0.0 s)
+exit code 0; 28.478969282 s from start to end
+class 63 alone: wanted, found and steps of every pass as in the full run

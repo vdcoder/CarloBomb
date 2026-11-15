@@ -350,3 +350,25 @@ add_test(NAME cli_smoke
   COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
           -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM}
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
+
+# ---- experiments ---------------------------------------------------------
+# Shared search: one search for all strings of a length at once
+# (experiments/shared-search/README.md).  Not part of the construction.
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  add_executable(shared_search experiments/shared-search/shared_search.c)
+  target_link_libraries(shared_search PRIVATE carlobomb_fixed_run_build carlobomb_fixed_bomb)
+  # The searches of a finished level's journal as three numbers, to compare
+  # with what the experiment says those searches are.  Reads only.
+  add_executable(journal_digest experiments/shared-search/journal_digest.c)
+  target_link_libraries(journal_digest PRIVATE carlobomb_fixed_run_build)
+endif()
+# What a Bomb says every string needs, as one number to compare the
+# experiment with, and Bombs with each other.  Reads only.
+add_executable(nodes_digest experiments/shared-search/nodes_digest.c)
+target_link_libraries(nodes_digest PRIVATE carlobomb_fixed_bomb)
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  add_test(NAME shared_search_small
+    COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DSHARED=$<TARGET_FILE:shared_search>
+            -DDIGEST=$<TARGET_FILE:nodes_digest> -DJOURNAL=$<TARGET_FILE:journal_digest>
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/experiments/shared-search/smoke.cmake)
+endif()

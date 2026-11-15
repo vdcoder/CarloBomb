@@ -1,0 +1,13 @@
+LADDER/work-18: strings of 18 bits, built on the Bomb of 17 bits, each string from what its first bits allow
+  journal: 96,252 records in 5 segments, 7,700,480 bytes
+  budget      found a REV       found none
+  1                     0                1
+  2                     0                4
+  3                     0               36
+  4                     1              518
+  5                   444            7,944
+  6                37,191           22,210
+  7                27,898                1
+  8                     2                0
+  searches: 96,250 (65,536 found a REV, 30,714 found none), 16,902,096,386 logical steps
+  record checksum (every search: string, budget, result, steps): 4ea7faef84ba8fa9

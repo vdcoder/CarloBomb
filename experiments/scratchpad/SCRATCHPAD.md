@@ -9,19 +9,20 @@ that failed included.
 Measured on 15 November 2026 in the development container, on the ladder
 of 16 to 24 bits built there and the 25- and 26-bit tables of the
 shared-search experiment, with the SharedSolver of the construction by
-shared search. `free_fields.c` and `proof_only.c` in this directory are the
-programs; they read Bombs and write nothing.
+shared search. `free_fields.c`, `proof_only.c` and `neighbors.c` in this
+directory are the programs; they read Bombs and write nothing.
 
 ## Where it stands
 
 Three ideas measured, one observation that explains all three, and one
-place left to look.
+place left to look, with a first lead in it.
 
 | Idea | What a scratchpad would hold | Derivable from the Bomb? | Measured worth |
 |---|---|---|---|
 | The freedom of the stored REV | which fields of each REV the machine never read | yes, by running the REV | 0.02% of the strings it could settle: nothing |
 | Every REV known beforehand | a REV for every string of X bits, by any means | no | a factor of 2.3 to 4.2, by where the length falls between two node counts |
 | A stored frontier of the search | the partly decided graphs at some depth | no | near the top: reusable and worth little; near the bottom: worth nearly everything, as large as the search, and not what the next level needs |
+| The node count of a string's last bits (section 5) | nothing: it is in the Bomb | yes | not a bound yet; where the last bits need one node more than the first, the string does too in 93 to 97% of cases |
 
 **The observation.** The cost of a pass hardly depends on how many strings
 it is for. At 20 bits, the pass at 7 nodes searches 231,286 strings and
@@ -186,6 +187,50 @@ Two bounds of that kind are known and measured (`benchmarks/SUFFIX_BOUND.md`
 in pull request #10): a string needs at least what its first X − 1 bits
 need, which is where every search begins, and at least one node less than
 its last X − 1 bits need, which decides 0.1% of the proofs.
+
+## 5. The last bits: a lead, and its limit
+
+A string T of X bits contains two strings of X − 1 bits: its first bits q
+and its last bits s. Two things are proven: T needs at least M(q) nodes,
+and at least M(s) − 1. The second is the suffix bound, and it decides
+something only where s needs two nodes more than q.
+
+`neighbors` counts, for the extension T of q that a level has to search,
+how often T needs more than M(q), by what s needs:
+
+| T's last bits need | 20 bits: T needs more | 22 bits | 24 bits | 26 bits |
+|---|---:|---:|---:|---:|
+| 2 more than q, or over (the suffix bound) | 3,895 of 3,895 | 9,333 of 9,333 | 49,076 of 49,076 | 133,742 of 133,742 |
+| **1 more than q** | 67,334 of 70,706: **95.2%** | 166,070 of 174,054: **95.4%** | 965,696 of 1,040,514: **92.8%** | 3,377,315 of 3,485,236: **96.9%** |
+| the same as q | 26.6% | 21.2% | 39.2% | 12.9% |
+| 1 fewer than q | 0.7% | 2.0% | 1.1% | 0.6% |
+| 2 fewer, or less | 0 of 319 | 0 of 632 | 0 of 3,816 | 0 of 9,855 |
+
+**The lead.** Where the last bits need one node more than the first, the
+whole string needs that one more nineteen times in twenty, at every length.
+And that case is half to two thirds of all the strings that need more than
+their first bits (3,377,315 of 4,935,876 at 26 bits). Put the other way
+round: "a string needs at least what its last X − 1 bits need", which is
+false as a rule, is false for 2 to 3% of the searched strings (107,921 of
+16.8 million at 26 bits, those of the second line that do not need more). A
+theorem that said *which* strings need fewer nodes than their own last
+bits would turn the suffix bound from M(s) − 1 into M(s) for all the
+others, and would prove, without a search, half to two thirds of what the
+searches at the lower bound now prove. These are frequencies, not proofs;
+the exceptions are real and every Bomb lists them.
+
+(The last line is a second regularity: where the last bits need two nodes
+fewer than the first, the string never needed more than the first, in
+14,622 cases.)
+
+**Its limit**, by the observation at the top: a bound that removes half the
+strings from a pass does not remove half its cost. At 24 bits the strings
+of the second line are 46% of those the 7-node pass has to prove absent,
+and the pass would be made for the other 54% at nearly the same price; and
+of the 717 strings whose first bits need 8 nodes and which need 9, the ones
+whose proofs are dearest, 701 are in the third line, where the last bits
+say nothing. A bound pays when it covers a whole pass. This one does not
+yet; it is the nearest thing to one that the data shows.
 
 ## Not measured yet
 

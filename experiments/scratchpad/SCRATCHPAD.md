@@ -36,8 +36,10 @@ the table keep much of the upper part of that walk alive.
 **What costs is proving absence, and the proof for one string is almost
 the proof for all its neighbors.** That is why the shared search is cheap,
 why building on the Bomb below saves it only 0.2% (the strings the base
-settles would have cost nothing extra), and why supplying REVs saves so
-little.
+settles would have cost nothing extra; at 27 bits, in the experimental
+runs of pull request #11, 903,964,320,105 steps on the 26-bit table and
+904,447,251,595 with no table at all: 0.05%), and why supplying REVs saves
+so little.
 
 **What is left.** A level is passes, and a pass at budget N exists for two
 reasons: to find the REVs of N nodes, and to prove that the strings which

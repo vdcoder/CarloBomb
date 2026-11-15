@@ -162,6 +162,12 @@ if(UNIX)
   add_executable(ladder_pilot benchmarks/ladder_pilot.c)
   target_link_libraries(ladder_pilot PRIVATE carlobomb_minimal m)
 endif()
+# What a finished level did cost, from its journal, and what a rule that
+# excludes node budgets without a search would have saved.  Reads only.
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  add_executable(ladder_retro benchmarks/ladder_retro.c)
+  target_link_libraries(ladder_retro PRIVATE carlobomb_fixed_run_build carlobomb_fixed_bomb)
+endif()
 
 add_executable(baseline benchmarks/baseline.c)
 target_include_directories(baseline PRIVATE tests)

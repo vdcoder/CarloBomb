@@ -50,9 +50,15 @@
 
 /* First line of config.txt.  Layout 1 is what a construction of up to 16
  * bits without a base Bomb has always written, and still does; layout 2 adds
- * the table format and the base Bomb. */
+ * the table format and the base Bomb; layout 3 adds how the base Bomb bounds
+ * a string, and is written only where that is by more than its first bits.
+ * A program that knows fewer layouts refuses the directory at this line,
+ * which is the point: a journal made under a rule that excludes more node
+ * budgets has fewer searches in it than an older program would ask for. */
 #define CONFIG_MAGIC_1 "carlobomb-fixed-run-work 1"
 #define CONFIG_MAGIC_2 "carlobomb-fixed-run-work 2"
+#define CONFIG_MAGIC_3 "carlobomb-fixed-run-work 3"
+#define BOUNDS_SUFFIX "prefix+suffix"
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...) {
     va_list ap;
@@ -79,6 +85,7 @@ void frb_config_default(FrbConfig *cfg, int bits) {
     cfg->format = format ? format->version : FRB_FORMAT_VERSION;
     cfg->symmetry = 1;
     cfg->enumerate_max = 5;
+    cfg->suffix_bound = 1; /* takes effect when there is a base Bomb */
     cfg->max_nodes = format ? format->node_capacity : FRB_NODE_CAPACITY;
     cfg->fallback_ring = 1;
     cfg->workers = 1;
@@ -116,6 +123,10 @@ FrbError frb_config_check(const FrbConfig *cfg, char *err, size_t errlen) {
     if (cfg->base_file[sizeof cfg->base_file - 1] != '\0' || strpbrk(cfg->base_file, "\r\n") ||
         (cfg->base_bits != 0) != (cfg->base_file[0] != '\0')) {
         set_err(err, errlen, "bad base Bomb file name");
+        return FRB_ERR_ARG;
+    }
+    if (cfg->suffix_bound != 0 && cfg->suffix_bound != 1) {
+        set_err(err, errlen, "the suffix bound is on or off");
         return FRB_ERR_ARG;
     }
     if (cfg->workers < 1 || cfg->workers > FRB_MAX_WORKERS) {
@@ -180,10 +191,11 @@ static int config_path(char *buf, size_t cap, const char *dir, const char *name)
 
 FrbError frb_config_write(const char *dir, const FrbConfig *cfg) {
     char path[4096], text[4096];
-    int layout2, n;
+    int layout2, layout3, n;
     if (!dir || frb_config_check(cfg, NULL, 0) != FRB_OK) return FRB_ERR_ARG;
     if (!config_path(path, sizeof path, dir, "config.txt")) return FRB_ERR_ARG;
     layout2 = cfg->format != FRB_FORMAT_VERSION || cfg->base_bits != 0;
+    layout3 = cfg->base_bits != 0 && cfg->suffix_bound;
     n = snprintf(text, sizeof text,
                  "%s\n"
                  "# Settings of a FixedRunBomb construction.  The first five are fixed for\n"
@@ -193,7 +205,7 @@ FrbError frb_config_write(const char *dir, const FrbConfig *cfg) {
                  "bits %d\n"
                  "symmetry %d\n"
                  "enumerate_max %d\n",
-                 layout2 ? CONFIG_MAGIC_2 : CONFIG_MAGIC_1, cfg->format, FRB_SEARCH_REVISION,
+                 layout3 ? CONFIG_MAGIC_3 : layout2 ? CONFIG_MAGIC_2 : CONFIG_MAGIC_1, cfg->format, FRB_SEARCH_REVISION,
                  cfg->bits, cfg->symmetry ? 1 : 0, cfg->enumerate_max);
     if (layout2 && n > 0 && (size_t)n < sizeof text) {
         n += snprintf(text + n, sizeof text - (size_t)n,
@@ -206,6 +218,13 @@ FrbError frb_config_write(const char *dir, const FrbConfig *cfg) {
         if (cfg->base_bits && n > 0 && (size_t)n < sizeof text)
             n += snprintf(text + n, sizeof text - (size_t)n, "base_crc %08x\nbase_file %s\n",
                           (unsigned)cfg->base_crc, cfg->base_file);
+        if (layout3 && n > 0 && (size_t)n < sizeof text)
+            n += snprintf(text + n, sizeof text - (size_t)n,
+                          "# Also fixed: the node budgets the base Bomb excludes for a string.  Those\n"
+                          "# below what its first base_bits bits need; and those below what any later\n"
+                          "# stretch of base_bits bits needs, less one node (the suffix theorem).\n"
+                          "base_bounds %s\n",
+                          BOUNDS_SUFFIX);
     }
     if (n > 0 && (size_t)n < sizeof text)
         n += snprintf(text + n, sizeof text - (size_t)n,
@@ -270,6 +289,7 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
         if (lineno == 1) {
             if (strcmp(line, CONFIG_MAGIC_1) == 0) layout = 1;
             else if (strcmp(line, CONFIG_MAGIC_2) == 0) layout = 2;
+            else if (strcmp(line, CONFIG_MAGIC_3) == 0) layout = 3;
             else {
                 fclose(f);
                 set_err(err, errlen, "%s: not a FixedRunBomb work directory of a known version", path);
@@ -279,7 +299,7 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
             continue;
         }
         if (line[0] == '#' || line[0] == '\0') continue;
-        if (layout == 2 && strncmp(line, "base_file ", 10) == 0) { /* may contain spaces */
+        if (layout >= 2 && strncmp(line, "base_file ", 10) == 0) { /* may contain spaces */
             if (n - 10 >= sizeof cfg->base_file || n == 10) goto bad;
             memcpy(cfg->base_file, line + 10, n - 10 + 1);
             seen |= 8192u;
@@ -305,9 +325,14 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
         }
         else if (!strcmp(key, "workers")) { if (!parse_int(value, &cfg->workers)) goto bad; seen |= 256u; }
         else if (!strcmp(key, "max_steps")) { if (!frb_parse_step_limits(value, cfg)) goto bad; seen |= 512u; }
-        else if (layout == 2 && !strcmp(key, "format")) { if (!parse_int(value, &cfg->format)) goto bad; seen |= 1024u; }
-        else if (layout == 2 && !strcmp(key, "base_bits")) { if (!parse_int(value, &cfg->base_bits)) goto bad; seen |= 2048u; }
-        else if (layout == 2 && !strcmp(key, "base_crc")) {
+        else if (layout >= 2 && !strcmp(key, "format")) { if (!parse_int(value, &cfg->format)) goto bad; seen |= 1024u; }
+        else if (layout >= 2 && !strcmp(key, "base_bits")) { if (!parse_int(value, &cfg->base_bits)) goto bad; seen |= 2048u; }
+        else if (layout == 3 && !strcmp(key, "base_bounds")) {
+            if (strcmp(value, BOUNDS_SUFFIX) != 0) goto bad; /* no other rule is known */
+            cfg->suffix_bound = 1;
+            seen |= 16384u;
+        }
+        else if (layout >= 2 && !strcmp(key, "base_crc")) {
             char *end;
             unsigned long crc = strtoul(value, &end, 16);
             if (end == value || *end != '\0' || strlen(value) != 8) goto bad;
@@ -318,7 +343,10 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
     }
     fclose(f);
     want = 1023u;
-    if (layout == 2) want |= 1024u | 2048u | (cfg->base_bits ? 4096u | 8192u : 0u);
+    if (layout >= 2) want |= 1024u | 2048u | (cfg->base_bits ? 4096u | 8192u : 0u);
+    if (layout == 3) want |= 16384u; /* and a base, or the rule would bound nothing */
+    if (layout == 3 && !cfg->base_bits) seen = 0;
+    if (!cfg->base_bits) cfg->suffix_bound = 1; /* as frb_config_default leaves it: it means nothing here */
     if (seen != want) {
         set_err(err, errlen, "%s: incomplete (a setting is missing, or one too many)", path);
         return FRB_ERR_INCOMPATIBLE;
@@ -1642,7 +1670,9 @@ static int formula_nodes(int bits) {
 
 typedef struct {
     uint64_t searches, steps, solver_ns, session_ns, journal_bytes, journal_records;
-    uint32_t sessions, killed, base_settled;
+    uint64_t suffix_budgets;
+    uint32_t sessions, killed, base_settled, suffix_raised;
+    int suffix_bound;
 } LevelCost;
 
 static void level_report(FILE *out, int bits, const char *file, const FrbSummary *sum,
@@ -1658,6 +1688,10 @@ static void level_report(FILE *out, int bits, const char *file, const FrbSummary
             nodes_of_one == max ? "it is among the hardest strings" : "it is NOT among the hardest strings");
     fprintf(out, "\nConstruction of this level\n");
     fprintf(out, "  settled by the REVs of the Bomb below   %s strings\n", commas(cost->base_settled));
+    if (cost->suffix_bound)
+        fprintf(out, "  suffix bound                            %s strings begin above what their first bits need:\n"
+                     "                                          %s node budgets excluded, and as many searches not made\n",
+                commas(cost->suffix_raised), commas(cost->suffix_budgets));
     fprintf(out, "  searches                                %s, %s logical steps\n",
             commas(cost->searches), commas(cost->steps));
     fprintf(out, "  solver time, all workers                %.1f s\n", (double)cost->solver_ns * 1e-9);
@@ -1702,6 +1736,7 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
             cfg.max_nodes = format->node_capacity;
         }
         cfg.symmetry = settings->symmetry ? 1 : 0;
+        cfg.suffix_bound = settings->suffix_bound ? 1 : 0;
         e = frb_config_set_base(&cfg, base, err, errlen);
         if (e != FRB_OK) return e;
     } else {
@@ -1800,6 +1835,9 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
     cost->journal_bytes = state->journal.bytes;
     cost->journal_records = state->journal.records;
     cost->base_settled = state->base_settled;
+    cost->suffix_bound = cfg.suffix_bound;
+    cost->suffix_raised = state->suffix_raised;
+    cost->suffix_budgets = state->suffix_budgets;
 
     e = finalize_state(state, out, 0, &summary, err, errlen); /* frees the state */
     if (e != FRB_OK) return e;

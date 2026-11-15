@@ -1073,10 +1073,12 @@ static void test_base_evidence(void) {
     uint32_t settled = 0, open_target = 0, base_target = 0;
     int wrong = 0;
 
-    for (int symmetry = 0; symmetry <= 1; symmetry++) {
+    for (int k = 0; k < 4; k++) {
+        int symmetry = k & 1, rule = k >> 1; /* the suffix bound off, then on */
         remove_tree(work);
         frb_config_default(&cfg, 8);
         cfg.symmetry = symmetry;
+        cfg.suffix_bound = rule;
         cfg.fallback_ring = symmetry; /* with and without the ring */
         CHECK(frb_config_set_base(&cfg, base7, last_err, sizeof last_err) == FRB_OK);
         CHECK(frb_work_create(work, &cfg, last_err, sizeof last_err) == FRB_OK);
@@ -1102,7 +1104,11 @@ static void test_base_evidence(void) {
                 wrong += ts->nodes != (symmetry ? 8 : 0);
             }
             wrong += ts->lower_bound > ref_min[8][i];
-            wrong += ts->lower_bound != ref_min[7][i >> 1]; /* exactly the minimum of the first 7 bits */
+            {   /* exactly the minimum of the first 7 bits; with the rule, or of the last 7 less one */
+                int want = ref_min[7][i >> 1];
+                if (rule && ref_min[7][i & 127u] - 1 > want) want = ref_min[7][i & 127u] - 1;
+                wrong += ts->lower_bound != want;
+            }
         }
         CHECK(wrong == 0);
         CHECK(settled == s->base_settled && settled >= 128 && settled < 256);
@@ -1136,6 +1142,209 @@ static void test_base_evidence(void) {
     printf("evidence: the base Bomb settles %u of 256 strings and bounds the rest exactly from below;\n"
            "          a forged record against one of its REVs is a contradiction, not a result\n",
            (unsigned)settled);
+}
+
+/* The largest of: what the first `base` bits of a string need, and what any
+ * later stretch of `base` bits needs, less one.  From the reference minima. */
+static int stretch_bound(int bits, int base, uint32_t i, int with_suffix) {
+    uint32_t mask = ((uint32_t)1 << base) - 1u;
+    int shift = bits - base, bound = ref_min[base][i >> shift];
+    for (int j = 1; with_suffix && j <= shift; j++) {
+        int later = ref_min[base][(i >> (shift - j)) & mask] - 1;
+        if (later > bound) bound = later;
+    }
+    return bound;
+}
+
+typedef struct {
+    uint64_t searches, steps, below; /* below: searches at a budget under the suffix bound */
+    int bits, base;
+} SuffixTally;
+
+static int suffix_tally(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
+    SuffixTally *t = ctx;
+    (void)seg;
+    if (!rec || rec->type != FRB_REC_SEARCH) return 0;
+    t->searches++;
+    t->steps += rec->steps;
+    t->below += rec->budget < stretch_bound(t->bits, t->base, rec->target, 1);
+    return 0;
+}
+
+/*
+ * The suffix bound.  If n nodes emit S, n + 1 nodes emit S without its first
+ * j bits; so S needs at least one node fewer than any stretch of it the base
+ * Bomb has the minimum of.  Shown here: that it is true of every string there
+ * is a reference for; that the construction derives exactly it, and plans its
+ * searches from it; that the table comes out the same, byte for byte, from
+ * fewer searches; that a construction started without the rule stays without
+ * it; and that a journal made under the rule is not evidence without it.
+ */
+static void test_suffix_bound(void) {
+    const char *dir = in_base("ladder a");
+    FrbRunOptions opt = quiet_options();
+    uint64_t strings = 0, higher = 0, tight = 0, saved_searches = 0, saved_steps = 0;
+    uint32_t raised_all = 0, exact_all = 0;
+
+    /* 1. The theorem, against the minima the MinimalSolver found from one node up: every string of
+     * 2 to REF_MAX bits, on a base of every shorter length. */
+    for (int bits = 2; bits <= REF_MAX; bits++)
+        for (int base = 1; base < bits; base++)
+            for (uint32_t i = 0; i < ((uint32_t)1 << bits); i++) {
+                int first = stretch_bound(bits, base, i, 0), bound = stretch_bound(bits, base, i, 1);
+                strings++;
+                CHECK_MSG(bound <= ref_min[bits][i], "%d bits on %d, string %u: bound %d above the minimum %d", bits,
+                          base, (unsigned)i, bound, ref_min[bits][i]);
+                higher += bound > first;
+                tight += bound > first && bound == ref_min[bits][i];
+            }
+    CHECK(higher > 1000 && tight > 10 && tight < higher);
+
+    /* 2. The example of the brief: S = 00000001.  Its first 7 bits, 0000000, need 1 node, and a
+     * search for S from there upward begins at budget 1.  Its last 7 bits are 0000001. */
+    {
+        int p = ref_min[7][0], q = ref_min[7][1], m = ref_min[8][1];
+        CHECK(p == 1 && q >= 3 && stretch_bound(8, 7, 1, 0) == 1 && stretch_bound(8, 7, 1, 1) == q - 1 && q - 1 <= m);
+        printf("suffix bound: 00000001: its first 7 bits need %d node, its last 7 (0000001) need %d, so it needs\n"
+               "              at least %d; it needs %d.  The search begins at budget %d and not at 1\n",
+               p, q, q - 1, m, q - 1);
+    }
+
+    /* 3. Constructions on a base one bit shorter and on one three bits shorter, with the rule and
+     * without. */
+    for (int k = 0; k < 2; k++) {
+        const int bits = k ? 10 : 9, base = k ? 7 : 8;
+        const char *work[2] = {in_base("suffix off"), in_base("suffix on")};
+        const char *table[2] = {in_base("suffix-off.frb"), in_base("suffix-on.frb")};
+        SuffixTally tally[2];
+        uint32_t raised = 0, exact = 0;
+        uint64_t budgets = 0;
+        for (uint32_t i = 0; i < ((uint32_t)1 << (bits - 1)); i++) { /* one string of each pair */
+            int d = stretch_bound(bits, base, i, 1) - stretch_bound(bits, base, i, 0);
+            raised += d > 0;
+            exact += d > 0 && stretch_bound(bits, base, i, 1) == ref_min[bits][i];
+            budgets += (uint64_t)d;
+        }
+        CHECK(raised > 0 && exact <= raised);
+        raised_all += raised;
+        exact_all += exact;
+        for (int rule = 0; rule <= 1; rule++) {
+            FrbConfig cfg, back;
+            FrbRunResult res;
+            FrbState *s = NULL;
+            FrbJournalInfo info;
+            size_t size = 0;
+            char *text;
+            int wrong = 0;
+            remove_tree(work[rule]);
+            frb_config_default(&cfg, bits);
+            CHECK(cfg.suffix_bound == 1); /* the default, wherever there is a base */
+            cfg.suffix_bound = rule;
+            cfg.workers = 2;
+            CHECK(frb_config_set_base(&cfg, level_file(dir, base), last_err, sizeof last_err) == FRB_OK);
+            CHECK(frb_work_create(work[rule], &cfg, last_err, sizeof last_err) == FRB_OK);
+            /* what the directory says of itself */
+            {
+                char path[1200];
+                snprintf(path, sizeof path, "%s/config.txt", work[rule]);
+                text = (char *)slurp(path, &size);
+            }
+            CHECK(text != NULL);
+            if (text) {
+                text[size] = '\0';
+                CHECK(strncmp(text, rule ? "carlobomb-fixed-run-work 3\n" : "carlobomb-fixed-run-work 2\n", 27) == 0);
+                CHECK((strstr(text, "\nbase_bounds prefix+suffix\n") != NULL) == (rule == 1));
+                free(text);
+            }
+            CHECK(frb_config_read(work[rule], &back, last_err, sizeof last_err) == FRB_OK && back.suffix_bound == rule);
+            /* before any search: the bound of every string is the one of the rule */
+            CHECK(frb_state_load(work[rule], &back, &s, last_err, sizeof last_err) == FRB_OK);
+            if (!s) return;
+            for (uint32_t i = 0; i < s->count; i++) {
+                wrong += s->targets[i].lower_bound != stretch_bound(bits, base, i, rule);
+                wrong += s->targets[i].lower_bound > ref_min[bits][i];
+            }
+            CHECK(wrong == 0 && s->conflicts == 0);
+            if (rule) CHECK(s->suffix_raised == raised && s->suffix_budgets == budgets);
+            else CHECK(s->suffix_raised == 0 && s->suffix_budgets == 0);
+            frb_state_free(s);
+            s = NULL;
+            CHECK(frb_work_run(work[rule], &back, &opt, &res, last_err, sizeof last_err) == FRB_OK && res.complete);
+            CHECK(frb_work_finalize(work[rule], table[rule], 0, NULL, last_err, sizeof last_err) == FRB_OK);
+            check_bomb(table[rule], bits, 1);
+            memset(&tally[rule], 0, sizeof tally[rule]);
+            tally[rule].bits = bits;
+            tally[rule].base = base;
+            CHECK(frb_journal_scan(work[rule], &back, suffix_tally, &tally[rule], &info, last_err, sizeof last_err) == FRB_OK);
+        }
+        /* The same table, byte for byte: the REV of a string is the first the search finds at the
+         * budget that is its minimum, and neither that budget nor that search has changed. */
+        CHECK(same_file(table[0], table[1]));
+        /* Without the rule a search was made at every budget the rule excludes, each finding
+         * nothing; with it, none of those and every other. */
+        CHECK(tally[0].below == budgets && tally[1].below == 0);
+        CHECK(tally[1].searches == tally[0].searches - budgets && tally[1].steps < tally[0].steps);
+        saved_searches += tally[0].searches - tally[1].searches;
+        saved_steps += tally[0].steps - tally[1].steps;
+
+        /* 4. The two journals read under the other rule. */
+        {
+            FrbConfig cfg;
+            FrbState *s = NULL;
+            uint32_t uncertified = 0;
+            /* made without the rule, read with it: more is excluded than was searched for, nothing
+             * contradicts, everything is certified as before */
+            CHECK(frb_config_read(work[0], &cfg, last_err, sizeof last_err) == FRB_OK && cfg.suffix_bound == 0);
+            cfg.suffix_bound = 1;
+            CHECK(frb_state_load(work[0], &cfg, &s, last_err, sizeof last_err) == FRB_OK);
+            if (s) {
+                CHECK(s->conflicts == 0 && s->by_status[FRB_MINIMAL] == s->count);
+                CHECK(s->suffix_raised == raised && s->suffix_budgets == budgets);
+                frb_state_free(s);
+                s = NULL;
+            }
+            /* Made with the rule, read without it, as a program that does not know the rule would if
+             * the first line of config.txt did not stop it.  A search that found nothing at a budget
+             * excludes every smaller one too, so a string searched above its bound is certified
+             * either way.  The strings for which the bound is the minimum itself were never searched
+             * below it: they have a REV and no proof.  Not wrong, and not certified. */
+            CHECK(frb_config_read(work[1], &cfg, last_err, sizeof last_err) == FRB_OK && cfg.suffix_bound == 1);
+            cfg.suffix_bound = 0;
+            CHECK(frb_state_load(work[1], &cfg, &s, last_err, sizeof last_err) == FRB_OK);
+            if (s) {
+                for (uint32_t i = 0; i < s->count / 2; i++) uncertified += s->targets[i].status != FRB_MINIMAL;
+                CHECK(s->conflicts == 0 && uncertified == exact && s->by_status[FRB_MINIMAL] == s->count - 2u * exact);
+                frb_state_free(s);
+                s = NULL;
+            }
+        }
+    }
+
+    CHECK(exact_all > 0 && exact_all < raised_all); /* both kinds of string were met */
+
+    /* 5. A ladder keeps the rule each of its levels was started with: one begun without it and
+     * continued by a call that asks for it. */
+    {
+        const char *lad = in_base("ladder suffix");
+        FrbLadderResult res;
+        FrbConfig settings, cfg;
+        remove_tree(lad);
+        ladder_settings(&settings, 2, 0);
+        settings.suffix_bound = 0;
+        opt.limit_jobs = 5; /* level 7 begun, not finished */
+        CHECK(frb_ladder_run(lad, base6, 8, &settings, &opt, &res, last_err, sizeof last_err) == FRB_OK && !res.complete);
+        opt.limit_jobs = 0;
+        settings.suffix_bound = 1;
+        CHECK(frb_ladder_run(lad, NULL, 8, &settings, &opt, &res, last_err, sizeof last_err) == FRB_OK && res.complete);
+        CHECK(frb_config_read(level_work(lad, 7), &cfg, last_err, sizeof last_err) == FRB_OK && cfg.suffix_bound == 0);
+        CHECK(frb_config_read(level_work(lad, 8), &cfg, last_err, sizeof last_err) == FRB_OK && cfg.suffix_bound == 1);
+        CHECK(same_file(level_file(lad, 7), level_file(dir, 7)) && same_file(level_file(lad, 8), level_file(dir, 8)));
+    }
+    printf("              true of %llu strings on every shorter base; higher than the first bits' for %llu, and\n"
+           "              the minimum itself for %llu of those.  Levels built with it and without: the same file,\n"
+           "              %llu searches and %llu steps fewer; each directory keeps the rule it was started with\n",
+           (unsigned long long)strings, (unsigned long long)higher, (unsigned long long)tight,
+           (unsigned long long)saved_searches, (unsigned long long)saved_steps);
 }
 
 /* A full disk is a reason to stop, not to fail. */
@@ -1471,6 +1680,29 @@ static void test_config_layouts(void) {
         fprintf(f, "carlobomb-fixed-run-work 3\n");
         fclose(f);
         CHECK(frb_config_read(dir, &back, last_err, sizeof last_err) == FRB_ERR_INCOMPATIBLE);
+        /* Layout 3 says how the base bounds a string: one rule is known, and it needs a base. */
+        for (int k = 0; k < 5; k++) {
+            static const char *const bounds[] = {"base_bounds prefix+suffix\n", "", "base_bounds prefix\n",
+                                                 "base_bounds everything\n", "base_bounds prefix+suffix\n"};
+            f = fopen(in_base("layout/config.txt"), "w");
+            fprintf(f, "carlobomb-fixed-run-work %d\njournal_version 1\nsearch_revision 1\nbits 9\nsymmetry 1\n"
+                       "enumerate_max 0\nformat 1\nbase_bits %d\n%s%smax_nodes 16\n"
+                       "fallback ring\nengine c\nworkers 1\nmax_steps 0\n",
+                    k == 4 ? 2 : 3, k == 3 ? 0 : 8, k == 3 ? "" : "base_crc 0badf00d\nbase_file /somewhere/b.frb\n",
+                    bounds[k]);
+            fclose(f);
+            /* 0: as written by this program.  1: the line missing.  2, 3: a rule nobody knows; no base
+             * to bound anything.  4: the line in a layout that has none. */
+            CHECK(frb_config_read(dir, &back, last_err, sizeof last_err) == (k == 0 ? FRB_OK : FRB_ERR_INCOMPATIBLE));
+            if (k == 0) CHECK(back.suffix_bound == 1 && back.base_bits == 8 && back.base_crc == 0x0badf00du);
+        }
+        /* and layout 2, as every construction before the rule: its first bits only */
+        f = fopen(in_base("layout/config.txt"), "w");
+        fprintf(f, "carlobomb-fixed-run-work 2\njournal_version 1\nsearch_revision 1\nbits 9\nsymmetry 1\n"
+                   "enumerate_max 0\nformat 1\nbase_bits 8\nbase_crc 0badf00d\nbase_file /somewhere/b.frb\n"
+                   "max_nodes 16\nfallback ring\nengine c\nworkers 1\nmax_steps 0\n");
+        fclose(f);
+        CHECK(frb_config_read(dir, &back, last_err, sizeof last_err) == FRB_OK && back.suffix_bound == 0);
     }
 }
 
@@ -1510,6 +1742,7 @@ int main(int argc, char **argv) {
     if (!t_failures) test_ladder_wide();
     if (!t_failures) test_base_refusals();
     if (!t_failures) test_base_evidence();
+    if (!t_failures) test_suffix_bound();
     if (!t_failures) test_disk_watch();
     if (!t_failures) remove_tree(base_dir); /* keep the evidence of a failure */
 #else

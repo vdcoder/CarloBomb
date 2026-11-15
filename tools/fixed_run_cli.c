@@ -45,7 +45,7 @@ enum { X_OK = 0, X_FAIL = 1, X_USAGE = 2, X_PARTIAL = 3 };
 
 typedef struct {
     const char *work_dir, *file, *output, *target, *out, *engine, *max_steps, *symmetry, *fallback;
-    const char *dir, *from, *base, *against;
+    const char *dir, *from, *base, *against, *suffix_bound;
     long bits, max_nodes, workers, enumerate_max, to, format; /* -1: not given */
     long long sample, limit_jobs, min_free;                   /* -1: not given */
     unsigned long long seed;
@@ -58,9 +58,11 @@ void fixed_run_cli_usage(void) {
             "  carlobomb bomb build    --bits L --work-dir DIR [--max-nodes N] [--engine E]\n"
             "                          [--workers W] [--enumerate-max K] [--symmetry on|off]\n"
             "                          [--fallback ring|none] [--max-steps K[,K...]]\n"
-            "                          [--base FILE]\n"
+            "                          [--base FILE [--suffix-bound on|off]]\n"
             "      start building the table of minimum-node REVs for every L-bit string\n"
-            "      (L up to %d); with --base, on a complete Bomb for fewer bits\n"
+            "      (L up to %d); with --base, on a complete Bomb for fewer bits, which\n"
+            "      bounds a string by its first bits and (unless off) by every later\n"
+            "      stretch of it less one node\n"
             "  carlobomb bomb resume   --work-dir DIR [--max-nodes N] [--engine E] [--workers W]\n"
             "                          [--fallback ring|none] [--max-steps K[,K...]]\n"
             "      continue an interrupted or limited construction\n"
@@ -86,7 +88,7 @@ void fixed_run_cli_usage(void) {
             "      the compact file of every complete Bomb fixed-run-L.frb in DIR, written\n"
             "      to DIR2 as fixed-run-L.v4.frb and checked against it; DIR is only read\n"
             "  carlobomb bomb ladder   --dir DIR --to L [--from FILE] [--workers W] [--engine E]\n"
-            "                          [--max-steps K[,K...]] [--max-nodes N]\n"
+            "                          [--max-steps K[,K...]] [--max-nodes N] [--suffix-bound on|off]\n"
             "      build complete Bombs for every length up to L, each from the one before,\n"
             "      starting from the longest in DIR or from FILE; run again to continue\n"
             "  carlobomb bomb ladder   --dir DIR --status\n"
@@ -146,6 +148,7 @@ static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
         else if (!strcmp(k, "--engine")) a->engine = v;
         else if (!strcmp(k, "--max-steps")) a->max_steps = v;
         else if (!strcmp(k, "--symmetry")) a->symmetry = v;
+        else if (!strcmp(k, "--suffix-bound")) a->suffix_bound = v;
         else if (!strcmp(k, "--fallback")) a->fallback = v;
         else if (!strcmp(k, "--dir")) a->dir = v;
         else if (!strcmp(k, "--from")) a->from = v;
@@ -542,6 +545,12 @@ static int cmd_build(const BombArgs *a) {
         else if (!strcmp(a->symmetry, "off")) cfg.symmetry = 0;
         else return usage_error("--symmetry must be on or off");
     }
+    if (a->suffix_bound) {
+        if (!a->base) return usage_error("--suffix-bound is about a base Bomb: it goes with --base");
+        if (!strcmp(a->suffix_bound, "on")) cfg.suffix_bound = 1;
+        else if (!strcmp(a->suffix_bound, "off")) cfg.suffix_bound = 0;
+        else return usage_error("--suffix-bound must be on or off");
+    }
     if (!apply_changeable(a, &cfg)) return X_USAGE;
     if (!select_engine(a->engine, cfg.engine, sizeof cfg.engine, &solve)) return X_USAGE;
     e = frb_config_check(&cfg, err, sizeof err);
@@ -562,6 +571,14 @@ static int cmd_resume(const BombArgs *a) {
     if (e != FRB_OK) return fail(e == FRB_ERR_IO ? FRB_ERR_ARG : e, err);
     before = cfg;
     /* What the journal was written with cannot change under it. */
+    if (a->suffix_bound && (!cfg.base_bits || strcmp(a->suffix_bound, cfg.suffix_bound ? "on" : "off") != 0)) {
+        fprintf(stderr,
+                "error: how the base Bomb bounds a string is fixed for the life of a work directory:\n"
+                "%s was started %s.  A journal made under one rule is not evidence under the other.\n",
+                a->work_dir,
+                !cfg.base_bits ? "without a base Bomb" : cfg.suffix_bound ? "with --suffix-bound on" : "with --suffix-bound off");
+        return X_USAGE;
+    }
     if ((a->bits >= 0 && a->bits != cfg.bits) ||
         (a->enumerate_max >= 0 && a->enumerate_max != cfg.enumerate_max) ||
         (a->symmetry && strcmp(a->symmetry, cfg.symmetry ? "on" : "off") != 0)) {
@@ -706,6 +723,11 @@ static int cmd_ladder(const BombArgs *a) {
         if (!strcmp(a->symmetry, "on")) settings.symmetry = 1;
         else if (!strcmp(a->symmetry, "off")) settings.symmetry = 0;
         else return usage_error("--symmetry must be on or off");
+    }
+    if (a->suffix_bound) { /* for the levels this call starts; one already begun keeps its own */
+        if (!strcmp(a->suffix_bound, "on")) settings.suffix_bound = 1;
+        else if (!strcmp(a->suffix_bound, "off")) settings.suffix_bound = 0;
+        else return usage_error("--suffix-bound must be on or off");
     }
     if (!apply_changeable(a, &settings)) return X_USAGE;
     if (settings.workers < 1 || settings.workers > FRB_MAX_WORKERS) {

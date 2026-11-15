@@ -181,6 +181,31 @@ if(MODE STREQUAL "small")
       bomb ladder --dir ${W}/lad --to 13 --workers 2 --progress 0)
   run(0 "nothing to do.*The ladder is complete" bomb ladder --dir ${W}/lad --to 13 --progress 0)
   run(0 "  13 +8192 +7 +[0-9a-f]+ +1 " bomb ladder --dir ${W}/lad --status)
+  # The suffix bound: the base Bomb bounds a string by its later stretches too,
+  # less one node.  On by default, said in the settings and in the evidence of
+  # a string, fixed for the life of a work directory; and the same table from
+  # fewer searches as a ladder built without it.
+  run(0 "bounds from it +a string's first bits, and every later stretch of it less one node.*suffix bound: strings that begin higher +[1-9]"
+      bomb status --work-dir ${W}/lad/work-13)
+  run(0 "lower bound +7: node budgets 1..6 are excluded.*1..[0-9] by the 12-bit Bomb: the 12 bits after the first bit need [0-9] nodes, and\n[^\n]*what is left of a string without its first bits needs at most one node"
+      bomb status --work-dir ${W}/lad/work-13 --target 0000000000001)
+  file(READ ${W}/lad/work-13/config.txt lad_config)
+  if(NOT lad_config MATCHES "^carlobomb-fixed-run-work 3\n" OR NOT lad_config MATCHES "\nbase_bounds prefix\\+suffix\n")
+    message(FATAL_ERROR "a level built with the suffix bound does not say so in config.txt:\n${lad_config}")
+  endif()
+  run(0 "FixedRunBomb\\(12\\) is complete.*The ladder is complete"
+      bomb ladder --dir ${W}/lad-off --from ${W}/a.frb --to 12 --suffix-bound off --workers 2 --progress 0)
+  run(0 "bounds from it +a string's first bits\n" bomb status --work-dir ${W}/lad-off/work-12)
+  file(READ ${W}/lad-off/work-12/config.txt off_config)
+  if(NOT off_config MATCHES "^carlobomb-fixed-run-work 2\n" OR off_config MATCHES "base_bounds")
+    message(FATAL_ERROR "a level built without the suffix bound has another config.txt than before:\n${off_config}")
+  endif()
+  expect_same_file(${W}/lad-off/fixed-run-11.frb ${W}/lad/fixed-run-11.frb)
+  expect_same_file(${W}/lad-off/fixed-run-12.frb ${W}/lad/fixed-run-12.frb)
+  run(2 "how the base Bomb bounds a string is fixed for the life of a work directory" bomb resume --work-dir ${W}/lad/work-12 --suffix-bound off)
+  run(2 "how the base Bomb bounds a string is fixed for the life of a work directory" bomb resume --work-dir ${W}/lad-off/work-12 --suffix-bound on)
+  run(2 "--suffix-bound is about a base Bomb" bomb build --bits 9 --work-dir ${W}/nosuffix --suffix-bound on)
+  run(2 "--suffix-bound must be on or off" bomb ladder --dir ${W}/lad-off --to 13 --suffix-bound maybe)
   run(0 "Against the complete 10-bit Bomb.*PASS.*against the journal[^\n]*PASS.*8192 certified minima reproduced.*The hardest 13-bit strings.*0000000000001 needs +7: it is among the hardest.*Verification: PASS \\(complete certified table\\)"
       bomb verify --file ${W}/lad/fixed-run-13.frb --work-dir ${W}/lad/work-13 --against ${W}/a.frb --recertify --engine c)
   run(0 "The 2 strings certified at the largest minimum, 7 nodes, recomputed.*engine c: PASS.*2 targets solved again.*2 certified minima reproduced"

@@ -1,0 +1,24 @@
+$ shared_search --bits 27 --prefix-bits 10 --jobs 4 --jobs-out RUNS/n27.jobs
+Strings of 27 bits that start with 0: 67,108,864 in 512 classes of 512; from nothing; 4 processes
+  budget           wanted            found                  steps
+  1            67,108,864                1                 13,372
+  2            67,108,863                3                 56,288
+  3            67,108,860               32                290,224
+  4            67,108,828              484              2,231,552
+  5            67,108,344            9,085             24,446,126
+  6            67,099,259          217,154            409,900,070
+  7            66,882,105        5,962,182         11,121,652,466
+  8            60,919,923       54,862,740        380,485,481,935
+  9             6,057,183        6,057,179        512,355,093,810
+  10                    4                4             48,085,752
+  total: 904,447,251,595 steps; 67,108,864 strings found by search
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 0.1 s to set up, 3356.3 s searching (2.69e+08 steps a second, all processes)
+  memory: the largest process had 710 MB resident; the tables all processes share are 2,432 MB
+  jobs: 512; steps of a job: least 812,459,429, median 1,707,981,754, most 3,885,107,843 (0.43% of all)
+  strings by nodes (both strings of a pair counted):  1: 2  2: 6  3: 64  4: 968  5: 18,170  6: 434,308  7: 11,924,364  8: 109,725,480  9: 12,114,358  10: 8
+  REVs run on the reference interpreter: 67,108,864; emit their string with every node, and their complement the
+  complement: 67,108,864 (67,108,864 from the search, 0 from the base)
+  (42.4 s)
+  node-count digest (SHA-256 of 134,217,728 bytes, the nodes of each string in index order):
+    dfe8ecfba3401bc4a38847790b24a72dae619687049080c4dfa88e757e90d068

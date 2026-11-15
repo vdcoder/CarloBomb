@@ -7,6 +7,9 @@ checks what it finds against tables and journals the construction has built.
 
 - `FULL_RUNS.md`: every string of 25 and of 26 bits, against the certified
   Bombs.
+- `RUNS_27_28.md`: every string of 27 and of 28 bits. **Experimental, not
+  certified**: no certified Bomb of those lengths existed to hold it
+  against. It says what a certified one can be compared with.
 - `PROPOSAL.md`: what it would take to make this a construction that
   certifies and resumes.
 - `benchmarks/DISCOVERY.md`: the audit it came out of.

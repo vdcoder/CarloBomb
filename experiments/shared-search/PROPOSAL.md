@@ -8,6 +8,37 @@ memory. The measurements are from 14 November 2026, in the development
 container (4 virtual CPUs, Intel Xeon under KVM, 15.7 GB, GCC 13.3 `-O3`);
 `FULL_RUNS.md` has the runs at 25 and 26 bits.
 
+## Decided (15 November 2026)
+
+The Captain and the CTO have decided the three questions of section 10,
+and the construction is being built in its own pull request (#12), which
+this document no longer leads but explains.
+
+1. Search records of a pass are the existing type 5, in a work directory
+   of a new, explicitly named layout; a pass record (type 6) closes each
+   pass and is the boundary at which its results become evidence. Records
+   of an interrupted pass establish nothing.
+2. Every per-string record is kept, PROVEN_UNSAT included, so that any one
+   search can be made again with the LevelSolver. Journal size is for a
+   later milestone.
+3. The experiment was run in full at 27 and 28 bits: `RUNS_27_28.md`.
+
+Added by the CTO: a complete pass must be replayable independently, every
+record of it; and recovery must be tested by ending the process at
+arbitrary places in the search and in the writing of the journal.
+
+Stage 4 of section 9, the kernel, was written after the construction had
+been held against the certified ladder at every level from 17 to 26 bits:
+pull request #13, the run kernel, which makes the same passes at three
+times the steps a second and writes the same journal. It is portable C;
+no assembly was written.
+
+One thing was built otherwise than section 3 says. There a pass appends
+the record of a string when it finds its REV; the construction keeps the
+REVs of a pass in memory and writes all its records when it has ended, in
+the order of their strings. Nothing of a running pass is then in the
+journal at all, and the order of a pass's records is fixed.
+
 ## In short
 
 1. **No new kind of evidence is needed.** For every string and node budget

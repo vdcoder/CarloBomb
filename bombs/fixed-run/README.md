@@ -345,7 +345,9 @@ is whole (the records it counts, of its class and budget, each string once,
 their steps and their checksum) and in its place (it searched exactly the
 strings of its class that were open at its budget, and none was open at a
 smaller one). A pass that was cut off, in the search or in the writing, has
-left nothing that counts, and is made again. `FORMAT.md` section 9.6 has
+left nothing that counts, and is made again; `bomb status` counts what it
+left, and `bomb status --target S` marks such a record of S as counting for
+nothing. `FORMAT.md` section 9.6 has
 the rules; the work directory says `search shared` in its `config.txt`
 (layout 4), and a program that does not know that layout refuses it.
 

@@ -522,6 +522,24 @@ static FrbError load(const char *dir, FrbState **state) {
     return frb_state_load(dir, &cfg, state, last_err, sizeof last_err);
 }
 
+/* What `bomb status --target` lists of a string: how many of its journal
+ * records it marks as counting for nothing. */
+static int listed_as_nothing(const char *dir, const FrbState *s, uint32_t index) {
+    char line[512];
+    FrbConfig cfg;
+    int marked = 0;
+    FILE *f = tmpfile();
+    CHECK(f != NULL);
+    if (!f) return -1;
+    CHECK(frb_config_read(dir, &cfg, last_err, sizeof last_err) == FRB_OK);
+    CHECK(frb_report_target(f, dir, &cfg, s, index, last_err, sizeof last_err) == FRB_OK);
+    rewind(f);
+    while (fgets(line, sizeof line, f))
+        if (strstr(line, "counts for nothing")) marked++;
+    fclose(f);
+    return marked;
+}
+
 /* The pass record at place `at` of a tape made right again for the search
  * records in front of it: their number, how many found a REV, their steps
  * and their checksum. */
@@ -607,6 +625,7 @@ static void test_admission(void) {
     CHECK(load(made, &s) == FRB_OK);
     certified_all = s ? s->by_status[FRB_MINIMAL] : 0;
     CHECK(s && certified_all == s->count && s->uncommitted == 0);
+    if (s) CHECK(listed_as_nothing(made, s, tape.rec[pass_first[passes - 1]].target) == 0);
     frb_state_free(s);
 
     /* The last pass record gone: its search records are there and count for
@@ -618,6 +637,10 @@ static void test_admission(void) {
         write_journal(made, work, t.rec, t.n);
         CHECK(load(made, &s) == FRB_OK);
         CHECK(s && s->uncommitted == batch && s->by_status[FRB_MINIMAL] < certified_all && s->conflicts == 0);
+        /* and the report of a string says so of each of them */
+        if (s)
+            for (size_t i = pass_first[passes - 1]; i < last; i++)
+                CHECK(listed_as_nothing(made, s, t.rec[i].target) == 1);
         frb_state_free(s);
         CHECK(frb_work_finalize(made, out, 0, NULL, last_err, sizeof last_err) == FRB_ERR_INCOMPLETE);
         CHECK(frb_config_read(made, &cfg, last_err, sizeof last_err) == FRB_OK);

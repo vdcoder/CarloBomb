@@ -373,3 +373,14 @@ add_test(NAME cli_smoke
   COMMAND ${CMAKE_COMMAND} -DCLI=$<TARGET_FILE:carlobomb> -DWORK=${CMAKE_CURRENT_BINARY_DIR}
           -DHAVE_ASM=${CARLOBOMB_HAVE_AMD64_ASM}
           -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
+
+# ---- research ------------------------------------------------------------
+# What a previous construction could leave behind for the next
+# (experiments/scratchpad/SCRATCHPAD.md).  Measurements; they read Bombs and
+# write nothing.
+add_executable(scratchpad_free_fields experiments/scratchpad/free_fields.c)
+target_link_libraries(scratchpad_free_fields PRIVATE carlobomb_fixed_bomb)
+if(UNIX)
+  add_executable(scratchpad_proof_only experiments/scratchpad/proof_only.c)
+  target_link_libraries(scratchpad_proof_only PRIVATE carlobomb_shared carlobomb_fixed_bomb)
+endif()

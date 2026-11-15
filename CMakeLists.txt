@@ -65,7 +65,7 @@ target_link_libraries(carlobomb_minimal PUBLIC carlobomb_level)
 
 # SharedSolver: the LevelSolver's search for the strings of a class at once.
 # It links the REV core and nothing else: no line of the LevelSolver is in it.
-add_library(carlobomb_shared STATIC solvers/shared/shared_solver.c)
+add_library(carlobomb_shared STATIC solvers/shared/shared_solver.c solvers/shared/shared_run.c)
 target_include_directories(carlobomb_shared PUBLIC solvers/shared)
 target_link_libraries(carlobomb_shared PUBLIC carlobomb_rev)
 
@@ -189,6 +189,9 @@ endforeach()
 
 # The SharedSolver against the LevelSolver, string by string: result, REV and
 # logical steps.
+add_executable(shared_comparison benchmarks/shared_comparison.c)
+target_link_libraries(shared_comparison PRIVATE carlobomb_shared)
+
 add_executable(test_shared_solver tests/test_shared_solver.c)
 target_link_libraries(test_shared_solver PRIVATE carlobomb_shared carlobomb_level)
 add_test(NAME test_shared_solver COMMAND test_shared_solver)

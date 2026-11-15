@@ -18,31 +18,19 @@
  * while exactly that had been emitted.  The beginnings shorter than the
  * class's own lie on one path and are counted in count_top.
  */
-#include "shared_solver.h"
+#include "shared_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
 
-#define UND 255
+#define UND REVSH_UND
+#define STACK_FRAMES REVSH_STACK_FRAMES
+
+typedef RevSharedNode Node;
+typedef RevSharedFrame Frame;
 
 enum { CTRL = 0, FLOW = 1 };
 enum { INIT, LOOP_C, LOOP_C_R, LOOP_L, LOOP_L_R, TRY_N, TRY_N_R, MATCH, SIMPLE_R, LOOP_B, LOOP_B_R };
-enum { STACK_FRAMES = 6 * REV_SHARED_MAX_BITS + 16 };
-
-typedef struct { uint8_t color, link[2]; } Node;
-typedef struct { uint8_t fn, st, fp, cp, it, dir, nxt; } Frame;
-
-struct RevShared {
-    int bits, class_bits, free_bits;
-    uint32_t size;    /* strings in a class */
-    uint8_t *tree;    /* a bit for heap numbers 1 .. 2 * size - 1 */
-    uint8_t *asked;   /* a bit for each string of the class: wanted when the pass began */
-    uint64_t *count;  /* [1 .. size - 1] */
-    uint64_t count_top[REV_SHARED_MAX_BITS + 1];
-    int done;         /* the last pass ran to its end */
-    Node G[REV_SHARED_MAX_NODES];
-    Frame S[STACK_FRAMES];
-};
 
 const char *rev_shared_result_str(RevSharedResult r) {
     switch (r) {
@@ -86,12 +74,8 @@ void rev_shared_destroy(RevShared *s) {
 
 uint32_t rev_shared_class_size(const RevShared *s) { return s ? s->size : 0; }
 
-static inline int bit_of(const uint8_t *map, uint32_t i) { return (map[i >> 3] >> (i & 7)) & 1; }
-static inline void bit_clear(uint8_t *map, uint32_t i) { map[i >> 3] &= (uint8_t)~(1u << (i & 7)); }
-static inline void bit_set(uint8_t *map, uint32_t i) { map[i >> 3] |= (uint8_t)(1u << (i & 7)); }
-
 /* The steps made at the beginnings of string j: those of the search for it alone. */
-static uint64_t steps_of(const RevShared *s, uint32_t j) {
+uint64_t revsh_steps_of(const RevShared *s, uint32_t j) {
     uint64_t sum = 0;
     for (int d = 0; d < s->class_bits; d++) sum += s->count_top[d];
     for (uint32_t h = (s->size + j) >> 1; h >= 1; h >>= 1) sum += s->count[h];
@@ -99,28 +83,96 @@ static uint64_t steps_of(const RevShared *s, uint32_t j) {
 }
 
 int rev_shared_unfound(const RevShared *s, uint32_t j) {
-    return s && s->done && j < s->size && bit_of(s->tree, s->size + j);
+    return s && s->done && j < s->size && revsh_bit(s->tree, s->size + j);
 }
 
 uint64_t rev_shared_unfound_steps(const RevShared *s, uint32_t j) {
-    return rev_shared_unfound(s, j) ? steps_of(s, j) : 0;
+    return rev_shared_unfound(s, j) ? revsh_steps_of(s, j) : 0;
 }
 
 /* The graph as it stands, for a string all of whose bits it has emitted.
  * 1 if the interpreter of the REV core gets that string out of it. */
-static int export_checked(const Node *G, int nodes, int bits, uint32_t string, RevGraph *g) {
+int revsh_export_checked(const RevSharedNode *G, int nodes, int bits, uint32_t string, RevGraph *g) {
     RevMachine m;
     uint32_t emitted = 0;
     g->node_count = nodes;
     for (int i = 0; i < nodes; i++) {
-        g->nodes[i].color = G[i].color == UND ? 0 : G[i].color;
-        g->nodes[i].links[0] = G[i].link[0] == UND ? 0 : G[i].link[0];
-        g->nodes[i].links[1] = G[i].link[1] == UND ? 0 : G[i].link[1];
+        g->nodes[i].color = G[i].color == REVSH_UND ? 0 : G[i].color;
+        g->nodes[i].links[0] = G[i].link[0] == REVSH_UND ? 0 : G[i].link[0];
+        g->nodes[i].links[1] = G[i].link[1] == REVSH_UND ? 0 : G[i].link[1];
     }
     if (rev_graph_validate(g) != REV_OK) return 0;
     rev_machine_reset(&m);
     for (int i = 0; i < bits; i++) emitted = (emitted << 1) | (uint32_t)rev_machine_next_bit(g, &m);
     return emitted == string;
+}
+
+/*
+ * The beginning of a pass, whichever walk makes it: the arguments, and what
+ * is wanted with every beginning of it.  0 if an argument is impossible.
+ */
+int revsh_begin(RevShared *s, uint32_t klass, int max_nodes, const uint8_t *wanted, RevSharedStats *stats) {
+    uint8_t *tree;
+    uint32_t size;
+    memset(stats, 0, sizeof *stats);
+    if (!s) return 0;
+    s->done = 0;
+    if (!wanted || max_nodes < 1 || max_nodes > REV_SHARED_MAX_NODES ||
+        (s->class_bits < 32 && s->class_bits > 0 && (klass >> s->class_bits) != 0) ||
+        (s->class_bits == 0 && klass != 0))
+        return 0;
+    size = s->size;
+    tree = s->tree;
+    memset(tree, 0, (size_t)size / 4 + 1);
+    memset(s->asked, 0, (size_t)size / 8 + 1);
+    memset(s->count, 0, (size_t)size * sizeof *s->count);
+    memset(s->count_top, 0, sizeof s->count_top);
+    for (uint32_t j = 0; j < size; j++)
+        if (revsh_bit(wanted, j)) {
+            revsh_bit_set(s->asked, j);
+            revsh_bit_set(tree, size + j);
+            stats->wanted++;
+        }
+    for (uint32_t h = size - 1; h >= 1; h--)
+        if (revsh_bit(tree, 2 * h) || revsh_bit(tree, 2 * h + 1)) revsh_bit_set(tree, h);
+    return 1;
+}
+
+/*
+ * The end of a pass, whichever walk made it.  Before anything is concluded
+ * from it, the two things the conclusions rest on are checked.
+ */
+RevSharedResult revsh_end(RevShared *s, uint64_t steps, uint64_t choices, int peak, RevSharedStats *stats) {
+    const uint8_t *tree = s->tree;
+    uint32_t size = s->size;
+    uint64_t counted = 0, left = 0;
+    /*
+     * Every step was counted at one beginning, the three of each choice at
+     * none.
+     */
+    for (int d = 0; d < s->class_bits; d++) counted += s->count_top[d];
+    for (uint32_t h = 1; h < size; h++) counted += s->count[h];
+    if (counted != steps - 3 * choices) return REV_SHARED_INTERNAL;
+    /*
+     * A beginning is marked exactly if a string below it still is, and the
+     * strings still marked are those that were wanted and not found.  So
+     * every string that is left was wanted, with all its beginnings, from
+     * the first step to the last: marks are only ever taken away.
+     */
+    for (uint32_t h = size - 1; h >= 1; h--)
+        if (revsh_bit(tree, h) != (revsh_bit(tree, 2 * h) | revsh_bit(tree, 2 * h + 1))) return REV_SHARED_INTERNAL;
+    for (uint32_t j = 0; j < size; j++) {
+        if (!revsh_bit(tree, size + j)) continue;
+        if (!revsh_bit(s->asked, j)) return REV_SHARED_INTERNAL;
+        left++;
+        stats->string_steps += revsh_steps_of(s, j);
+    }
+    if (left + stats->found != stats->wanted) return REV_SHARED_INTERNAL;
+    stats->steps = steps;
+    stats->choices = choices;
+    stats->peak_stack = peak;
+    s->done = 1;
+    return REV_SHARED_DONE;
 }
 
 RevSharedResult rev_shared_pass(RevShared *s, uint32_t klass, int max_nodes, const uint8_t *wanted,
@@ -130,19 +182,13 @@ RevSharedResult rev_shared_pass(RevShared *s, uint32_t klass, int max_nodes, con
     Node *G;
     Frame *S;
     uint8_t *tree;
-    uint64_t steps = 0, choices = 0, every, next_poll, counted = 0;
+    uint64_t steps = 0, choices = 0, every, next_poll;
     uint64_t *at;
     uint32_t prefix = 0, node = 1, size;
     int X, P, Gn = 1, Sp = 0, gen = 0, peak = 0;
 
     if (!stats) stats = &local;
-    memset(stats, 0, sizeof *stats);
-    if (!s) return REV_SHARED_INVALID;
-    s->done = 0;
-    if (!wanted || max_nodes < 1 || max_nodes > REV_SHARED_MAX_NODES ||
-        (s->class_bits < 32 && s->class_bits > 0 && (klass >> s->class_bits) != 0) ||
-        (s->class_bits == 0 && klass != 0))
-        return REV_SHARED_INVALID;
+    if (!revsh_begin(s, klass, max_nodes, wanted, stats)) return REV_SHARED_INVALID;
     if (!hooks) hooks = &none;
     every = hooks->poll_every ? hooks->poll_every : (uint64_t)1 << 20;
     next_poll = hooks->poll ? every : UINT64_MAX;
@@ -153,20 +199,6 @@ RevSharedResult rev_shared_pass(RevShared *s, uint32_t klass, int max_nodes, con
     S = s->S;
     tree = s->tree;
 
-    /* What is wanted, and every beginning of it. */
-    memset(tree, 0, (size_t)size / 4 + 1);
-    memset(s->asked, 0, (size_t)size / 8 + 1);
-    memset(s->count, 0, (size_t)size * sizeof *s->count);
-    memset(s->count_top, 0, sizeof s->count_top);
-    for (uint32_t j = 0; j < size; j++)
-        if (bit_of(wanted, j)) {
-            bit_set(s->asked, j);
-            bit_set(tree, size + j);
-            stats->wanted++;
-        }
-    for (uint32_t h = size - 1; h >= 1; h--)
-        if (bit_of(tree, 2 * h) || bit_of(tree, 2 * h + 1)) bit_set(tree, h);
-
 #define PUSH(fn_, fp_, cp_) \
     do { \
         if (Sp == STACK_FRAMES) return REV_SHARED_INTERNAL; \
@@ -176,7 +208,7 @@ RevSharedResult rev_shared_pass(RevShared *s, uint32_t klass, int max_nodes, con
 /* Is a string wanted that begins with what has been emitted and then `b`? */
 #define WANTED(b) \
     (gen < P ? (((klass >> (P - 1 - gen)) & 1u) == (uint32_t)(b) && (tree[0] & 2)) \
-             : bit_of(tree, (node << 1) | (uint32_t)(b)))
+             : revsh_bit(tree, (node << 1) | (uint32_t)(b)))
 #define DESCEND(b) \
     do { \
         prefix = (prefix << 1) | (uint32_t)(b); \
@@ -195,13 +227,13 @@ RevSharedResult rev_shared_pass(RevShared *s, uint32_t klass, int max_nodes, con
 #define LEAF() \
     do { \
         RevGraph rev; \
-        uint64_t own = steps_of(s, node - size); \
+        uint64_t own = revsh_steps_of(s, node - size); \
         uint32_t h = node; \
-        if (!export_checked(G, Gn, X, prefix, &rev)) return REV_SHARED_INTERNAL; \
-        bit_clear(tree, h); \
-        while (h > 1 && !bit_of(tree, h ^ 1u)) { \
+        if (!revsh_export_checked(G, Gn, X, prefix, &rev)) return REV_SHARED_INTERNAL; \
+        revsh_bit_clear(tree, h); \
+        while (h > 1 && !revsh_bit(tree, h ^ 1u)) { \
             h >>= 1; \
-            bit_clear(tree, h); \
+            revsh_bit_clear(tree, h); \
         } \
         stats->found++; \
         stats->string_steps += own; \
@@ -397,37 +429,7 @@ RevSharedResult rev_shared_pass(RevShared *s, uint32_t klass, int max_nodes, con
 #undef MOVED
 #undef LEAF
 
-    /*
-     * The pass is over.  Before anything is concluded from it, the two
-     * things the conclusions rest on are checked.
-     *
-     * Every step was counted at one beginning, the three of each choice at
-     * none.
-     */
-    for (int d = 0; d < P; d++) counted += s->count_top[d];
-    for (uint32_t h = 1; h < size; h++) counted += s->count[h];
-    if (counted != steps - 3 * choices || gen != 0 || Gn != 1) return REV_SHARED_INTERNAL;
-    /*
-     * A beginning is marked exactly if a string below it still is, and the
-     * strings still marked are those that were wanted and not found.  So
-     * every string that is left was wanted, with all its beginnings, from
-     * the first step to the last: marks are only ever taken away.
-     */
-    for (uint32_t h = size - 1; h >= 1; h--)
-        if (bit_of(tree, h) != (bit_of(tree, 2 * h) | bit_of(tree, 2 * h + 1))) return REV_SHARED_INTERNAL;
-    {
-        uint64_t left = 0;
-        for (uint32_t j = 0; j < size; j++) {
-            if (!bit_of(tree, size + j)) continue;
-            if (!bit_of(s->asked, j)) return REV_SHARED_INTERNAL;
-            left++;
-            stats->string_steps += steps_of(s, j);
-        }
-        if (left + stats->found != stats->wanted) return REV_SHARED_INTERNAL;
-    }
-    stats->steps = steps;
-    stats->choices = choices;
-    stats->peak_stack = peak;
-    s->done = 1;
-    return REV_SHARED_DONE;
+    /* The pass is over. */
+    if (gen != 0 || Gn != 1) return REV_SHARED_INTERNAL;
+    return revsh_end(s, steps, choices, peak, stats);
 }

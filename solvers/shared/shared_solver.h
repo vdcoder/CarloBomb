@@ -28,7 +28,7 @@
  * searches the wanted strings of one class at one node budget.
  *
  * No static state: every RevShared is independent of every other.  This
- * file and its implementation use the REV core and nothing of the
+ * file and its implementations use the REV core and nothing of the
  * LevelSolver.
  */
 #ifndef CARLOBOMB_SHARED_SOLVER_H
@@ -67,7 +67,8 @@ typedef enum {
  */
 typedef int (*RevSharedFound)(void *ctx, uint32_t string, const RevGraph *rev, uint64_t steps);
 
-/* Called every poll_every steps; a nonzero return stops the pass. */
+/* Called about every poll_every steps (the run kernel looks at its clock
+ * less often than at every step); a nonzero return stops the pass. */
 typedef int (*RevSharedPoll)(void *ctx);
 
 typedef struct {
@@ -84,7 +85,7 @@ typedef struct {
     uint64_t steps;        /* steps of this search */
     uint64_t choices;      /* nodes that were given each bit in turn */
     uint64_t string_steps; /* the steps of the LevelSolver's searches for the wanted strings, added up */
-    int peak_stack;        /* deepest stack use, in frames */
+    int peak_stack;        /* deepest stack use, in frames; 0 from the run kernel, which keeps none */
 } RevSharedStats;
 
 /*
@@ -113,6 +114,24 @@ uint32_t rev_shared_class_size(const RevShared *s);
  */
 RevSharedResult rev_shared_pass(RevShared *s, uint32_t klass, int max_nodes, const uint8_t *wanted,
                                 const RevSharedHooks *hooks, RevSharedStats *stats);
+
+/*
+ * The same pass by the run kernel (shared_run.c): the same strings found, in
+ * the same order, with the same REVs and the same steps, and the same
+ * steps for the strings not found; of the statistics only peak_stack
+ * differs.  It makes the stretches of the search where nothing is to be
+ * decided without the bookkeeping of the walk above, which remains the
+ * reference: tests/test_shared_solver.c holds each to the LevelSolver and
+ * the two to one another.  Node budgets above REV_SHARED_RUN_MAX_NODES are
+ * passed on to rev_shared_pass.
+ */
+#define REV_SHARED_RUN_MAX_NODES 15
+RevSharedResult rev_shared_pass_run(RevShared *s, uint32_t klass, int max_nodes, const uint8_t *wanted,
+                                    const RevSharedHooks *hooks, RevSharedStats *stats);
+
+/* Either of the two. */
+typedef RevSharedResult (*RevSharedPassFn)(RevShared *s, uint32_t klass, int max_nodes, const uint8_t *wanted,
+                                           const RevSharedHooks *hooks, RevSharedStats *stats);
 
 /* After a pass that ended with REV_SHARED_DONE: 1 if string j of the class
  * was wanted and has no REV of at most max_nodes nodes. */

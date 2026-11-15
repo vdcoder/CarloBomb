@@ -1,0 +1,36 @@
+LADDER/fixed-run-16.frb: a Bomb of 16 bits; strings of 16 bits: 65,536
+  strings by nodes:  1: 2  2: 6  3: 64  4: 962  5: 14,348  6: 48,956  7: 1,198
+  node-count digest (SHA-256 of 65,536 bytes, the nodes of each string in index order):
+    cc777ba8d8c38146430078c452747cc0e7d5778190c5d517c5e30f1783910ef0
+LADDER/fixed-run-17.frb: a Bomb of 17 bits; strings of 17 bits: 131,072
+  strings by nodes:  1: 2  2: 6  3: 64  4: 966  5: 15,740  6: 102,914  7: 11,378  8: 2
+  node-count digest (SHA-256 of 131,072 bytes, the nodes of each string in index order):
+    dbf2d4c513a636c86fe19154af5e69e66be3f6e291ad43916336c5f4681039f6
+LADDER/fixed-run-18.frb: a Bomb of 18 bits; strings of 18 bits: 262,144
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 16,628  6: 177,296  7: 67,174  8: 6
+  node-count digest (SHA-256 of 262,144 bytes, the nodes of each string in index order):
+    be95c4cd534f9972ff2a2d5fff1e8fed5e6fa56443276c77f2d43742431e32ac
+LADDER/fixed-run-19.frb: a Bomb of 19 bits; strings of 19 bits: 524,288
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 17,190  6: 253,370  7: 252,570  8: 118
+  node-count digest (SHA-256 of 524,288 bytes, the nodes of each string in index order):
+    6506e865206d9debe51aa33a72f9249d78744b0a26f18d015f20fdc50f5565a7
+LADDER/fixed-run-20.frb: a Bomb of 20 bits; strings of 20 bits: 1,048,576
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 17,554  6: 314,604  7: 712,330  8: 3,048
+  node-count digest (SHA-256 of 1,048,576 bytes, the nodes of each string in index order):
+    8359b7d4f21702dbd57c59d270bbaf98db39887eeae931f075334db12a2b5cee
+LADDER/fixed-run-21.frb: a Bomb of 21 bits; strings of 21 bits: 2,097,152
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 17,778  6: 358,450  7: 1,671,206  8: 48,676  9: 2
+  node-count digest (SHA-256 of 2,097,152 bytes, the nodes of each string in index order):
+    06c0019a9ad13f233fb79d3da070f7f0f0abd489e0eb1172ff45e1106a13b684
+LADDER/fixed-run-22.frb: a Bomb of 22 bits; strings of 22 bits: 4,194,304
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 17,920  6: 387,696  7: 3,338,182  8: 449,460  9: 6
+  node-count digest (SHA-256 of 4,194,304 bytes, the nodes of each string in index order):
+    318611e761cc5450008dcdf86a021eb8207271c161ae9f8be1cf111401044954
+LADDER/fixed-run-23.frb: a Bomb of 23 bits; strings of 23 bits: 8,388,608
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 18,024  6: 406,588  7: 5,560,594  8: 2,402,318  9: 44
+  node-count digest (SHA-256 of 8,388,608 bytes, the nodes of each string in index order):
+    1adab1801ff31793c66e7c41dacc1ee778417ed9e1ce1bf162b33a60ca870557
+LADDER/fixed-run-24.frb: a Bomb of 24 bits; strings of 24 bits: 16,777,216
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 18,082  6: 418,502  7: 7,811,408  8: 8,526,298  9: 1,886
+  node-count digest (SHA-256 of 16,777,216 bytes, the nodes of each string in index order):
+    8263472edc2707da5dc156a1ff066d67c3e5f28c3fefcda419e064fa079a7599

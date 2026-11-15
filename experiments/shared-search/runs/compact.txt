@@ -1,0 +1,97 @@
+Source: RUNS/y25.frb
+  format version 3, 25-bit targets, 1,476,395,072 bytes, table CRC-32 7dfdbcd7; validated in full
+Compact: RUNS/y25.v4.frb
+  Nodes   Kept as             Bits per REV   Stored REVs            Bytes
+      1   colors and links               1             1                8
+      2   colors and links               6             3                8
+      3   colors and links              15            32               64
+      4   colors and links              20           484            1,216
+      5   colors and links              35         9,063           39,656
+      6   rank of its graph             23       213,058          612,544
+      7   rank of its graph             28     4,835,970       16,925,896
+      8   rank of its graph             34    11,687,753       49,672,952
+      9   rank of its graph             40        30,852          154,264
+  REVs                      67,406,608 bytes (one for each string that starts with 0)
+  node counts                8,388,608 bytes (4 bits each)
+  counts before              2,359,296 bytes (for every 256th string)
+  navigation bits            2,097,152 bytes (1 bit for each shorter string that starts with 0)
+  header, directory                456 bytes (with the 8 bytes after the last REV)
+  file                      80,252,120 bytes
+  5.4% of the source
+Before it got its name the new file was read back in full and compared with the source:
+every string of 25 bits with its node count and a REV that emits it, every shorter string
+answered by one of its extensions with the fewest nodes, every comparison of two extensions.
+Every string of 25 bits has the REV here that the source has for it, link for link and color
+for color: `carlobomb bomb expand` gives the source back from this file, byte for byte.
+The source is unchanged.
+compact 25: exit 0; 76.938507602 s
+-rw-r--r-- 1 root root 80252120 Nov 14 21:35 RUNS/y25.v4.frb
+RUNS/y25.frb: a Bomb of 25 bits; strings of 25 bits: 33,554,432
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 18,126  6: 426,116  7: 9,671,940  8: 23,375,506  9: 61,704
+  node-count digest (SHA-256 of 33,554,432 bytes, the nodes of each string in index order):
+    1c84b6016d8870d69b561256eabb8d67060b199395479d4330b3946aa49e96e6
+exit 0; 17.448914703 s
+RUNS/y25.v4.frb: a Bomb of 25 bits; strings of 25 bits: 33,554,432
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 18,126  6: 426,116  7: 9,671,940  8: 23,375,506  9: 61,704
+  node-count digest (SHA-256 of 33,554,432 bytes, the nodes of each string in index order):
+    1c84b6016d8870d69b561256eabb8d67060b199395479d4330b3946aa49e96e6
+exit 0; 11.151491568 s
+Source: RUNS/y26.frb
+  format version 3, 26-bit targets, 2,952,790,080 bytes, table CRC-32 8fc90cf7; validated in full
+Compact: RUNS/y26.v4.frb
+  Nodes   Kept as             Bits per REV   Stored REVs            Bytes
+      1   colors and links               1             1                8
+      2   colors and links               6             3                8
+      3   colors and links              15            32               64
+      4   colors and links              20           484            1,216
+      5   colors and links              35         9,074           39,704
+      6   rank of its graph             23       215,555          619,728
+      7   rank of its graph             28     5,507,360       19,275,760
+      8   rank of its graph             34    27,227,996      115,718,984
+      9   rank of its graph             40       593,926        2,969,632
+     10   rank of its graph             46             1                8
+  REVs                     138,625,112 bytes (one for each string that starts with 0)
+  node counts               16,777,216 bytes (4 bits each)
+  counts before              5,242,880 bytes (for every 256th string)
+  navigation bits            4,194,304 bytes (1 bit for each shorter string that starts with 0)
+  header, directory                456 bytes (with the 8 bytes after the last REV)
+  file                     164,839,968 bytes
+  5.6% of the source
+Before it got its name the new file was read back in full and compared with the source:
+every string of 26 bits with its node count and a REV that emits it, every shorter string
+answered by one of its extensions with the fewest nodes, every comparison of two extensions.
+Every string of 26 bits has the REV here that the source has for it, link for link and color
+for color: `carlobomb bomb expand` gives the source back from this file, byte for byte.
+The source is unchanged.
+compact 26: exit 0; 155.751928414 s
+-rw-r--r-- 1 root root 164839968 Nov 14 21:38 RUNS/y26.v4.frb
+RUNS/y26.frb: a Bomb of 26 bits; strings of 26 bits: 67,108,864
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 18,148  6: 431,110  7: 11,014,720  8: 54,455,992  9: 1,187,852  10: 2
+  node-count digest (SHA-256 of 67,108,864 bytes, the nodes of each string in index order):
+    170e5bd475113e1b71c986f328e7d3c059fb1f47ba035cbb5d2ca1e23be2496e
+exit 0; 35.563844254 s
+RUNS/y26.v4.frb: a Bomb of 26 bits; strings of 26 bits: 67,108,864
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 18,148  6: 431,110  7: 11,014,720  8: 54,455,992  9: 1,187,852  10: 2
+  node-count digest (SHA-256 of 67,108,864 bytes, the nodes of each string in index order):
+    170e5bd475113e1b71c986f328e7d3c059fb1f47ba035cbb5d2ca1e23be2496e
+exit 0; 22.831572019 s
+RUNS/y26.v4.frb: a Bomb of 26 bits; strings of 25 bits: 33,554,432
+  strings by nodes:  1: 2  2: 6  3: 64  4: 968  5: 18,126  6: 426,116  7: 9,671,940  8: 23,375,506  9: 61,704
+  node-count digest (SHA-256 of 33,554,432 bytes, the nodes of each string in index order):
+    1c84b6016d8870d69b561256eabb8d67060b199395479d4330b3946aa49e96e6
+exit 0; 22.149824130 s
+LADDER/work-24: strings of 24 bits, built on the Bomb of 23 bits, each string from what its first bits allow
+  journal: 6,273,861 records in 63 segments, 501,912,912 bytes
+  budget      found a REV       found none
+  1                     0                1
+  2                     0                4
+  3                     0               36
+  4                     0              520
+  5                    29            9,503
+  6                 5,957          206,840
+  7             1,125,407        1,861,730
+  8             3,061,990              899
+  9                   921                0
+  searches: 6,273,837 (4,194,304 found a REV, 2,079,533 found none), 20,867,501,480,268 logical steps
+  record checksum (every search: string, budget, result, steps): 53103f47cac5e204
+exit 0; 1.436316411 s

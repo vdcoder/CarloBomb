@@ -1,0 +1,44 @@
+$ shared_search --bits 25 --prefix-bits 10 --jobs 4 --base LADDER/fixed-run-24.frb --bound prefix --expect-totals 11833078:63140927147534 --expect 1:2,2:6,3:64,4:968,5:18126,6:426116,7:9671940,8:23375506,9:61704 --out RUNS/y25.frb --expect-table-crc 7dfdbcd7 --jobs-out RUNS/c25.jobs
+Strings of 25 bits that start with 0: 16,777,216 in 512 classes of 512; built on the Bomb one bit shorter, each string from what its first bits need; 4 processes
+  budget           wanted            found                  steps
+  1                     1                0                    114
+  2                     4                0                  1,082
+  3                    36                0                 31,424
+  4                   520                0              1,510,145
+  5                 9,561               22             23,777,710
+  6               218,790            3,807            385,133,982
+  7             4,120,687          930,266          9,838,657,059
+  8             7,453,570        7,424,604        195,822,543,524
+  9                29,909           29,909         17,101,468,216
+  total: 223,173,123,256 steps; 8,388,608 strings found by search, 8,388,608 settled by the REV of the base
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 15.9 s to set up, 364.5 s searching (6.12e+08 steps a second, all processes)
+  memory: the largest process had 1249 MB resident; the tables all processes share are 608 MB
+  jobs: 512; steps of a job: least 269,548,281, median 418,399,369, most 963,251,016 (0.43% of all)
+  strings by nodes (both strings of a pair counted):  1: 2  2: 6  3: 64  4: 968  5: 18,126  6: 426,116  7: 9,671,940  8: 23,375,506  9: 61,704
+  the histogram expected: every entry agrees
+  counted as searches of one string each, the searches a ladder makes and journals:
+  budget         searches        steps where a REV         steps where none
+  1                     1                        0                      114
+  2                     4                        0                    1,058
+  3                    36                        0                   30,884
+  4                   520                        0                2,497,400
+  5                 9,561                  292,037              409,817,150
+  6               218,790              824,990,818          104,804,532,640
+  7             4,120,687        2,661,410,755,687       20,104,285,189,823
+  8             7,453,570       38,471,201,998,633        1,709,098,647,695
+  9                29,909           88,888,393,595                        0
+  total: 11,833,078 searches, 63,140,927,147,534 logical steps: 282.9 times the steps made here
+  record checksum (every search: string, budget, result, steps): 9adfee923c31de0a
+  of them, at a budget the last bits of the string, less one node, excludes: 93,659 searches, 40,605,145,322 steps (0.064%)
+  of them, at a budget every stretch of the string, less one node, excludes: 102,292 searches, 44,733,587,220 steps (0.071%)
+  the totals expected (11,833,078 searches, 63,140,927,147,534 steps): both agree to the last digit
+  REVs run on the reference interpreter: 16,777,216; emit their string with every node, and their complement the
+  complement: 16,777,216 (8,388,608 from the search, 8,388,608 from the base)
+  (9.4 s)
+  node-count digest (SHA-256 of 33,554,432 bytes, the nodes of each string in index order):
+    1c84b6016d8870d69b561256eabb8d67060b199395479d4330b3946aa49e96e6
+  table written for comparison (it says "certified" of every entry; this experiment certifies nothing):
+    RUNS/y25.frb
+    table checksum (CRC-32) 7dfdbcd7: the checksum expected
+exit code 0; 408.527138948 s from start to end

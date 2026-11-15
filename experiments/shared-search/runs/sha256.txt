@@ -1,0 +1,12 @@
+$ cmp x25-every-stretch.frb y25.frb   (the 25-bit table written from the bound of every stretch, and from the first bits)
+the same file
+$ sha256sum
+95d708b2d1dcb1ffe4e9f1fdf1a9eb4119a2c636e0476bf477c218de17c76c9e  y25.frb
+302eefa4d7ba2abedf61dca4c7b8559c8c29eaa3517ec815ffa65739d77228c2  y26.frb
+eb4d46c79194d02a855e8e61303999beb4edad968d8c295abb5d5be8ce4bbef9  y25.v4.frb
+a269cf909135658f1fcab6243364405d6c622745aa5fdd1b7d313bb2d7b4c943  y26.v4.frb
+$ ls -l
+1476395072 y25.frb
+80252120 y25.v4.frb
+2952790080 y26.frb
+164839968 y26.v4.frb

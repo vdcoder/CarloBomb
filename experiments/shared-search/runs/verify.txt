@@ -1,0 +1,94 @@
+File: RUNS/y25.frb
+Format version 3, 25-bit targets, 33554432 entries, table CRC-32 7dfdbcd7
+Header, length, checksums, counts and flags ......... PASS
+Every entry decoded and every graph run for 25 bits .. PASS (33554432 witnesses)
+Complement symmetry of witnesses and minima .......... PASS
+Against the complete 24-bit Bomb LADDER/fixed-run-24.frb:
+  the minimum of every 24-bit string is the smallest among its extensions here,
+  and no 24 consecutive bits of a string need over one node more than it ... PASS
+
+Targets: 33,554,432 (25-bit strings)
+  certified minimum        33,554,432
+  witness, not certified   0
+  no witness               0
+
+  Nodes   Certified minimum   Cumulative     Share   Witness only
+      1                   2            2     0.00%              0
+      2                   6            8     0.00%              0
+      3                  64           72     0.00%              0
+      4                 968        1,040     0.00%              0
+      5              18,126       19,166     0.06%              0
+      6             426,116      445,282     1.33%              0
+      7           9,671,940   10,117,222    30.15%              0
+      8          23,375,506   33,492,728    99.82%              0
+      9              61,704   33,554,432   100.00%              0
+  10-31                   0   33,554,432   100.00%              0
+
+COMPLETE: every target has a certified minimum.  The largest is 9 nodes,
+which is therefore the exact maximum over all 25-bit strings.
+
+The hardest 25-bit strings
+  largest minimum                  9 nodes
+  strings that need it             61,704
+  ceil(2*sqrt(25)) - 1              9: the largest minimum equals it
+  0000000000000000000000001 needs  9: it is among the hardest
+  the first 16 that begin with 0, in table order (each stands for its complement too):
+    0000000000000000000000001
+    0000000000000000000000010
+    0000000000000000000000011
+    0000000000000000000000100
+    0000000000000000000000101
+    0000000000000000000000110
+    0000000000000000000000111
+    0000000000000000000001000
+    0000000000000000000001001
+    0000000000000000000001010
+    0000000000000000000001011
+    0000000000000000000001100
+    0000000000000000000001101
+    0000000000000000000001110
+    0000000000000000000001111
+    0000000000000000000010000
+
+Verification: PASS (complete certified table)
+exit code 0; 66 s
+File: RUNS/y26.frb
+Format version 3, 26-bit targets, 67108864 entries, table CRC-32 8fc90cf7
+Header, length, checksums, counts and flags ......... PASS
+Every entry decoded and every graph run for 26 bits .. PASS (67108864 witnesses)
+Complement symmetry of witnesses and minima .......... PASS
+Against the complete 25-bit Bomb RUNS/y25.frb:
+  the minimum of every 25-bit string is the smallest among its extensions here,
+  and no 25 consecutive bits of a string need over one node more than it ... PASS
+
+Targets: 67,108,864 (26-bit strings)
+  certified minimum        67,108,864
+  witness, not certified   0
+  no witness               0
+
+  Nodes   Certified minimum   Cumulative     Share   Witness only
+      1                   2            2     0.00%              0
+      2                   6            8     0.00%              0
+      3                  64           72     0.00%              0
+      4                 968        1,040     0.00%              0
+      5              18,148       19,188     0.03%              0
+      6             431,110      450,298     0.67%              0
+      7          11,014,720   11,465,018    17.08%              0
+      8          54,455,992   65,921,010    98.23%              0
+      9           1,187,852   67,108,862   100.00%              0
+     10                   2   67,108,864   100.00%              0
+  11-31                   0   67,108,864   100.00%              0
+
+COMPLETE: every target has a certified minimum.  The largest is 10 nodes,
+which is therefore the exact maximum over all 26-bit strings.
+
+The hardest 26-bit strings
+  largest minimum                  10 nodes
+  strings that need it             2
+  ceil(2*sqrt(26)) - 1              10: the largest minimum equals it
+  00000000000000000000000001 needs  10: it is among the hardest
+  those that begin with 0 (each stands for its complement too):
+    00000000000000000000000001
+
+Verification: PASS (complete certified table)
+exit code 0; 136 s

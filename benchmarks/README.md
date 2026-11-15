@@ -131,4 +131,6 @@ are in `COMPACT_FORMAT.md`.
 go, from the journals) and what was measured about each way to make it
 cheaper. Its main result is from `experiments/shared-search`: one search
 for all strings of a length builds the same table from under one percent of
-the ladder's steps.
+the ladder's steps. That directory has the runs in full at 25 and 26 bits
+against the certified Bombs (`FULL_RUNS.md`) and the proposal to make the
+method a construction (`PROPOSAL.md`).

@@ -1,0 +1,14 @@
+LADDER/work-22: strings of 22 bits, built on the Bomb of 21 bits, each string from what its first bits allow
+  journal: 1,408,473 records in 5 segments, 112,678,160 bytes
+  budget      found a REV       found none
+  1                     0                1
+  2                     0                4
+  3                     0               36
+  4                     0              520
+  5                    71            9,338
+  6                14,623          173,940
+  7               833,488          176,055
+  8               200,392                1
+  9                     2                0
+  searches: 1,408,471 (1,048,576 found a REV, 359,895 found none), 2,356,037,716,175 logical steps
+  record checksum (every search: string, budget, result, steps): e73d6c02528dd0d9

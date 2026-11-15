@@ -1,0 +1,25 @@
+$ shared_search --bits 25 --prefix-bits 10 --jobs 4 --expect 1:2,2:6,3:64,4:968,5:18126,6:426116,7:9671940,8:23375506,9:61704 --jobs-out RUNS/n25.jobs
+Strings of 25 bits that start with 0: 16,777,216 in 512 classes of 512; from nothing; 4 processes
+  budget           wanted            found                  steps
+  1            16,777,216                1                 13,364
+  2            16,777,215                3                 56,224
+  3            16,777,212               32                289,296
+  4            16,777,180              484              2,209,920
+  5            16,776,696            9,063             23,800,138
+  6            16,767,633          213,058            385,499,498
+  7            16,554,575        4,835,970          9,893,053,074
+  8            11,718,605       11,687,753        195,867,879,154
+  9                30,852           30,852         17,101,468,216
+  total: 223,274,268,884 steps; 16,777,216 strings found by search
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 0.0 s to set up, 343.2 s searching (6.51e+08 steps a second, all processes)
+  memory: the largest process held 181 MB, of which 608 MB are the tables all processes share
+  jobs: 512; steps of a job: least 269,602,612, median 418,501,585, most 963,467,182 (0.43% of all)
+  strings by nodes (both strings of a pair counted):  1: 2  2: 6  3: 64  4: 968  5: 18,126  6: 426,116  7: 9,671,940  8: 23,375,506  9: 61,704
+  the histogram expected: every entry agrees
+  REVs run on the reference interpreter: 16,777,216; emit their string with every node, and their complement the
+  complement: 16,777,216 (16,777,216 from the search, 0 from the base)
+  (9.5 s)
+  node-count digest (SHA-256 of 33,554,432 bytes, the nodes of each string in index order):
+    1c84b6016d8870d69b561256eabb8d67060b199395479d4330b3946aa49e96e6
+exit code 0; 353.079284438 s from start to end

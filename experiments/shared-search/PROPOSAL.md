@@ -15,8 +15,8 @@ container (4 virtual CPUs, Intel Xeon under KVM, 15.7 GB, GCC 13.3 `-O3`);
    its journal for that string and budget: the result, the REV, and the
    number of logical steps the LevelSolver takes for that one string. Not
    an equivalent: the same numbers. This was checked on every search of
-   every journal at hand, @@JOURNALS@@, and on the totals of the owner's
-   levels 25 and 26.
+   every journal at hand, 13,557,680 searches of 17 to 24 bits, and on the
+   totals of the owner's levels 25 and 26.
 2. **So the construction it becomes can write the journal the ladder
    writes.** The rules of evidence, the code that derives a table from a
    journal, the table writer, `bomb verify` and the compact format read
@@ -28,11 +28,15 @@ container (4 virtual CPUs, Intel Xeon under KVM, 15.7 GB, GCC 13.3 `-O3`);
    one string with the LevelSolver, which shares no code with the shared
    search and must arrive at s. A record for each finished pass of a class
    ties those records to a search that was completed.
-4. **A job is a class**: the strings with one beginning of P bits. @@P@@
+4. **A job is a class**: the strings with one beginning of P bits. Jobs
+   share nothing, and what comes out does not depend on how the strings
+   are cut. Cutting is not free, though: 128 jobs cost about 1% more steps,
+   512 cost 4 to 20% (less the longer the strings), 32,768 cost twenty
+   times the work.
 5. **Witnesses are deterministic**: the REV is the first the LevelSolver
    finds, whatever the classes, the number of processes or the order.
 6. **An interruption loses seconds**: the passes that were running.
-7. **A worker needs a few megabytes.**
+7. **A worker needs megabytes**, whatever the length.
 8. **Order of work**: the engine in portable C with its tests; the journal
    and the driver; acceptance on the certified levels 17 to 26, table for
    table and record for record; and only then a kernel.
@@ -100,9 +104,44 @@ every pass (section 2).
 **Checked.** The experiment counts steps by what had been emitted when
 they were made (one counter for each beginning in the job's part of the
 tree). The sum along the beginnings of S, when S is found or the pass
-ends, is the number of steps of S.
+ends, is the number of steps of S. Counting costs 5 to 8% of the time
+(`runs/t22-*.txt`).
 
-@@JOURNALTABLE@@
+| Level | Searches in the journal | Their logical steps | With the same result and the same steps in the shared search | Table written | Record checksum, both |
+|---:|---:|---:|---:|---|---|
+| 17 | 44,810 | 4,778,891,950 | 44,810 | the ladder's file | `cfe3ca6b14751c64` |
+| 18 | 96,250 | 16,902,096,386 | 96,250 | the ladder's file | `4ea7faef84ba8fa9` |
+| 19 | 199,403 | 47,431,541,189 | 199,403 | the ladder's file | `fd24fd5780e06b84` |
+| 20 | 378,045 | 142,813,952,259 | 378,045 | the ladder's file | `e29bf41eabad617f` |
+| 21 | 699,890 | 568,481,317,406 | 699,890 | the ladder's file | `b2693d7177dfcf46` |
+| 22 | 1,408,471 | 2,356,037,716,175 | 1,408,471 | the ladder's file | `e73d6c02528dd0d9` |
+| 23 | 3,052,702 | 7,720,456,914,039 | 3,052,702 | the ladder's file | `8ae472a0d5f8feb9` |
+| 24 | 6,273,837 | 20,867,501,480,268 | 6,273,837 | the ladder's file | `53103f47cac5e204` |
+| 17 to 24 | 12,153,408 | 31,724,403,909,672 | 12,153,408 | | |
+
+And on the ladder of 17 to 21 bits that was built with the suffix rule of
+pull request #10, which makes fewer searches. These five runs were made
+with a build that had that pull request's reader and began each string
+where that ladder began it; `main` by itself refuses a work directory made
+with the rule, as it should.
+
+| Level | Searches in the journal | Their logical steps | With the same result and the same steps | Table written |
+|---:|---:|---:|---:|---|
+| 17 | 44,292 | 4,773,128,585 | 44,292 | the ladder's file |
+| 18 | 95,227 | 16,877,923,030 | 95,227 | the ladder's file |
+| 19 | 197,184 | 47,359,451,842 | 197,184 | the ladder's file |
+| 20 | 373,907 | 142,659,443,316 | 373,907 | the ladder's file |
+| 21 | 693,662 | 568,152,225,420 | 693,662 | the ladder's file |
+
+No search of any of the thirteen journals has another result or another
+number of steps, none is missing, and the shared search makes none that the
+journal does not have. "The ladder's file" is `cmp`: the table the
+experiment wrote and the ladder's `fixed-run-L.frb` are the same bytes.
+
+For the owner's levels 25 and 26 the journals are not here, and the two
+totals of each level report had to do: 11,833,078 searches with
+63,140,927,147,534 steps, and 21,924,419 with 257,971,379,632,128. The
+counts by string add up to exactly those (`FULL_RUNS.md`).
 
 ## 2. The certificate
 
@@ -133,13 +172,15 @@ Who can check that independently, and at what price:
 | A | the reader, at every load | 1 to 3 above for every pass; every REV run; every existing check | seconds to minutes |
 | B | the LevelSolver, on any one record | makes the search of that one string and must get the same result, the same REV and the same number of steps | the search of one string: 5 to 15 million steps at 24 to 26 bits |
 | C | a second implementation of the shared search | makes a whole pass again and must get the same records | the pass: seconds |
-| D | the certified journals of levels 17 to 26 | every record the ladder wrote must come out of the shared search | once, as the acceptance test: about an hour of 4 processors for all ten levels |
+| D | the certified journals of levels 17 to 26 | every record the ladder wrote must come out of the shared search | once, as the acceptance test: under half an hour of 4 processors for all ten levels, at the prototype's rate |
 
-B is what `bomb verify` does today for the strings it draws, with programs
-that have no line in common with the shared search: the reference
-LevelSolver in C and the register kernels. Because the step count of a
-record is the count of that program, a record that does not come from a
-complete walk of the string's search is one whose number B does not
+B is next to what `bomb verify --recertify --sample` does today: it solves
+the strings it draws again, from one node up, with programs that have no
+line in common with the shared search (the reference LevelSolver in C, the
+register kernels), and compares the minimum. Comparing the steps of the
+drawn records as well is a small addition to it. Because the step count of
+a record is the count of that other program, a record that does not come
+from a complete walk of the string's search is one whose number B does not
 reproduce. C is what makes a full recheck affordable: the whole level
 again costs what it cost to build.
 
@@ -163,10 +204,10 @@ done one string at a time by an unrelated program.
 
 A work directory of a construction by shared search says so: a new layout
 of `config.txt` (`carlobomb-fixed-run-work 4`) with the lines `search
-shared` and `class_bits P`. Layouts 1 to 3 keep their meaning, and a
-program that does not know layout 4 refuses the directory, as a program
-that does not know the suffix rule refuses layout 3. No existing journal
-changes its meaning.
+shared` and `class_bits P`. The existing layouts keep their meaning, and a
+program that does not know layout 4 refuses the directory. (The number 3
+is left to the suffix rule of pull request #10, so that the two can be
+merged in either order.) No existing journal changes its meaning.
 
 Records:
 
@@ -178,11 +219,14 @@ Records:
   shared search made, the sum of the steps of the strings, a checksum over
   the pass's search records, and the duration.
 
-A worker keeps the records of a pass in memory while the pass runs, at most
-@@BATCH@@. When the pass has ended it appends them to its segment, then the
-pass record, and flushes. **A search record of a layout-4 directory is
-evidence only together with the pass record that follows it**: records of a
-pass that was cut off while writing are there and count for nothing.
+A worker appends the record of a string when it finds its REV. When the
+pass has ended it appends the records of the strings that were not found
+(only then is the number of their steps known), then the pass record, and
+flushes. **A search record of a layout-4 directory is evidence only
+together with the pass record that follows it in its segment**: the records
+of a pass that was cut off are there and count for nothing. (A REV would be
+true without it. Keeping one rule for all records is simpler than using
+that.)
 
 What the reader checks in addition to everything it checks today: that
 each pass record has its records, in number and checksum; that the strings
@@ -192,21 +236,26 @@ class are of consecutive budgets, from the smallest any of its strings is
 wanted at.
 
 The rules of evidence (`FORMAT.md` 9.4 and 9.5) stay as they are, and so
-does the code that applies them.
+does the code that applies them. Layout 4 narrows which search records are
+admitted to them, as the paragraph above says; what an admitted record
+proves is what it always proved.
 
 **Size.** As many search records as the ladder writes, because they are the
 same records: 2.1 GB at 26 bits, growing by 1.9 a bit. A denser encoding of
 a pass's records (the strings in order need no index; the steps fit a few
-bytes) would come to about @@DENSE@@. That is a change of layout that can be
-made later and separately, and should not ride on this one.
+bytes) would come to about an eighth, 260 MB at 26 bits. That is a change
+of layout that can be made later and separately, and should not ride on
+this one.
 
 **The alternative that was considered** is the one `benchmarks/DISCOVERY.md`
-sketched: pass records only, and a new rule of evidence, "a completed pass
-excludes N for every string it wanted and did not find". The journal would
-be a tenth of the size. It is not proposed: it needs a new rule where none
-is needed, its claims cannot be checked one string at a time by the
-LevelSolver, and it could not be compared with the certified journals
-record for record. The per-string records cost disk space and buy all three.
+sketched: a record for each REV and for each pass, none for a string that
+was not found, and a new rule of evidence, "a completed pass excludes N for
+every string it wanted and did not find". The journal would lose a quarter
+of its records (5.1 of 21.9 million at 26 bits). It is not proposed: it
+needs a new rule where none is needed, its claims cannot be checked one
+string at a time by the LevelSolver, and it could not be compared with the
+certified journals record for record. The records of the strings not found
+cost a quarter of the disk space and buy all three.
 
 ## 4. Classes
 
@@ -215,9 +264,59 @@ beginnings that start with 0: the other half of the table follows by
 complement, as in the ladder. A job is one class with all its passes; jobs
 share nothing.
 
-What P costs and buys:
+**Cutting costs steps, and how many depends on P.** Each job walks, by
+itself, every partly decided graph that emits the first P bits of its
+class, and jobs whose classes share a shorter beginning walk the same
+graphs. One job for everything walks them once. Measured as a level of the
+ladder, the table and every record the same each time:
 
-@@PTABLE@@
+| Classes | P | 22 bits: steps | | 24 bits: steps | | 26 bits: steps | |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 1 | 11,502,623,562 | | | | | |
+| 2 | 2 | 11,502,624,418 | +0.00% | | | | |
+| 8 | 4 | 11,502,702,178 | +0.00% | | | | |
+| 32 | 6 | 11,509,625,738 | +0.06% | 84,790,903,483 | | 410,479,869,979 | |
+| 128 | 8 | 11,715,390,256 | +1.8% | 85,542,988,516 | +0.9% | | |
+| 512 | 10 | 13,809,415,774 | +20% | 94,551,728,574 | +11.5% | 427,828,430,118 | +4.2% |
+| 2,048 | 12 | 25,156,755,406 | ×2.2 | | | | |
+| 8,192 | 14 | 71,586,727,529 | ×6.2 | | | | |
+| 32,768 | 16 | 243,005,763,542 | ×21 | | | | |
+
+(Percentages against the first figure of the column.) Two things to read
+from it. Small classes are ruinous: the idea of a fixed, small class size,
+which `benchmarks/DISCOVERY.md` took for granted, is wrong. And the cost of
+a given P falls as the strings grow, because the part that is repeated does
+not grow with them as fast as the rest: 512 classes cost 20% at 22 bits,
+11.5% at 24 and 4.2% at 26.
+
+**What finer classes buy** is a shorter longest job and an evener load:
+
+| | Jobs | Heaviest job, steps | of the level | at the prototype's rate |
+|---|---:|---:|---:|---:|
+| 24 bits, P = 6 | 32 | 3,400,974,396 | 4.0% | 22 s |
+| 24 bits, P = 8 | 128 | 965,102,781 | 1.1% | 6 s |
+| 24 bits, P = 10 | 512 | 439,272,254 | 0.46% | 3 s |
+| 26 bits, P = 6 | 32 | 18,680,075,394 | 4.6% | 2 min |
+| 26 bits, P = 10 | 512 | 2,097,453,525 | 0.49% | 13 s |
+
+The jobs of one cut are of a size: the heaviest is 1.3 to 2.6 times the
+median in every row.
+
+**Proposed:** P is a setting of the work directory, 8 by default (128
+jobs). That costs about one percent, keeps a job under a minute up to 26
+bits at the prototype's rate, and gives ten jobs to each of a dozen
+workers. For longer levels, where jobs would otherwise run to many minutes,
+P = 10: by the trend above it costs a few percent at 26 bits and less
+beyond, and what it costs at a given length can be measured on a sample of
+classes in a minute before the level starts (`--sample`). The records do
+not depend on P (section 1, point 4); only the pass records name it.
+
+**Not proposed:** cutting by the state of the search instead of by the
+string (a job being one partly decided graph that has emitted P bits). It
+would repeat nothing. But what a job covers would then be a graph and not a
+set of strings, the steps of one string would be spread over many jobs,
+and the frontier of graphs would have to be stored. One percent does not
+pay for that.
 
 ## 5. Witnesses
 
@@ -228,7 +327,21 @@ wanted, or on which lower bound a string was begun at. Fields of a graph
 that the search never decided are written as 0, as the LevelSolver writes
 them.
 
-@@WITNESS@@
+Checked, by the file that comes out:
+
+- **classes:** 1, 2, 8, 32, 128, 512, 2,048, 8,192 and 32,768 of them at 22
+  bits, each time the ladder's `fixed-run-22.frb` byte for byte, and each
+  time the same record checksum over all 1,408,471 searches;
+- **processes:** 1, 2 and 4 (the same file), and 3 (the same node counts
+  and the same record checksum);
+- **the bound a string is begun at:** its first bits, its first and last
+  bits, every stretch: the same file at 25 bits for the first and the
+  third, and the ladder's file for the second at 17 to 21 bits, on the
+  ladder that was built with the suffix rule of pull request #10;
+- **a job run again by itself** gives what it gave among the others
+  (section 6);
+- and against the construction: the ladder's file at every length from 17
+  to 24 bits, and the checksum of the certified table at 25 and 26.
 
 ## 6. Recovery
 
@@ -250,23 +363,37 @@ until it has ended.
   like every other setting, and the lock that keeps two processes out of
   one directory stays.
 
-@@RECOVERY@@
+**What a stop costs.** At 26 bits in 512 classes, the largest pass is
+1.67·10^9 steps, 11 seconds of one process, and the heaviest class with all
+its passes 13 seconds. So a stop loses about ten seconds of each worker;
+with 128 classes, under a minute.
+
+**A pass made again is the same pass.** Three classes of the 26-bit level,
+the heaviest among them, were run again by themselves (`--class`). Pass for
+pass they gave the numbers they had given in the full run: wanted, found
+and steps (`runs/e26-341.txt` and the two beside it).
 
 ## 7. Memory
 
 For one worker, with classes of 2^c strings (c = X − P):
 
-| What | Bytes | c = 15 |
-|---|---:|---:|
-| which beginnings are wanted | 2^c / 4 | 8 KB |
-| steps by beginning | 16 · 2^c | 512 KB |
-| the records of the pass being made | at most 96 · 2^c | 3 MB |
-| graph and stack of the search | | under 1 KB |
+| What | Bytes | c = 16 | c = 18 |
+|---|---:|---:|---:|
+| which beginnings are wanted | 2^c / 4 | 16 KB | 64 KB |
+| steps by beginning | 16 · 2^c | 1 MB | 4 MB |
+| graph and stack of the search | | under 1 KB | under 1 KB |
 
 It does not grow with X. The Bomb below is mapped once and read by all
 workers, as in the ladder: 39 MB at 24 bits in the compact format.
 
-@@MEMORY@@
+The steps by beginning are the largest item, and the reason not to let
+classes grow without need: classes of 2^23 strings, which is 31 bits in 128
+classes, are 134 MB a worker. The records of a pass are not held: they are
+written as section 3 says.
+
+What the experiment holds beyond that (two bytes and a REV for every string
+of the length, 1.2 GB at 26 bits) is there so that it can check every REV
+at the end; a construction has the journal for that.
 
 Deriving the table from the finished journal is the existing code and has
 its existing appetite, about 75 bytes for each string of the level. Because
@@ -279,7 +406,7 @@ proposal.
 - The table formats, fixed-width and compact, and every file written so
   far.
 - The rules of evidence and the code that applies them.
-- Journals and work directories of layouts 1 to 3, and the ladder that
+- Journals and work directories of the existing layouts, and the ladder that
   writes them, which remains the reference a shared-search level is
   compared with.
 - `bomb verify`, the chain check against the Bomb below, `--recertify`.

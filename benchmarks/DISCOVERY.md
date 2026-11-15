@@ -70,8 +70,9 @@ the base Bomb's REVs, planning, the journal's writes, writing and checking
 the table) is under 0.4% of a level together. Nothing done to those parts
 can be seen in the total, and none of them was changed.
 
-Where the steps go, from the journal of level 24 built here
-(`benchmarks/ladder_retro`, which reads a journal and writes nothing):
+Where the steps go, from the journal of level 24 built here (read with
+`ladder_retro`, which reads a journal and writes nothing; the tool is in
+pull request #10, with the suffix bound it was first written to measure):
 
 | Node budget | Result | Searches | Logical steps | | ns a step | Steps a search |
 |---:|---|---:|---:|---:|---:|---:|
@@ -294,8 +295,9 @@ rather than a saving. No sidecar format is proposed.
 ## Recommendation
 
 1. Merge the suffix bound if it is wanted for its own sake: it is correct,
-   tested, changes no table, and is worth a thousandth
-   (`SUFFIX_BOUND.md`).
+   tested, changes no table, and is worth a thousandth (pull request #10
+   and its `SUFFIX_BOUND.md`). Nothing in this report or in the experiment
+   depends on it.
 2. Do not build the seeded search or the prepend witness. They are the best
    improvements of the per-string search and are worth a quarter and a
    twentieth of a number that the shared search divides by hundreds.
@@ -323,10 +325,12 @@ build/shared_search --bits 27 --prefix-bits 12 --sample 64 --seed 7 --jobs 4
 ```
 
 ```bash
-build/ladder_retro --work LADDER/work-24 --base LADDER/fixed-run-23.frb --witnesses
+build/shared_search --bits 24 --prefix-bits 10 --jobs 4 --base LADDER/fixed-run-23.frb --journal LADDER/work-24
 ```
 
 The first takes 70 seconds on one processor, the second 140 seconds on
-four, the third a minute. `ladder_retro` with `--seed-out` and `--seed-in`
-carries the steps that found each REV from one level's journal to the
-next, for the table of the seeded search.
+four. The third compares every search of the level's journal with the
+shared search and prints the ladder's searches by budget and result, in
+three minutes. The other tables of the audit (the place of a search in its
+string's sequence, the seeded search, the REVs without a search) were read
+from the journals with `ladder_retro`, which is in pull request #10.

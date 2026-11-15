@@ -51,12 +51,12 @@ Only strings that start with 0 are searched: one of each complement pair.
 With `--base BOMB`, a complete Bomb for X − 1 bits, the experiment does
 what a level of the ladder does: the REV stored for the first X − 1 bits
 settles one of the two strings that begin with them, and the other is wanted
-from a lower bound on. `--bound` says which, as a ladder may:
+from a lower bound on. `--bound` says which:
 
 | `--bound` | A string begins at | Which ladder |
 |---|---|---|
-| `prefix` | what its first X − 1 bits need | every level built before the suffix rule |
-| `suffix` | that, or one node less than its last X − 1 bits need | a level built with the rule |
+| `prefix` | what its first X − 1 bits need | the ladder |
+| `suffix` | that, or one node less than its last X − 1 bits need | a ladder with the suffix rule of pull request #10 |
 | `all` (default) | the most any stretch of it gives | none |
 
 The table that comes out is the same under all three, and it is the table
@@ -177,11 +177,11 @@ per process; with `--journal`, 16 bytes per search of the journal. 26 bits:
 ## Test
 
 `shared_search_small` (ctest) builds a 12-bit Bomb with the ordinary
-construction by search alone, and a 13-bit level on it with the ladder,
-with and without the suffix rule. It requires the experiment to find the
-same node count and the same REV for every string of both, in one class and
-in several, in one process and in several; to write the ladder's 13-bit
-table byte for byte; to reproduce every search of both journals with its
+construction by search alone, and a 13-bit level on it with the ladder. It
+requires the experiment to find the same node count and the same REV for
+every string of both, in one class and in several, in one process and in
+several; to write the ladder's 13-bit table byte for byte, from each of the
+three bounds; to reproduce every search of the ladder's journal with its
 result and its number of steps; to print the digests and checksums that
 `nodes_digest` and `journal_digest` print; and to fail on a histogram, a
 total or a budget that is wrong.

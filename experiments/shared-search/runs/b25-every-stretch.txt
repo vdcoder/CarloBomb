@@ -1,0 +1,24 @@
+$ shared_search --bits 25 --prefix-bits 10 --jobs 4 --base LADDER/fixed-run-24.frb --expect 1:2,2:6,3:64,4:968,5:18126,6:426116,7:9671940,8:23375506,9:61704 --out RUNS/x25.frb --expect-table-crc 7dfdbcd7 --jobs-out RUNS/b25.jobs
+Strings of 25 bits that start with 0: 16,777,216 in 512 classes of 512; built on the Bomb one bit shorter; 4 processes
+  budget           wanted            found                  steps
+  5                   444               22              8,302,342
+  6               126,492            3,807            352,724,640
+  7             4,120,371          930,266          9,800,741,383
+  8             7,453,570        7,424,604        195,822,543,524
+  9                29,909           29,909         17,101,468,216
+  total: 223,085,780,105 steps; 8,388,608 strings found by search, 8,388,608 settled by the REV of the base
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 16.7 s to set up, 341.3 s searching (6.54e+08 steps a second, all processes)
+  memory: the largest process held 1217 MB, of which 608 MB are the tables all processes share
+  jobs: 512; steps of a job: least 269,512,418, median 418,287,155, most 963,050,344 (0.43% of all)
+  strings by nodes (both strings of a pair counted):  1: 2  2: 6  3: 64  4: 968  5: 18,126  6: 426,116  7: 9,671,940  8: 23,375,506  9: 61,704
+  the histogram expected: every entry agrees
+  REVs run on the reference interpreter: 16,777,216; emit their string with every node, and their complement the
+  complement: 16,777,216 (8,388,608 from the search, 8,388,608 from the base)
+  (8.9 s)
+  node-count digest (SHA-256 of 33,554,432 bytes, the nodes of each string in index order):
+    1c84b6016d8870d69b561256eabb8d67060b199395479d4330b3946aa49e96e6
+  table written for comparison (it says "certified" of every entry; this experiment certifies nothing):
+    RUNS/x25.frb
+    table checksum (CRC-32) 7dfdbcd7: the checksum expected
+exit code 0; 385.057892758 s from start to end

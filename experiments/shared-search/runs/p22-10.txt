@@ -1,0 +1,43 @@
+$ shared_search --bits 22 --prefix-bits 10 --jobs 4 --base LADDER/fixed-run-21.frb --bound prefix --count --out RUNS/p22.frb
+Strings of 22 bits that start with 0: 2,097,152 in 512 classes of 512; built on the Bomb one bit shorter, each string from what its first bits need; 4 processes
+  budget           wanted            found                  steps
+  1                     1                0                    102
+  2                     4                0                    986
+  3                    36                0                 30,032
+  4                   520                0              1,477,697
+  5                 9,409               71             22,807,066
+  6               188,563           14,623            347,147,330
+  7             1,009,543          833,488          7,295,183,517
+  8               200,393          200,392          6,138,797,899
+  9                     2                2              3,971,145
+  total: 13,809,415,774 steps; 1,048,576 strings found by search, 1,048,576 settled by the REV of the base
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 1.7 s to set up, 23.2 s searching (5.95e+08 steps a second, all processes)
+  memory: the largest process had 157 MB resident; the tables all processes share are 76 MB
+  jobs: 512; steps of a job: least 10,998,035, median 25,343,829, most 65,395,198 (0.47% of all)
+  strings by nodes (both strings of a pair counted):  1: 2  2: 6  3: 64  4: 968  5: 17,920  6: 387,696  7: 3,338,182  8: 449,460  9: 6
+  counted as searches of one string each, the searches a ladder makes and journals:
+  budget         searches        steps where a REV         steps where none
+  1                     1                        0                      102
+  2                     4                        0                      962
+  3                    36                        0                   29,492
+  4                   520                        0                2,464,952
+  5                 9,409                1,339,613              399,419,094
+  6               188,563            3,327,363,895           83,156,945,119
+  7             1,009,543        1,259,136,179,078          919,267,145,348
+  8               200,393           90,713,267,268               26,676,520
+  9                     2                6,884,732                        0
+  total: 1,408,471 searches, 2,356,037,716,175 logical steps: 170.6 times the steps made here
+  record checksum (every search: string, budget, result, steps): e73d6c02528dd0d9
+  of them, at a budget the last bits of the string, less one node, excludes: 9,870 searches, 1,298,802,272 steps (0.055%)
+  of them, at a budget every stretch of the string, less one node, excludes: 10,521 searches, 1,375,755,386 steps (0.058%)
+  REVs run on the reference interpreter: 2,097,152; emit their string with every node, and their complement the
+  complement: 2,097,152 (1,048,576 from the search, 1,048,576 from the base)
+  (1.0 s)
+  node-count digest (SHA-256 of 4,194,304 bytes, the nodes of each string in index order):
+    318611e761cc5450008dcdf86a021eb8207271c161ae9f8be1cf111401044954
+  table written for comparison (it says "certified" of every entry; this experiment certifies nothing):
+    RUNS/p22.frb
+    table checksum (CRC-32) be1070a9
+exit code 0; 28.238496663 s from start to end
+the ladder's fixed-run-22.frb, byte for byte

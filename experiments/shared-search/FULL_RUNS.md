@@ -97,9 +97,9 @@ interpreter: 18.9 s; 663 s from start to end.
 
 `--base` and `--bound prefix`: the REV the Bomb below stores for the first
 X − 1 bits settles one of the two strings that begin with them, and the
-other is wanted from what its first bits need. That is how the owner's
-levels 25 and 26 were built, before the suffix rule existed. The 25-bit
-level stands on the 24-bit Bomb of the cloud ladder; the 26-bit level on
+other is wanted from what its first bits need. That is how the ladder
+builds a level, the owner's 25 and 26 among them. The 25-bit level
+stands on the 24-bit Bomb of the cloud ladder; the 26-bit level on
 the 25-bit table the experiment had just written, whose checksum is the
 certified one.
 
@@ -147,8 +147,13 @@ search does the work of 283 steps of the ladder.
 Setting up: 36.2 s; searching: 675.5 s; 766 s from start to end. One step
 does the work of 603.
 
-(The counting costs time: the same level without it searched in 341 s at
-25 bits.)
+The counting costs time: without it, and with every stretch of a string as
+its bound, the 25-bit level searched in 341 s and wrote the same file
+(`runs/b25-every-stretch.txt`). The 26-bit level was also run in 32 classes
+instead of 512 (`runs/p26-6.txt`): 410,479,869,979 steps, and the same
+21,924,419 searches with the same steps and the same record checksum. How
+the work is cut changes the cost and nothing else (`PROPOSAL.md`, section
+4).
 
 ### Histograms
 
@@ -179,7 +184,7 @@ construction would need (`PROPOSAL.md`, section 7).
 ## 2. Against the certified results
 
 **Histograms.** `--expect` was given the histogram of the owner's reports of
-levels 25 and 26 and fails a run on any entry that differs. All four runs
+levels 25 and 26 and fails a run on any entry that differs. Every run
 passed: every entry agrees, the 61,704 of 9 nodes at 25 bits, and the
 54,455,992, the 1,187,852 and the 2 at 26.
 
@@ -206,7 +211,36 @@ shared search, counting each string's own steps (the theorem of
 a level's journal to have the same result and the same number of logical
 steps in the shared search.
 
-@@JOURNALTABLE@@
+| Level | Searches in the journal | Their logical steps | With the same result and the same steps in the shared search | Table written | Record checksum, both |
+|---:|---:|---:|---:|---|---|
+| 17 | 44,810 | 4,778,891,950 | 44,810 | the ladder's file | `cfe3ca6b14751c64` |
+| 18 | 96,250 | 16,902,096,386 | 96,250 | the ladder's file | `4ea7faef84ba8fa9` |
+| 19 | 199,403 | 47,431,541,189 | 199,403 | the ladder's file | `fd24fd5780e06b84` |
+| 20 | 378,045 | 142,813,952,259 | 378,045 | the ladder's file | `e29bf41eabad617f` |
+| 21 | 699,890 | 568,481,317,406 | 699,890 | the ladder's file | `b2693d7177dfcf46` |
+| 22 | 1,408,471 | 2,356,037,716,175 | 1,408,471 | the ladder's file | `e73d6c02528dd0d9` |
+| 23 | 3,052,702 | 7,720,456,914,039 | 3,052,702 | the ladder's file | `8ae472a0d5f8feb9` |
+| 24 | 6,273,837 | 20,867,501,480,268 | 6,273,837 | the ladder's file | `53103f47cac5e204` |
+| 17 to 24 | 12,153,408 | 31,724,403,909,672 | 12,153,408 | | |
+
+And on the ladder of 17 to 21 bits that was built with the suffix rule of
+pull request #10, which makes fewer searches. These five runs were made
+with a build that had that pull request's reader and began each string
+where that ladder began it; `main` by itself refuses a work directory made
+with the rule, as it should.
+
+| Level | Searches in the journal | Their logical steps | With the same result and the same steps | Table written |
+|---:|---:|---:|---:|---|
+| 17 | 44,292 | 4,773,128,585 | 44,292 | the ladder's file |
+| 18 | 95,227 | 16,877,923,030 | 95,227 | the ladder's file |
+| 19 | 197,184 | 47,359,451,842 | 197,184 | the ladder's file |
+| 20 | 373,907 | 142,659,443,316 | 373,907 | the ladder's file |
+| 21 | 693,662 | 568,152,225,420 | 693,662 | the ladder's file |
+
+No search of any of the thirteen journals has another result or another
+number of steps, none is missing, and the shared search makes none that the
+journal does not have. "The ladder's file" is `cmp`: the table the
+experiment wrote and the ladder's `fixed-run-L.frb` are the same bytes.
 
 ## 3. Digests
 
@@ -222,19 +256,44 @@ as a binary number, first bit most significant), for i from 0 to 2^X − 1.
 | 25 | `1c84b6016d8870d69b561256eabb8d67060b199395479d4330b3946aa49e96e6` |
 | 26 | `170e5bd475113e1b71c986f328e7d3c059fb1f47ba035cbb5d2ca1e23be2496e` |
 
+For the shorter Bombs, from the ladder built in this container
+(`runs/digests.txt`); a Bomb also answers every shorter length
+(`nodes_digest BOMB --bits L`), so the 26-bit Bomb alone can be asked for
+all of these:
+
+| Bits | Node-count digest |
+|---:|---|
+| 16 | `cc777ba8d8c38146430078c452747cc0e7d5778190c5d517c5e30f1783910ef0` |
+| 17 | `dbf2d4c513a636c86fe19154af5e69e66be3f6e291ad43916336c5f4681039f6` |
+| 18 | `be95c4cd534f9972ff2a2d5fff1e8fed5e6fa56443276c77f2d43742431e32ac` |
+| 19 | `6506e865206d9debe51aa33a72f9249d78744b0a26f18d015f20fdc50f5565a7` |
+| 20 | `8359b7d4f21702dbd57c59d270bbaf98db39887eeae931f075334db12a2b5cee` |
+| 21 | `06c0019a9ad13f233fb79d3da070f7f0f0abd489e0eb1172ff45e1106a13b684` |
+| 22 | `318611e761cc5450008dcdf86a021eb8207271c161ae9f8be1cf111401044954` |
+| 23 | `1adab1801ff31793c66e7c41dacc1ee778417ed9e1ce1bf162b33a60ca870557` |
+| 24 | `8263472edc2707da5dc156a1ff066d67c3e5f28c3fefcda419e064fa079a7599` |
+
 Each was obtained four ways that agree: by the search from nothing; by the
 search as a level; by `nodes_digest` reading the table the experiment wrote
 through the library's reader; and, for 25 bits, by `nodes_digest --bits 25`
 on the 26-bit table, which answers shorter strings as well.
-@@COMPACT@@
+`nodes_digest` gives the same from the compact files made of the two
+tables, where a node count is not stored as in the fixed-width file but
+read from 4-bit fields and, for strings that start with 1, taken from the
+complement.
 
-**The file**: the SHA-256 of the fixed-width file `fixed-run-L.frb`. The
-experiment's files, which have the certified table checksums:
+**The file**: the SHA-256 of the Bomb's file. Of the experiment's
+fixed-width files, which have the certified table checksums, and of the
+compact files `carlobomb bomb compact` makes of them (a compact file is
+determined by its source: the 24-bit one made today is, byte for byte, the
+one made by the migration):
 
-| Bits | Bytes | SHA-256 of the file |
-|---:|---:|---|
-| 25 | 1,476,395,072 | `95d708b2d1dcb1ffe4e9f1fdf1a9eb4119a2c636e0476bf477c218de17c76c9e` |
-| 26 | 2,952,790,080 | `302eefa4d7ba2abedf61dca4c7b8559c8c29eaa3517ec815ffa65739d77228c2` |
+| File | Bytes | SHA-256 |
+|---|---:|---|
+| `fixed-run-25.frb` | 1,476,395,072 | `95d708b2d1dcb1ffe4e9f1fdf1a9eb4119a2c636e0476bf477c218de17c76c9e` |
+| `fixed-run-26.frb` | 2,952,790,080 | `302eefa4d7ba2abedf61dca4c7b8559c8c29eaa3517ec815ffa65739d77228c2` |
+| `fixed-run-25.v4.frb` | 80,252,120 | `eb4d46c79194d02a855e8e61303999beb4edad968d8c295abb5d5be8ce4bbef9` |
+| `fixed-run-26.v4.frb` | 164,839,968 | `a269cf909135658f1fcab6243364405d6c622745aa5fdd1b7d313bb2d7b4c943` |
 
 **The record checksum**: one number over every search of a level's journal
 (string, budget, result, logical steps), with the number of searches and
@@ -252,27 +311,32 @@ branch, in a build directory of its own, and touch neither the running
 construction nor its executable. `journal_digest` takes no lock and is for
 the directory of a finished level, never the one being built.
 
+The paths are those of `bombs/fixed-run/BEYOND_24.md`.
+
 The original files against the experiment's, byte for byte, with nothing
-but the system's own tool:
+but the system's own tool, on the fixed-width files or on the compact ones,
+wherever they are kept:
 
 ```bash
-sha256sum /home/vdcoder/frb31/fixed-run-25.frb /home/vdcoder/frb31/fixed-run-26.frb
+sha256sum ~/frb31/fixed-run-25.frb ~/frb31/fixed-run-26.frb
 ```
 
 The node counts of every string, from a Bomb of either format:
 
 ```bash
-build/nodes_digest /home/vdcoder/frb31/fixed-run-26.frb
+build/nodes_digest ~/frb31/fixed-run-26.frb
 ```
 
 Every search of a certified journal (for a level built on a base it also
 says which bound the level was built with):
 
 ```bash
-build/journal_digest /home/vdcoder/frb31/work-26
+build/journal_digest ~/frb31/work-26
 ```
 
-@@TIMES@@
+Here, `nodes_digest` took 36 seconds on the 26-bit fixed-width file and 23
+on its compact file (17 and 11 at 25 bits); `journal_digest` took 1.4
+seconds on the journal of level 24, half a gigabyte.
 
 If the SHA-256 of a file agrees, the other two follow for that level; they
 are there for the case that a file was built another way (the compact
@@ -295,7 +359,19 @@ the journals, which no file digest reaches.
 3. *By the production verifier*, `carlobomb bomb verify`, on the files
    written:
 
-@@VERIFY@@
+   | Check of `bomb verify` | 25 bits | 26 bits |
+   |---|---|---|
+   | header, length, checksums, counts and flags | pass | pass |
+   | every entry decoded and its REV run | pass, 33,554,432 REVs | pass, 67,108,864 REVs |
+   | complement symmetry of REVs and node counts | pass | pass |
+   | against the Bomb one bit shorter: the minimum of every shorter string is the smallest among its extensions, and no stretch of a string needs over one node more than the string | pass, against the 24-bit Bomb of the cloud ladder | pass, against the 25-bit table |
+   | strings drawn at random and solved again from one node up by the production solver, with no use of the table, a journal or the symmetry (`--recertify --sample`) | 2,000 drawn, 2,000 reproduced (1.8·10^10 steps of the production solver) | 2,000 drawn, 2,000 reproduced (3.0·10^10 steps) |
+   | the strings of the largest minimum solved again (`--recertify --hardest`) | 200 of the 61,704 of 9 nodes, all reproduced | both strings of 10 nodes, reproduced |
+
+   The verifier ends with "COMPLETE: every target has a certified minimum".
+   That line repeats what the file says of its entries, which is what the
+   experiment made it say (section 5); it is not a finding of the verifier.
+   Its findings are the lines above.
 
 **What that proves.** A REV that runs is a proof that its string needs *at
 most* that many nodes. For every string of 25 and 26 bits there is such a
@@ -309,7 +385,7 @@ So the status of the results is:
 | Claim | Status |
 |---|---|
 | Every string of 25 and 26 bits has a REV of the stated size | proven here, by the REVs |
-| Those sizes are the minima | certified by the owner's journals for the Bombs of 25 and 26 bits. Here: **experimental agreement**, in every one of 100,663,296 node counts, by a search of another shape, once on the ladder and once from nothing |
+| Those sizes are the minima | certified by the owner's journals for the Bombs of 25 and 26 bits. Here: **experimental agreement**, in every one of 100,663,296 node counts, by a search of another shape, once on the ladder and once from nothing. For the 4,202 strings that `bomb verify` drew or picked, also recomputed from one node up by the production solver |
 | The experiment's tables are the certified tables | by checksum, 32 bits; by SHA-256 as soon as the owner's `sha256sum` is compared |
 | The shared search makes the ladder's searches | shown for every record at 17 to 24 bits; for the totals at 25 and 26 |
 | A journal-backed proof of minimality by the shared search | **does not exist.** It is what `PROPOSAL.md` proposes to build |
@@ -326,8 +402,9 @@ that dependence, and they give the same node counts.
 - Nothing was read from or written to the owner's machine. The certified
   figures used are those of the two level reports the owner posted.
 - The production ladder, the construction code and the formats are not
-  changed by this branch: it adds files under `experiments/shared-search`
-  and their build rules.
+  changed by this work: it adds files under `experiments/shared-search`,
+  their build rules, and paragraphs to two reports. No line of the library
+  is touched.
 - The 25- and 26-bit tables the experiment wrote are in the scratch
   directory only. Their entries say "certified minimum", which they must in
   order to be comparable byte for byte with the certified files; the
@@ -337,9 +414,9 @@ that dependence, and they give the same node counts.
 
 ## By the way: the suffix rule at 25 and 26 bits
 
-`benchmarks/SUFFIX_BOUND.md` could not say what the suffix rule saves at 25
-and 26 bits, the journals being on the owner's machine. Counting the
-ladder's searches gives it:
+The report of the suffix rule (pull request #10) could not say what the
+rule saves at 25 and 26 bits, the journals being on the owner's machine.
+Counting the ladder's searches gives it:
 
 | Level | Searches of the ladder | below the bound from the last bits | | Their steps | |
 |---:|---:|---:|---:|---:|---:|
@@ -347,7 +424,7 @@ ladder's searches gives it:
 | 25 | 11,833,078 | 93,659 | 0.8% | 40,605,145,322 | 0.064% |
 | 26 | 21,924,419 | 139,269 | 0.6% | 82,380,515,737 | 0.032% |
 
-The line for 24 bits is, to the digit, what `ladder_retro` read from that
+The line for 24 bits is, to the digit, what that report read from the
 level's journal. With every stretch instead of the last bits: 102,292
 searches and 44,733,587,220 steps at 25 bits, 151,838 and 89,359,038,840 at
 26. The rule stays correct and stays small.

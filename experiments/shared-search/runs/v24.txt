@@ -1,0 +1,26 @@
+$ shared_search --bits 24 --prefix-bits 10 --jobs 4 --base LADDER/fixed-run-23.frb --check LADDER/fixed-run-24.frb --out RUNS/x24.frb --jobs-out RUNS/v24.jobs
+Strings of 24 bits that start with 0: 8,388,608 in 512 classes of 512; built on the Bomb one bit shorter; 4 processes
+  budget           wanted            found                  steps
+  5                   767               29             11,311,656
+  6               166,879            5,957            353,533,666
+  7             2,987,115        1,125,407          9,134,932,323
+  8             3,062,889        3,061,990         83,720,872,890
+  9                   921              921          1,282,728,504
+  total: 94,503,379,039 steps; 4,194,304 strings found by search, 4,194,304 settled by the REV of the base
+  unresolved (no REV within 12 nodes): 0
+  wall clock: 7.7 s to set up, 142.0 s searching (6.66e+08 steps a second, all processes)
+  memory: the largest process held 609 MB, of which 304 MB are the tables all processes share
+  jobs: 512; steps of a job: least 93,575,670, median 178,959,076, most 439,136,111 (0.46% of all)
+  strings by nodes (both strings of a pair counted):  1: 2  2: 6  3: 64  4: 968  5: 18,082  6: 418,502  7: 7,811,408  8: 8,526,298  9: 1,886
+  REVs run on the reference interpreter: 8,388,608; emit their string with every node, and their complement the
+  complement: 8,388,608 (4,194,304 from the search, 4,194,304 from the base)
+  (4.4 s)
+  node-count digest (SHA-256 of 16,777,216 bytes, the nodes of each string in index order):
+    8263472edc2707da5dc156a1ff066d67c3e5f28c3fefcda419e064fa079a7599
+  against the table: 8,388,608 strings; the node count of the table for 8,388,608, another for 0;
+  the REV of the table, link for link and color for color, for 8,388,608 (of the 0 others, 0 have 5 nodes or fewer)
+  table written for comparison (it says "certified" of every entry; this experiment certifies nothing):
+    RUNS/x24.frb
+    table checksum (CRC-32) dfd98e11
+exit code 0; 166.717350144 s from start to end
+x24.frb is the ladder's fixed-run-24.frb, byte for byte

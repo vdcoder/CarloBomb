@@ -1,6 +1,7 @@
 /*
  * shared_search: one search for many strings at once.  An experiment; see
- * README.md in this directory and benchmarks/DISCOVERY.md.
+ * README.md, FULL_RUNS.md and PROPOSAL.md in this directory, and
+ * benchmarks/DISCOVERY.md.
  *
  *   shared_search --bits X [--prefix-bits P] [--class K | --sample N [--seed S]]
  *                 [--jobs J] [--base BOMB] [--check BOMB] [--max-budget N]
@@ -25,19 +26,20 @@
  * once.
  *
  * A job is the set of strings of X bits with one beginning of P bits (a
- * class); P = 1, the default, is all strings that start with 0 at once.  It runs one pass per node budget N,
- * from the smallest any of its strings can need.  Wanted in pass N: the
- * strings no smaller budget found.  A string found is no longer wanted from
- * that moment on.  When the pass ends, every string still wanted has no REV
- * of N nodes.  Jobs are independent of one another and of the order they run
- * in, so the outcome does not depend on how many processes there are.
+ * class); P = 1, the default, is all strings that start with 0 at once.  It
+ * runs one pass per node budget N, from the smallest any of its strings can
+ * need.  Wanted in pass N: the strings no smaller budget found.  A string
+ * found is no longer wanted from that moment on.  When the pass ends, every
+ * string still wanted has no REV of N nodes.  Jobs are independent of one
+ * another and of the order they run in, so the outcome does not depend on
+ * how many processes there are.
  *
  * One string of each complement pair: those that start with 0.
  *
  * With --base, a complete Bomb for X-1 bits, a level is built as the ladder
  * builds it: the REV stored for the first X-1 bits settles one of the two
- * strings that begin with them, and the other is wanted from the budget its
- * first bits need (its last X-1 bits, less one node, if that is more).
+ * strings that begin with them, and the other is wanted from a lower bound
+ * on (--bound, below).
  *
  * With --check, a complete Bomb for X bits, every string found is compared
  * with the table: the node count, and the REV link for link and color for

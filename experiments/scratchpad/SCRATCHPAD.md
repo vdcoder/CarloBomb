@@ -295,6 +295,16 @@ whose strings are all found, and little of the pass of the class with the
 
 - `neighbors` on the experimental tables of 27 and 28 bits: whether the
   nineteen in twenty of section 5 hold there.
+- How many classes of a level are like the one of section 6 in which every
+  string is found, at each budget; and how far the REV of such a string is
+  from the REV of its first bits when both have the same number of nodes
+  (how many links and colors differ). Section 1 measured the case of no
+  difference in what the machine reads: 0.02%. If a few changes covered
+  most of them, a pass could be spared for the classes where it proves
+  nothing, at the price of tables that hold a REV of the minimum size but
+  not the LevelSolver's first one, and so of journals and files that are no
+  longer the ladder's byte for byte. That price is a decision, not a
+  measurement.
 - `proof_only` at 25 and 26 bits, where the 9-node pass takes over and the
   8-node pass leaves half a million strings behind: by the pattern above,
   less is saved there than at 24 bits.

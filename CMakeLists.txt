@@ -80,7 +80,7 @@ if(UNIX)
   set(CARLOBOMB_HAVE_BOMB_BUILD ON)
   add_library(carlobomb_fixed_run_build STATIC
     bombs/fixed-run/journal.c bombs/fixed-run/construct.c bombs/fixed-run/statistics.c)
-  target_link_libraries(carlobomb_fixed_run_build PUBLIC carlobomb_fixed_run carlobomb_minimal)
+  target_link_libraries(carlobomb_fixed_run_build PUBLIC carlobomb_fixed_run carlobomb_minimal carlobomb_shared)
   target_compile_definitions(carlobomb_fixed_run_build INTERFACE CARLOBOMB_HAVE_BOMB_BUILD=1)
 endif()
 
@@ -256,6 +256,17 @@ endif()
 add_test(NAME test_fixed_run_ladder
   COMMAND test_fixed_run_ladder ${CMAKE_CURRENT_BINARY_DIR}/fixed_run_ladder_test_work)
 set_tests_properties(test_fixed_run_ladder PROPERTIES TIMEOUT 600)
+# The construction by shared search: the ladder's table and the ladder's
+# searches, what is admitted as evidence, a process that dies anywhere, and
+# whole passes made again.
+if(CARLOBOMB_HAVE_BOMB_BUILD)
+  add_executable(test_shared_build bombs/fixed-run/tests/test_shared_build.c)
+  target_include_directories(test_shared_build PRIVATE tests)
+  target_link_libraries(test_shared_build PRIVATE carlobomb_fixed_run_build)
+  add_test(NAME test_shared_build
+    COMMAND test_shared_build ${CMAKE_CURRENT_BINARY_DIR}/shared_build_test_work)
+  set_tests_properties(test_shared_build PROPERTIES TIMEOUT 900)
+endif()
 # The compact format (version 4): the graph of a REV as a rank and its colors
 # found again; packing, layout, conversion both ways, every answer against a
 # scan of the table, and damaged files.

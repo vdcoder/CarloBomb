@@ -44,7 +44,7 @@ extern "C" {
 #endif
 
 #define REV_SHARED_MAX_BITS 31
-#define REV_SHARED_MAX_NODES 16
+#define REV_SHARED_MAX_NODES 31
 /* A class holds at most 2^REV_SHARED_MAX_FREE strings: bits - class_bits may not exceed it. */
 #define REV_SHARED_MAX_FREE 26
 

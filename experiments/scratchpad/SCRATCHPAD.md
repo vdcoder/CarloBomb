@@ -14,8 +14,9 @@ directory are the programs; they read Bombs and write nothing.
 
 ## Where it stands
 
-Three ideas measured, one observation that explains all three, and one
-place left to look, with a first lead in it.
+Three ideas measured, one observation that explains all three, one place
+left to look, with a first lead in it, and a count of what a pass is made
+of (section 6) that says the same from inside the search.
 
 | Idea | What a scratchpad would hold | Derivable from the Bomb? | Measured worth |
 |---|---|---|---|
@@ -186,7 +187,10 @@ is missing, and every Bomb built so far is a table to test it against.
 Two bounds of that kind are known and measured (`benchmarks/SUFFIX_BOUND.md`
 in pull request #10): a string needs at least what its first X − 1 bits
 need, which is where every search begins, and at least one node less than
-its last X − 1 bits need, which decides 0.1% of the proofs.
+its last X − 1 bits need, which decides 0.1% of the proofs. In the
+experimental runs at 27 and 28 bits (pull request #11; not certified) it
+would have decided 217,670 of 43,933,523 searches with 0.031% of their
+logical steps, and 496,615 of 95,415,648 with 0.050%.
 
 ## 5. The last bits: a lead, and its limit
 
@@ -232,8 +236,63 @@ whose proofs are dearest, 701 are in the third line, where the last bits
 say nothing. A bound pays when it covers a whole pass. This one does not
 yet; it is the nearest thing to one that the data shows.
 
+## 6. What a pass is made of
+
+Counted while the faster kernel for the shared search was being written
+(`solvers/shared/shared_run.c` on the branch `feature/shared-kernel`, with
+counters added for the purpose; they are not in the repository). Two
+classes of 24 bits at 8 nodes, every string wanted when the pass begins:
+1,022,675,513 steps.
+
+| | Count | |
+|---|---:|---|
+| Places where something is decided | 6,435,269 | a link that is not set (6,245,253), a node without a color (84,874), a bit chosen (105,142) |
+| Things tried at those places | 49,760,161 | a node for the link, old or new |
+| of them, refused at once | 6,102,929 | the bit of the node tried is not wanted |
+| Runs | 42,806,913 | the graph runs on from what was tried, a bit at a time |
+| Bits emitted in runs | 204,479,392 | 4.8 for a run |
+| Steps that are those bits | 817,917,568 | four steps each: 80% of the pass |
+| Runs that end at a bit not wanted | 37,615,057 | 88% |
+| at a link not set | 2,979,028 | 7% |
+| at something else to decide | 2,082,578 | 5% |
+| at the last bit of a string | 130,250 | 0.3% |
+
+A pass is 43 million runs for 131,072 strings: a link is set, the graph
+runs for five bits on average, and in seven cases of eight it then emits
+something that no wanted string begins with. A run costs 24 steps, all the
+steps of the pass divided by the runs.
+
+What this adds to the observation at the top:
+
+- **There is nothing to store between the runs.** A run is short, and it
+  is determined by the graph and where its two pointers stand; remembering
+  where runs end would cost more than making them. The kernel makes them
+  three times faster, which is all there is to gain on that side.
+- **What would save steps is fewer runs**, and a run is spared only if it
+  is known beforehand that no wanted string lies beyond it. Whatever does
+  that is a statement about which strings are still wanted below a
+  beginning: again a statement about strings, not about the search.
+- **"Not wanted" here mostly means "already found".** Every string is
+  wanted when this pass begins, so a bit is refused only when everything
+  below it has its REV already. In one of the two classes (beginning
+  01110011) all 65,536 strings have a REV of 8 nodes, and the pass still
+  makes 479,845,554 steps: it goes on until the last of them is found. In
+  the other (beginning 00000000) 300 strings have none, and the pass goes
+  to its end: 542,829,959 steps.
+
+So a pass costs about the same whether it ends by finding its last string
+or by proving that its last 300 have no REV. That sharpens the observation
+of the summary: what costs is the strings that are found late or never,
+and the search for them goes all over the tree of graphs whichever of the
+two they are. It also says what a supply of REVs from elsewhere is worth
+and why it is not worth more (section 2): it spares the pass of the class
+whose strings are all found, and little of the pass of the class with the
+300, which has to be made for them alone.
+
 ## Not measured yet
 
+- `neighbors` on the experimental tables of 27 and 28 bits: whether the
+  nineteen in twenty of section 5 hold there.
 - `proof_only` at 25 and 26 bits, where the 9-node pass takes over and the
   8-node pass leaves half a million strings behind: by the pattern above,
   less is saved there than at 24 bits.

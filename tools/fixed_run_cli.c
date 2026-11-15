@@ -104,7 +104,9 @@ void fixed_run_cli_usage(void) {
             "build, resume and ladder also take --sample K [--seed S] (search only K random\n"
             "open targets), --limit-jobs K, --time-limit SECONDS, --progress SECONDS,\n"
             "--min-free MIB (stop cleanly when the disk has less free space), --quiet.\n"
-            "The engine defaults to amd64-auto where it exists, else c.\n",
+            "The engine defaults to amd64-auto where it exists, else c.  A shared search has\n"
+            "engines of its own: shared-c (the default, the reference walk) and shared-run\n"
+            "(the same passes, faster); either may continue what the other began.\n",
             FRB_MAX_BITS);
 }
 
@@ -371,6 +373,11 @@ static int cmd_lookup(const BombArgs *a) {
 
 /* ---- engines ------------------------------------------------------------ */
 
+/* --engine, if it names an engine of the shared search. */
+static const char *shared_engine_asked(const BombArgs *a) {
+    return a->engine && frb_shared_engine(a->engine) ? a->engine : NULL;
+}
+
 /*
  * The engine for a construction.  "auto" (and no name at all) means
  * amd64-auto where this build and this CPU have it, else the C engine.  A
@@ -565,16 +572,17 @@ static int cmd_build(const BombArgs *a) {
         else return usage_error("--symmetry must be on or off");
     }
     if (!apply_changeable(a, &cfg)) return X_USAGE;
-    if (!select_engine(a->engine, cfg.engine, sizeof cfg.engine, &solve)) return X_USAGE;
+    if (!select_engine(shared_engine_asked(a) ? NULL : a->engine, cfg.engine, sizeof cfg.engine, &solve)) return X_USAGE;
     switch (search_asked(a)) {
     case 1:
         if (a->max_steps) return usage_error("--search shared has no step limit: a pass is made to its end");
         cfg.shared = 1;
         cfg.class_bits = a->class_bits >= 0 ? (int)a->class_bits : frb_default_class_bits(cfg.bits);
-        strcpy(cfg.engine, FRB_SHARED_ENGINE);
+        strcpy(cfg.engine, shared_engine_asked(a) ? a->engine : FRB_SHARED_ENGINE);
         break;
     case 0:
         if (a->class_bits >= 0) return usage_error("--class-bits belongs to --search shared");
+        if (shared_engine_asked(a)) return usage_error("that --engine belongs to --search shared");
         break;
     default:
         return X_USAGE;
@@ -621,9 +629,12 @@ static int cmd_resume(const BombArgs *a) {
         return X_USAGE;
     }
     if (!apply_changeable(a, &cfg)) return X_USAGE;
-    if (cfg.shared) { /* its engine is the SharedSolver; the name of another is not asked for */
+    if (cfg.shared) { /* its engine is a walk of the SharedSolver; the name of another is not asked for */
         char unused[32];
         if (!select_engine(NULL, unused, sizeof unused, &solve)) return X_USAGE;
+        if (shared_engine_asked(a)) strcpy(cfg.engine, a->engine);
+    } else if (shared_engine_asked(a)) {
+        return usage_error("that --engine belongs to a shared search; this work directory searches string by string");
     } else if (!select_engine(a->engine ? a->engine : cfg.engine, cfg.engine, sizeof cfg.engine, &solve)) {
         return X_USAGE;
     }
@@ -765,17 +776,19 @@ static int cmd_ladder(const BombArgs *a) {
         fprintf(stderr, "error: workers must be 1..%d\n", FRB_MAX_WORKERS);
         return X_USAGE;
     }
-    if (!select_engine(a->engine, settings.engine, sizeof settings.engine, &solve)) return X_USAGE;
+    if (!select_engine(shared_engine_asked(a) ? NULL : a->engine, settings.engine, sizeof settings.engine, &solve))
+        return X_USAGE;
     switch (search_asked(a)) { /* of the levels this call begins; a level begun keeps its own */
     case 1:
         if (a->max_steps) return usage_error("--search shared has no step limit: a pass is made to its end");
         if (a->class_bits > FRB_MAX_CLASS_BITS) return usage_error("--class-bits is too large");
         settings.shared = 1;
         settings.class_bits = a->class_bits >= 0 ? (int)a->class_bits : -1; /* -1: what each level takes */
-        strcpy(settings.engine, FRB_SHARED_ENGINE);
+        strcpy(settings.engine, shared_engine_asked(a) ? a->engine : FRB_SHARED_ENGINE);
         break;
     case 0:
         if (a->class_bits >= 0) return usage_error("--class-bits belongs to --search shared");
+        if (shared_engine_asked(a)) return usage_error("that --engine belongs to --search shared");
         break;
     default:
         return X_USAGE;

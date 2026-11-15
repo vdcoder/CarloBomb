@@ -77,6 +77,13 @@ static uint64_t seconds_ns(double s) { return s <= 0 ? 0 : (uint64_t)(s * 1e9); 
 
 /* ---- configuration ------------------------------------------------------ */
 
+RevSharedPassFn frb_shared_engine(const char *name) {
+    if (!name) return NULL;
+    if (!strcmp(name, FRB_SHARED_ENGINE)) return rev_shared_pass;
+    if (!strcmp(name, FRB_SHARED_ENGINE_RUN)) return rev_shared_pass_run;
+    return NULL;
+}
+
 int frb_default_class_bits(int bits) {
     /* 256 classes: cutting finer costs steps (the beginnings of a class are
      * walked once for each class); short strings are cut into fewer. */
@@ -977,9 +984,11 @@ static FrbError do_class(Worker *w, const Job *job) {
     int free_bits = cfg->bits - cfg->class_bits, lowest = FRB_MAX_NODES + 1, highest = 0;
     uint32_t klass = job->target, size = (uint32_t)1 << free_bits, first = klass << free_bits;
     uint8_t *wanted, *done;
+    RevSharedPassFn walk = frb_shared_engine(cfg->engine);
     RevSharedHooks hooks;
     FrbError e = FRB_OK;
 
+    if (!walk) return FRB_ERR_ARG; /* work_run has looked */
     if (!w->shared) w->shared = rev_shared_create(cfg->bits, cfg->class_bits);
     wanted = calloc((size_t)size / 8 + 1, 1);
     done = calloc((size_t)size / 8 + 1, 1);
@@ -1027,7 +1036,7 @@ static FrbError do_class(Worker *w, const Job *job) {
         w->found_failed = 0;
         w->polls = 0;
         t0 = now_ns();
-        r = rev_shared_pass(w->shared, klass, b, wanted, &hooks, &st);
+        r = walk(w->shared, klass, b, wanted, &hooks, &st);
         if (r == REV_SHARED_STOPPED && !w->found_failed) {
             e = FRB_ERR_STOPPED; /* asked to stop: the pass is given up, nothing of it is written */
             break;
@@ -1431,6 +1440,11 @@ static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOpti
     if (!dir || !cfg || !opt || !opt->solve) return FRB_ERR_ARG;
     e = frb_config_check(cfg, err, errlen);
     if (e != FRB_OK) return e;
+    if (cfg->shared && !frb_shared_engine(cfg->engine)) {
+        set_err(err, errlen, "%s is no engine of the shared search: %s (the reference walk) or %s (the run kernel)",
+                cfg->engine, FRB_SHARED_ENGINE, FRB_SHARED_ENGINE_RUN);
+        return FRB_ERR_ARG;
+    }
     e = frb_check_memory(cfg, NULL, err, errlen); /* said aloud by whoever set the construction up */
     if (e != FRB_OK) return e;
     lock_fd = lock_dir(dir, err, errlen, &e);
@@ -2296,11 +2310,13 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
     cfg.fallback_ring = settings->fallback_ring;
     cfg.passes = settings->passes;
     memcpy(cfg.max_steps, settings->max_steps, sizeof cfg.max_steps);
-    memcpy(cfg.engine, settings->engine, sizeof cfg.engine);
-    if (cfg.shared) { /* how a level is searched is fixed when it is begun */
+    if (cfg.shared) { /* how a level is searched is fixed when it is begun; by which walk is not */
         cfg.passes = 1;
         cfg.max_steps[0] = 0;
-        strcpy(cfg.engine, FRB_SHARED_ENGINE);
+        if (frb_shared_engine(settings->engine)) memcpy(cfg.engine, settings->engine, sizeof cfg.engine);
+        else if (!frb_shared_engine(cfg.engine)) strcpy(cfg.engine, FRB_SHARED_ENGINE);
+    } else if (!frb_shared_engine(settings->engine)) {
+        memcpy(cfg.engine, settings->engine, sizeof cfg.engine);
     }
     cfg.max_nodes = settings->max_nodes > 0 && settings->max_nodes < format->node_capacity
                         ? settings->max_nodes

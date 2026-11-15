@@ -146,6 +146,11 @@ enum { FOOT = 8, TOP = 12 }; /* a direct 8-bit Bomb, and ladders on it up to 12 
 static const char *foot;    /* the 8-bit Bomb */
 static const char *classic; /* the ladder that searches string by string: the reference */
 
+/* The walk the shared constructions here are made by, and the one that
+ * finishes a construction that was cut off (NULL: the one that began it). */
+static const char *engine = FRB_SHARED_ENGINE;
+static const char *finisher = NULL;
+
 static void ladder_settings(FrbConfig *settings, int workers, int shared, int class_bits) {
     frb_config_default(settings, 1);
     settings->workers = workers;
@@ -153,6 +158,7 @@ static void ladder_settings(FrbConfig *settings, int workers, int shared, int cl
     settings->max_nodes = 0;
     settings->shared = shared;
     settings->class_bits = class_bits; /* below 0: what the level takes by itself */
+    if (shared) strcpy(settings->engine, engine);
 }
 
 static void build_reference(void) {
@@ -405,7 +411,7 @@ static void test_same_as_ladder(void) {
             same_state(work, bits);
 
             CHECK(frb_config_read(work, &cfg, last_err, sizeof last_err) == FRB_OK);
-            CHECK(cfg.shared == 1 && cfg.class_bits == want_bits && strcmp(cfg.engine, FRB_SHARED_ENGINE) == 0);
+            CHECK(cfg.shared == 1 && cfg.class_bits == want_bits && strcmp(cfg.engine, engine) == 0);
             all = searches_of(work);
             CHECK(all.passes > 0);
             /* The table is certified by this journal as by any other. */
@@ -470,7 +476,7 @@ static void test_direct(void) {
         CHECK(frb_work_finalize(a, fa, 0, NULL, last_err, sizeof last_err) == FRB_OK);
         cfg.shared = 1;
         cfg.class_bits = 3;
-        strcpy(cfg.engine, FRB_SHARED_ENGINE);
+        strcpy(cfg.engine, engine);
         CHECK(frb_work_create(b, &cfg, last_err, sizeof last_err) == FRB_OK);
         CHECK_MSG(frb_work_run(b, &cfg, &opt, &res, last_err, sizeof last_err) == FRB_OK && res.complete, "%s", last_err);
         CHECK(frb_work_finalize(b, fb, 0, NULL, last_err, sizeof last_err) == FRB_OK);
@@ -976,6 +982,8 @@ static void finish_and_compare(const char *work, int bits, const char *what, uns
     FrbError e;
     CHECK(frb_config_read(work, &cfg, last_err, sizeof last_err) == FRB_OK);
     cfg.workers = 1;
+    CHECK(strcmp(cfg.engine, engine) == 0);
+    if (finisher) strcpy(cfg.engine, finisher); /* the other walk goes on with it */
     e = frb_work_run(work, &cfg, &opt, &res, last_err, sizeof last_err);
     CHECK_MSG(e == FRB_OK && res.complete, "%s at %llu: going on fails: %s", what, where, last_err);
     if (e != FRB_OK) return;
@@ -1092,7 +1100,7 @@ static void test_killed(int bits, int workers, int class_bits, int trials) {
         frb_config_default(&cfg, bits);
         cfg.shared = 1;
         cfg.class_bits = class_bits;
-        strcpy(cfg.engine, FRB_SHARED_ENGINE);
+        strcpy(cfg.engine, engine);
         CHECK(frb_config_set_base(&cfg, level_file(classic, bits - 1), last_err, sizeof last_err) == FRB_OK);
         CHECK(frb_work_create(made, &cfg, last_err, sizeof last_err) == FRB_OK);
         deaths += run_to_death(made, workers, first);
@@ -1118,7 +1126,7 @@ static void test_signalled(void) {
         frb_config_default(&cfg, bits);
         cfg.shared = 1;
         cfg.class_bits = 2 + trial % 3;
-        strcpy(cfg.engine, FRB_SHARED_ENGINE);
+        strcpy(cfg.engine, engine);
         CHECK(frb_config_set_base(&cfg, level_file(classic, bits - 1), last_err, sizeof last_err) == FRB_OK);
         CHECK(frb_work_create(made, &cfg, last_err, sizeof last_err) == FRB_OK);
         fflush(NULL);
@@ -1160,7 +1168,7 @@ static void test_stopped(void) {
     frb_config_default(&cfg, bits);
     cfg.shared = 1;
     cfg.class_bits = 4;
-    strcpy(cfg.engine, FRB_SHARED_ENGINE);
+    strcpy(cfg.engine, engine);
     CHECK(frb_config_set_base(&cfg, level_file(classic, bits - 1), last_err, sizeof last_err) == FRB_OK);
     CHECK(frb_work_create(made, &cfg, last_err, sizeof last_err) == FRB_OK);
     /* A class at a time. */
@@ -1174,6 +1182,122 @@ static void test_stopped(void) {
     } while (!res.complete && ++rounds < 64);
     CHECK(res.complete && rounds >= 3);
     finish_and_compare(made, bits, "a class at a time", 0);
+}
+
+/* ---- the two walks ---------------------------------------------------------- */
+
+typedef struct {
+    Tape tape;
+    char name[FRB_ENGINE_NAME + 1];
+    int segments;
+} Journal;
+
+static int journal_record(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
+    Journal *j = ctx;
+    if (!rec) {
+        j->segments++;
+        memcpy(j->name, seg->engine, sizeof j->name);
+        return 0;
+    }
+    return tape_record(&j->tape, seg, rec);
+}
+
+static Journal journal_of(const char *work) {
+    Journal j;
+    FrbConfig cfg;
+    memset(&j, 0, sizeof j);
+    CHECK(frb_config_read(work, &cfg, last_err, sizeof last_err) == FRB_OK);
+    CHECK(frb_journal_scan(work, &cfg, journal_record, &j, NULL, last_err, sizeof last_err) == FRB_OK);
+    return j;
+}
+
+/*
+ * A level by the reference walk and the same level by the run kernel, one
+ * worker each, so that the journal has one order: the same records one after
+ * another, search records and pass records, in everything but the clock.
+ * Then what an engine's name may and may not be.
+ */
+static void test_engines(void) {
+    const char *by_c = in_base("engine-c"), *by_run = in_base("engine-run"), *made = in_base("engine-other");
+    FrbRunOptions opt = quiet_options();
+    FrbRunResult res;
+    FrbLadderResult lr;
+    FrbConfig cfg, settings;
+
+    CHECK(frb_shared_engine(FRB_SHARED_ENGINE) == rev_shared_pass);
+    CHECK(frb_shared_engine(FRB_SHARED_ENGINE_RUN) == rev_shared_pass_run);
+    CHECK(frb_shared_engine("c") == NULL && frb_shared_engine("amd64-auto") == NULL && frb_shared_engine("") == NULL &&
+          frb_shared_engine(NULL) == NULL);
+
+    engine = FRB_SHARED_ENGINE;
+    shared_ladder(by_c, 1, 4);
+    engine = FRB_SHARED_ENGINE_RUN;
+    shared_ladder(by_run, 1, 4);
+    for (int bits = FOOT + 1; bits <= TOP; bits++) {
+        Journal a = journal_of(level_work(by_c, bits)), b = journal_of(level_work(by_run, bits));
+        size_t differ = 0, passes = 0;
+        CHECK(strcmp(a.name, FRB_SHARED_ENGINE) == 0 && strcmp(b.name, FRB_SHARED_ENGINE_RUN) == 0);
+        CHECK(a.segments == 1 && b.segments == 1);
+        CHECK(a.tape.n == b.tape.n && a.tape.n > 0);
+        for (size_t i = 0; i < a.tape.n && i < b.tape.n; i++) {
+            const FrbRecord *x = &a.tape.rec[i], *y = &b.tape.rec[i];
+            if (x->type != y->type || x->result != y->result || x->budget != y->budget || x->limit != y->limit ||
+                x->target != y->target || x->steps != y->steps || x->max_steps != y->max_steps || x->aux != y->aux ||
+                x->nodes != y->nodes || memcmp(x->graph, y->graph, sizeof x->graph) != 0)
+                if (x->type != FRB_REC_SESSION_BEGIN && x->type != FRB_REC_SESSION_END) differ++;
+            if (x->type == FRB_REC_PASS) passes++;
+        }
+        CHECK_MSG(differ == 0, "%d bits: %llu records of the run kernel's journal are not the reference walk's", bits,
+                  (unsigned long long)differ);
+        CHECK(passes > 0);
+        CHECK(same_file(level_file(by_run, bits), level_file(by_c, bits)));
+        free(a.tape.rec);
+        free(b.tape.rec);
+    }
+
+    /*
+     * A level that is begun and not finished: a ladder called without a
+     * shared engine's name leaves it the walk it has; called with one, it
+     * gives the level that walk from then on.
+     */
+    {
+        const char *part = in_base("engine-part");
+        FrbRunOptions few = quiet_options();
+        few.limit_jobs = 1;
+        remove_tree(part);
+        ladder_settings(&settings, 1, 1, 4); /* the run kernel */
+        CHECK(frb_ladder_run(part, foot, TOP, &settings, &few, &lr, last_err, sizeof last_err) == FRB_OK && !lr.complete);
+        CHECK(frb_config_read(level_work(part, FOOT + 1), &cfg, last_err, sizeof last_err) == FRB_OK);
+        CHECK(strcmp(cfg.engine, FRB_SHARED_ENGINE_RUN) == 0);
+        strcpy(settings.engine, "c");
+        CHECK(frb_ladder_run(part, foot, TOP, &settings, &few, &lr, last_err, sizeof last_err) == FRB_OK && !lr.complete);
+        CHECK(frb_config_read(level_work(part, FOOT + 1), &cfg, last_err, sizeof last_err) == FRB_OK);
+        CHECK(strcmp(cfg.engine, FRB_SHARED_ENGINE_RUN) == 0);
+        strcpy(settings.engine, FRB_SHARED_ENGINE);
+        CHECK(frb_ladder_run(part, foot, TOP, &settings, &opt, &lr, last_err, sizeof last_err) == FRB_OK && lr.complete);
+        CHECK(frb_config_read(level_work(part, FOOT + 1), &cfg, last_err, sizeof last_err) == FRB_OK);
+        CHECK(strcmp(cfg.engine, FRB_SHARED_ENGINE) == 0);
+        for (int bits = FOOT + 1; bits <= TOP; bits++) {
+            CHECK(same_file(level_file(part, bits), level_file(classic, bits)));
+            same_searches(level_work(part, bits), level_work(classic, bits));
+        }
+    }
+
+    /* A shared search is made by one of its own engines and by nothing else. */
+    remove_tree(made);
+    frb_config_default(&cfg, FOOT + 1);
+    cfg.shared = 1;
+    cfg.class_bits = 3;
+    CHECK(frb_config_set_base(&cfg, foot, last_err, sizeof last_err) == FRB_OK);
+    CHECK(frb_work_create(made, &cfg, last_err, sizeof last_err) == FRB_OK); /* engine "c", as a default config has it */
+    last_err[0] = '\0';
+    CHECK(frb_work_run(made, &cfg, &opt, &res, last_err, sizeof last_err) == FRB_ERR_ARG);
+    CHECK(strstr(last_err, "no engine of the shared search") != NULL);
+    strcpy(cfg.engine, "shared-other");
+    CHECK(frb_work_run(made, &cfg, &opt, &res, last_err, sizeof last_err) == FRB_ERR_ARG);
+    strcpy(cfg.engine, FRB_SHARED_ENGINE_RUN);
+    CHECK(frb_work_run(made, &cfg, &opt, &res, last_err, sizeof last_err) == FRB_OK && res.complete);
+    engine = FRB_SHARED_ENGINE;
 }
 
 int main(int argc, char **argv) {
@@ -1192,6 +1316,30 @@ int main(int argc, char **argv) {
     test_killed(TOP, 3, 4, 16);
     test_stopped();
     test_signalled();
+
+    /*
+     * The run kernel.  Its journal is the reference walk's; its
+     * constructions are the ladder's, are cut off and killed as the others
+     * were, and either walk finishes what the other began.
+     */
+    test_engines();
+    engine = FRB_SHARED_ENGINE_RUN;
+    test_same_as_ladder();
+    test_direct();
+    test_cut_journal(FOOT + 2, 1, 3, 20, 1);
+    test_cut_journal(TOP, 3, 5, 40, 0);
+    test_killed(FOOT + 3, 1, 3, 12);
+    test_killed(TOP, 3, 4, 8);
+    test_stopped();
+    test_signalled();
+    finisher = FRB_SHARED_ENGINE; /* begun by the run kernel, finished by the reference walk */
+    test_cut_journal(TOP, 1, 4, 30, 0);
+    test_killed(FOOT + 3, 1, 3, 8);
+    engine = FRB_SHARED_ENGINE;
+    finisher = FRB_SHARED_ENGINE_RUN; /* and the other way round */
+    test_cut_journal(TOP, 1, 4, 30, 0);
+    test_killed(FOOT + 3, 1, 3, 8);
+    finisher = NULL;
     if (!t_failures) remove_tree(base_dir);
     return t_report("test_shared_build");
 }

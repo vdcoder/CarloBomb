@@ -699,6 +699,16 @@ sum, over all admitted SEARCH records that are SOLVED or PROVEN_UNSAT, of
 records or on which process wrote them. Two constructions of the same table
 have the same, whether they searched string by string or by classes.
 
+**The engine of a shared search** is one of two walks of the SharedSolver:
+`shared-c`, the reference walk, or `shared-run`, the run kernel, which makes
+the same pass faster. `config.txt` and the header of a segment name the one
+that was used. Nothing else in a journal depends on it: the two write the
+same SEARCH and PASS records for the same pass, apart from the times in
+them, and either may go on with a level the other began (a test builds
+levels by each and compares the journals record by record, and has each
+finish what the other was cut off in). The PASS record's count of steps is
+the same from both.
+
 **Checking a pass independently.** What the reader checks is that a pass is
 whole and in its place. That what it says is *true* is, as for every search
 record there ever was, a claim about a search, and is checked by making the

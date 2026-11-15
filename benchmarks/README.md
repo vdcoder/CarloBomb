@@ -131,3 +131,13 @@ are in `COMPACT_FORMAT.md`.
 ladder that searches string by string: the same files and the same
 searches at every level from 17 to 26 bits, a level killed eight times and
 gone on with, and passes made again record for record by the LevelSolver.
+
+## The run kernel of the shared search
+
+`SHARED_KERNEL.md` holds `--engine shared-run` against the reference walk
+and the certified ladder: the same passes, the same journals and the same
+files at every level from 17 to 26 bits, at 3.2 to 3.4 times the steps a
+second; a level killed ten times with the two walks taking turns; and its
+passes made again by the LevelSolver and by the reference walk.
+`shared_comparison` is the program that times the two walks on the same
+passes and compares everything they report.

@@ -7,6 +7,11 @@
  * that is required of every string of every short length at every budget,
  * however the strings are cut into classes and whichever of them are
  * wanted, and of classes of long strings.
+ *
+ * All of it is required twice: of the reference walk (rev_shared_pass) and
+ * of the run kernel (rev_shared_pass_run), each against the LevelSolver.
+ * Then the two are held to one another, pass by pass, in what the
+ * LevelSolver cannot say: the order in which a pass finds its strings.
  */
 #include <stdint.h>
 #include <stdlib.h>
@@ -15,6 +20,10 @@
 #include "level_solver.h"
 #include "shared_solver.h"
 #include "test_util.h"
+
+/* The walk under test. */
+static RevSharedPassFn pass_fn = rev_shared_pass;
+static int is_reference = 1;
 
 static uint64_t rng_state = 20261115;
 static uint64_t rnd(void) { /* splitmix64 */
@@ -114,7 +123,7 @@ static uint64_t pass_checked(RevShared *s, int bits, int class_bits, uint32_t kl
     hooks.found = on_found;
     hooks.found_ctx = &p;
     for (uint32_t j = 0; j < size; j++) asked += (uint64_t)((wanted[j >> 3] >> (j & 7)) & 1);
-    r = rev_shared_pass(s, klass, budget, wanted, &hooks, &st);
+    r = pass_fn(s, klass, budget, wanted, &hooks, &st);
     CHECK_MSG(r == REV_SHARED_DONE, "%d bits, class %u of %d bits, %d nodes: %s", bits, (unsigned)klass, class_bits, budget,
               rev_shared_result_str(r));
     if (r != REV_SHARED_DONE) {
@@ -247,7 +256,7 @@ static void alone(void) {
                 RevSharedStats st;
                 Answer a;
                 ask_level(v, bits, n, &a);
-                CHECK(rev_shared_pass(s, v, n, &wanted, NULL, &st) == REV_SHARED_DONE);
+                CHECK(pass_fn(s, v, n, &wanted, NULL, &st) == REV_SHARED_DONE);
                 CHECK(st.wanted == 1 && st.found == (a.result == REV_SOLVE_SOLVED ? 1u : 0u));
                 CHECK(st.string_steps == a.steps);
                 if (a.result == REV_SOLVE_PROVEN_UNSAT) CHECK(st.steps == a.steps + 3 * st.choices);
@@ -284,28 +293,29 @@ static void arguments_and_stops(void) {
 
     s = rev_shared_create(8, 0);
     CHECK(s != NULL);
-    CHECK(rev_shared_pass(NULL, 0, 4, wanted, NULL, NULL) == REV_SHARED_INVALID);
-    CHECK(rev_shared_pass(s, 0, 0, wanted, NULL, NULL) == REV_SHARED_INVALID);
-    CHECK(rev_shared_pass(s, 0, REV_SHARED_MAX_NODES + 1, wanted, NULL, NULL) == REV_SHARED_INVALID);
-    CHECK(rev_shared_pass(s, 1, 4, wanted, NULL, NULL) == REV_SHARED_INVALID); /* a class of no bits is class 0 */
-    CHECK(rev_shared_pass(s, 0, 4, NULL, NULL, NULL) == REV_SHARED_INVALID);
+    CHECK(pass_fn(NULL, 0, 4, wanted, NULL, NULL) == REV_SHARED_INVALID);
+    CHECK(pass_fn(s, 0, 0, wanted, NULL, NULL) == REV_SHARED_INVALID);
+    CHECK(pass_fn(s, 0, REV_SHARED_MAX_NODES + 1, wanted, NULL, NULL) == REV_SHARED_INVALID);
+    CHECK(pass_fn(s, 1, 4, wanted, NULL, NULL) == REV_SHARED_INVALID); /* a class of no bits is class 0 */
+    CHECK(pass_fn(s, 0, 4, NULL, NULL, NULL) == REV_SHARED_INVALID);
     CHECK(!rev_shared_unfound(s, 0)); /* nothing is concluded from a pass that was not made */
 
     /* Nothing wanted: nothing done. */
     memset(wanted, 0, sizeof wanted);
-    CHECK(rev_shared_pass(s, 0, 4, wanted, NULL, &st) == REV_SHARED_DONE);
+    CHECK(pass_fn(s, 0, 4, wanted, NULL, &st) == REV_SHARED_DONE);
     CHECK(st.wanted == 0 && st.found == 0 && st.steps == 0);
     memset(wanted, 0xFF, sizeof wanted);
 
     /* The whole pass, for comparison. */
-    CHECK(rev_shared_pass(s, 0, 4, wanted, NULL, &whole) == REV_SHARED_DONE);
+    CHECK(pass_fn(s, 0, 4, wanted, NULL, &whole) == REV_SHARED_DONE);
     CHECK(whole.wanted == 256 && whole.found > 3 && whole.found < 256);
-    CHECK(whole.peak_stack > 0 && whole.peak_stack <= 6 * 8 + 16);
+    if (is_reference) CHECK(whole.peak_stack > 0 && whole.peak_stack <= 6 * 8 + 16);
+    else CHECK(whole.peak_stack == 0); /* the run kernel keeps no stack of frames */
 
     /* Stopped by the one who is told of a string: no conclusions. */
     hooks.found = on_found;
     hooks.found_ctx = &p;
-    CHECK(rev_shared_pass(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_STOPPED);
+    CHECK(pass_fn(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_STOPPED);
     CHECK(p.found == 3);
     CHECK(!rev_shared_unfound(s, 255) && rev_shared_unfound_steps(s, 255) == 0);
 
@@ -315,16 +325,17 @@ static void arguments_and_stops(void) {
     hooks.poll_every = 100;
     poll_calls = 0;
     poll_stop_at = 1;
-    CHECK(rev_shared_pass(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_STOPPED);
+    CHECK(pass_fn(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_STOPPED);
     CHECK(poll_calls == 1);
     poll_calls = 0;
     poll_stop_at = 7;
-    CHECK(rev_shared_pass(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_STOPPED);
+    CHECK(pass_fn(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_STOPPED);
     CHECK(poll_calls == 7);
     poll_calls = 0;
     poll_stop_at = 0;
-    CHECK(rev_shared_pass(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_DONE);
-    CHECK((uint64_t)poll_calls == whole.steps / 100);
+    CHECK(pass_fn(s, 0, 4, wanted, &hooks, &st) == REV_SHARED_DONE);
+    if (is_reference) CHECK((uint64_t)poll_calls == whole.steps / 100);
+    else CHECK(poll_calls > 7 && (uint64_t)poll_calls <= whole.steps / 100); /* about as often, never more often */
     CHECK(st.steps == whole.steps && st.found == whole.found && st.string_steps == whole.string_steps &&
           st.choices == whole.choices);
     rev_shared_destroy(s);
@@ -333,24 +344,156 @@ static void arguments_and_stops(void) {
     CHECK(strcmp(rev_shared_result_str(REV_SHARED_INTERNAL), "internal error") == 0);
 }
 
-/* --deep: also every string of 13 bits, and classes of 28 and 31 bits (a quarter of a minute). */
+/* ---- the two walks against one another ------------------------------------ */
+
+/* What a pass reported, in the order it reported it. */
+typedef struct {
+    uint32_t string;
+    uint64_t steps;
+    RevGraph rev;
+} Told;
+
+typedef struct {
+    Told *told;
+    size_t n, cap;
+    int polls;
+} Trace;
+
+static int trace_found(void *ctx, uint32_t string, const RevGraph *rev, uint64_t steps) {
+    Trace *t = ctx;
+    if (t->n == t->cap) {
+        t->cap = t->cap ? t->cap * 2 : 256;
+        t->told = realloc(t->told, t->cap * sizeof *t->told);
+    }
+    t->told[t->n].string = string;
+    t->told[t->n].steps = steps;
+    t->told[t->n].rev = *rev;
+    t->n++;
+    return 0;
+}
+
+static int trace_poll(void *ctx) {
+    ((Trace *)ctx)->polls++;
+    return 0;
+}
+
+/*
+ * One pass by each walk: the same strings found in the same order with the
+ * same REVs and steps, the same strings left with the same steps, the same
+ * statistics.  Returns the steps of the pass; clears what was found from
+ * `wanted`.
+ */
+static uint64_t pass_both(int bits, int class_bits, uint32_t klass, int budget, uint8_t *wanted) {
+    RevShared *a = rev_shared_create(bits, class_bits), *b = rev_shared_create(bits, class_bits);
+    uint32_t size = rev_shared_class_size(a), first = klass << (bits - class_bits);
+    Trace ta = {0}, tb = {0};
+    RevSharedHooks ha = {trace_found, &ta, trace_poll, &ta, 4096}, hb = {trace_found, &tb, trace_poll, &tb, 4096};
+    RevSharedStats sa, sb;
+    int same = 1;
+    CHECK(a != NULL && b != NULL);
+    CHECK(rev_shared_pass(a, klass, budget, wanted, &ha, &sa) == REV_SHARED_DONE);
+    CHECK(rev_shared_pass_run(b, klass, budget, wanted, &hb, &sb) == REV_SHARED_DONE);
+    CHECK_MSG(sa.wanted == sb.wanted && sa.found == sb.found && sa.steps == sb.steps && sa.choices == sb.choices &&
+                  sa.string_steps == sb.string_steps,
+              "%d bits, class %u of %d bits, %d nodes: %llu steps and %llu found by the reference, %llu and %llu by the run kernel",
+              bits, (unsigned)klass, class_bits, budget, (unsigned long long)sa.steps, (unsigned long long)sa.found,
+              (unsigned long long)sb.steps, (unsigned long long)sb.found);
+    CHECK(ta.n == tb.n && ta.n == sa.found);
+    for (size_t i = 0; same && i < ta.n && i < tb.n; i++) {
+        const Told *x = &ta.told[i], *y = &tb.told[i];
+        same = x->string == y->string && x->steps == y->steps && x->rev.node_count == y->rev.node_count;
+        for (int v = 0; same && v < x->rev.node_count; v++)
+            same = x->rev.nodes[v].color == y->rev.nodes[v].color && x->rev.nodes[v].links[0] == y->rev.nodes[v].links[0] &&
+                   x->rev.nodes[v].links[1] == y->rev.nodes[v].links[1];
+        CHECK_MSG(same, "%d bits, class %u of %d bits, %d nodes: the %lluth string found differs", bits, (unsigned)klass,
+                  class_bits, budget, (unsigned long long)i + 1);
+    }
+    for (uint32_t j = 0; j < size; j++) {
+        CHECK(rev_shared_unfound(a, j) == rev_shared_unfound(b, j));
+        CHECK(rev_shared_unfound_steps(a, j) == rev_shared_unfound_steps(b, j));
+    }
+    CHECK(tb.polls <= ta.polls && (sa.steps < 3 * 4096 * 8 || tb.polls > ta.polls / 2));
+    for (size_t i = 0; i < ta.n; i++) {
+        uint32_t j = ta.told[i].string - first;
+        wanted[j >> 3] &= (uint8_t)~(1u << (j & 7));
+    }
+    free(ta.told);
+    free(tb.told);
+    rev_shared_destroy(a);
+    rev_shared_destroy(b);
+    return sa.steps;
+}
+
+static uint64_t both_steps_total;
+
+/* Classes of a length, budget after budget as a construction goes, and with random strings wanted. */
+static void same_passes(int bits, int class_bits, int classes, int lowest, int highest) {
+    uint32_t size = (uint32_t)1 << (bits - class_bits);
+    for (int c = 0; c < classes; c++) {
+        uint32_t klass = (uint32_t)(rnd() % ((uint64_t)1 << class_bits));
+        uint8_t *wanted = malloc(size / 8 + 1);
+        memset(wanted, 0xFF, size / 8 + 1);
+        if (c & 1) /* a class with gaps: three strings in four wanted */
+            for (uint32_t j = 0; j < size; j++)
+                if ((rnd() & 3) == 0) wanted[j >> 3] &= (uint8_t)~(1u << (j & 7));
+        for (int n = lowest; n <= highest; n++) both_steps_total += pass_both(bits, class_bits, klass, n, wanted);
+        free(wanted);
+    }
+}
+
+/* A budget the run kernel does not take is the reference walk's, whoever is asked. */
+static void large_budgets(void) {
+    uint8_t wanted[8];
+    RevShared *s = rev_shared_create(6, 0);
+    RevSharedStats a, b;
+    memset(wanted, 0xFF, sizeof wanted);
+    CHECK(REV_SHARED_RUN_MAX_NODES == 15 && REV_SHARED_MAX_NODES > 15);
+    CHECK(rev_shared_pass(s, 0, 16, wanted, NULL, &a) == REV_SHARED_DONE);
+    CHECK(rev_shared_pass_run(s, 0, 16, wanted, NULL, &b) == REV_SHARED_DONE);
+    CHECK(a.found == 64 && b.found == 64 && a.steps == b.steps && a.string_steps == b.string_steps && b.peak_stack > 0 &&
+          a.peak_stack == b.peak_stack);
+    CHECK(rev_shared_pass_run(s, 0, 15, wanted, NULL, &b) == REV_SHARED_DONE);
+    CHECK(b.found == 64 && b.steps == a.steps && b.string_steps == a.string_steps && b.peak_stack == 0);
+    CHECK(rev_shared_pass_run(s, 0, REV_SHARED_MAX_NODES + 1, wanted, NULL, &b) == REV_SHARED_INVALID);
+    rev_shared_destroy(s);
+}
+
+/* --deep: also every string of 13 bits, and classes of 28 and 31 bits (half a minute). */
 int main(int argc, char **argv) {
     int deep = argc > 1 && strcmp(argv[1], "--deep") == 0;
-    arguments_and_stops();
-    alone();
-    for (int bits = 1; bits <= 9; bits++) whole_length(bits, bits < 6 ? bits : 6);
-    whole_length(10, 6);
-    whole_length(11, 6);
-    whole_length(12, 6);
-    if (deep) whole_length(13, 7);
-    any_company(10, 6);
-    any_company(12, 6);
-    any_company(14, 7);
-    long_strings(16, 4, 4, 7);
-    long_strings(20, 3, 3, 8);
-    long_strings(24, 3, 2, 9);
-    if (deep) long_strings(28, 3, 2, 10);
-    if (deep) long_strings(31, 2, 1, 10);
-    printf("LevelSolver steps compared with: %llu\n", (unsigned long long)level_steps_total);
+    for (int engine = 0; engine < 2; engine++) {
+        pass_fn = engine ? rev_shared_pass_run : rev_shared_pass;
+        is_reference = !engine;
+        rng_state = 20261115; /* the same cases for both */
+        level_steps_total = 0;
+        arguments_and_stops();
+        alone();
+        for (int bits = 1; bits <= 9; bits++) whole_length(bits, bits < 6 ? bits : 6);
+        whole_length(10, 6);
+        whole_length(11, 6);
+        whole_length(12, 6);
+        if (deep) whole_length(13, 7);
+        any_company(10, 6);
+        any_company(12, 6);
+        any_company(14, 7);
+        long_strings(16, 4, 4, 7);
+        long_strings(20, 3, 3, 8);
+        long_strings(24, 3, 2, 9);
+        if (deep) long_strings(28, 3, 2, 10);
+        if (deep) long_strings(31, 2, 1, 10);
+        printf("%s: LevelSolver steps compared with: %llu\n", engine ? "run kernel" : "reference walk",
+               (unsigned long long)level_steps_total);
+    }
+    large_budgets();
+    same_passes(3, 3, 8, 1, 3); /* classes of one string */
+    same_passes(9, 0, 1, 1, 6);
+    same_passes(12, 5, 8, 1, 6);
+    same_passes(16, 8, 8, 1, 8);
+    same_passes(16, 15, 16, 1, 8); /* classes of two */
+    same_passes(18, 4, 2, 5, 8);
+    same_passes(20, 8, 4, 6, 9);
+    if (deep) same_passes(22, 8, 4, 1, 9);
+    if (deep) same_passes(26, 16, 4, 7, 10);
+    printf("steps of the passes made by both walks: %llu\n", (unsigned long long)both_steps_total);
     return t_report("test_shared_solver");
 }

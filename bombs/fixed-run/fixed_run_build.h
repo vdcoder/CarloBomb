@@ -28,6 +28,7 @@
 
 #include "fixed_run.h"
 #include "minimal_solver.h" /* RevLevelSolveFn */
+#include "shared_solver.h"  /* RevSharedPassFn */
 
 #ifdef __cplusplus
 extern "C" {
@@ -93,9 +94,20 @@ typedef struct {
 
 void frb_config_default(FrbConfig *cfg, int bits);
 
-/* A shared search: the name its segments carry, and the class_bits a
- * construction of `bits` bits takes unless told otherwise. */
+/*
+ * A shared search.  Its engines: the reference walk of the SharedSolver,
+ * which is the default, and the run kernel, which makes the same passes
+ * faster.  The name is what the segments of the journal carry and, unlike
+ * the name of a LevelSolver engine, it is what decides which walk a
+ * construction makes; it may change from one run of a level to the next,
+ * as the records of a pass do not depend on it.  frb_shared_engine: the
+ * walk a name stands for, NULL if it is no engine of the shared search.
+ * frb_default_class_bits: the class_bits a construction of `bits` bits
+ * takes unless told otherwise.
+ */
 #define FRB_SHARED_ENGINE "shared-c"
+#define FRB_SHARED_ENGINE_RUN "shared-run"
+RevSharedPassFn frb_shared_engine(const char *name);
 int frb_default_class_bits(int bits);
 
 /* Make `file`, a complete Bomb for fewer bits, the base of the construction

@@ -114,7 +114,7 @@ Settings of `build`:
 | `--bits L` | required | Target length, 1..31 |
 | `--base FILE` | none | Build on this complete table for fewer bits; turns enumeration off |
 | `--max-nodes N` | 16, 24 or 31: all an entry of the table's format holds | Largest node budget searched. Changeable on resume |
-| `--engine E` | `amd64-auto`, else `c` | LevelSolver engine. Changeable on resume |
+| `--engine E` | `amd64-auto`, else `c` | LevelSolver engine. With `--search shared`: `shared-c` (the default) or `shared-run`, the two walks of the SharedSolver ([below](#shared-search-a-level-in-passes)). Changeable on resume |
 | `--workers W` | 1 | Worker processes. Changeable on resume |
 | `--enumerate-max K` | 5 | Exhaustive enumeration for node counts 1..K; 0 = none, 6 is the most allowed |
 | `--symmetry on\|off` | on | Work on one string of each complement pair and derive the other |
@@ -382,9 +382,33 @@ one percent more steps than one class for everything; 512 classes cost 4 to
 multiple. A level keeps the `class_bits` it was begun
 with.
 
-**Not yet.** The SharedSolver is plain C, at about a fifth of the speed of
-the assembly kernels per step; a kernel for it is the next stage, after
-this one has been certified against the ladder. The memory of the
+**Two walks, one result.** `--engine shared-c`, the default, is the
+reference walk of the SharedSolver: one turn of its loop for every step of
+the search. `--engine shared-run` is the run kernel
+(`solvers/shared/shared_run.c`): the same search, in which the stretches
+where nothing is to be decided, most of it, are run through without the
+reference's bookkeeping and their steps counted in bulk. It makes three
+times the steps a second and writes the same journal: the same search
+records and pass records, record for record. Either may continue a level
+the other began:
+
+```bash
+build/carlobomb bomb ladder --dir ladder --to 24 --workers 4 --search shared --engine shared-run
+```
+
+The run kernel is held to the LevelSolver string by string, as the
+reference walk is, and to the reference walk pass by pass, down to the
+order in which a pass finds its strings (`tests/test_shared_solver.c`);
+`benchmarks/SHARED_KERNEL.md` has it against the certified ladder at full
+size. `--replay-passes level` and `--replay-passes shared` check a level
+built by either with the LevelSolver and with the reference walk, never
+with the run kernel. Node budgets above 15 are the reference walk's under
+either name.
+
+**Not yet.** Both walks are portable C. The run kernel makes about
+5·10^8 steps a second on a processor of the development container, where
+the LevelSolver's assembly kernels make 7 to 9·10^8 of theirs; an assembly
+kernel for the shared search has not been written. The memory of the
 coordinating process is what it was (the paragraph above).
 
 ## Using a table

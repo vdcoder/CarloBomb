@@ -108,9 +108,11 @@ steps.
   experiment.)
 - The owner's side of the comparison at 25 and 26 bits: the SHA-256 of the
   owner's files and the checksums of the owner's journals.
-- Speed. The SharedSolver is portable C, about a fifth as fast per step as
-  the assembly kernels; the times above are what that gives on a busy
-  machine.
+- Speed. Everything here was made by the reference walk of the
+  SharedSolver, portable C at about a fifth of the speed per step of the
+  assembly kernels; the times above are what that gives on a busy machine.
+  The run kernel, three times as fast, has a report of its own
+  (`SHARED_KERNEL.md`).
 - Memory: the coordinating process holds the state of a level as before
   (2.6 GB at 25 bits, 5.3 GB at 26).
 

@@ -238,6 +238,35 @@ if(MODE STREQUAL "small")
   run(0 "COMPLETE" bomb finalize --work-dir ${W}/ldirect --output ${W}/ldirect.frb)
   expect_same_file(${W}/sdirect.frb ${W}/ldirect.frb)
   run(0 "with engine shared-c.*COMPLETE" bomb resume --work-dir ${W}/sdirect --progress 0)
+  # The run kernel: the same ladder once more, begun by the reference walk and
+  # finished by the kernel.  The same files, the same searches, and its passes
+  # made again by the LevelSolver and by the reference walk.
+  run(3 "engine shared-c.*Stopped at the requested job cap, sample size or time limit"
+      bomb ladder --dir ${W}/rlad --from ${W}/a.frb --to 13 --workers 2 --search shared --class-bits 4 --limit-jobs 5 --progress 0)
+  run(0 "engine shared-run.*Level 11:[^\n]*continued.*The ladder is complete"
+      bomb ladder --dir ${W}/rlad --to 13 --workers 2 --search shared --class-bits 4 --engine shared-run --progress 0)
+  foreach(level 11 12 13)
+    expect_same_file(${W}/rlad/fixed-run-${level}.frb ${W}/lad/fixed-run-${level}.frb)
+    foreach(kind lad rlad)
+      execute_process(COMMAND ${CLI} bomb status --work-dir ${W}/${kind}/work-${level} OUTPUT_VARIABLE status_out)
+      string(REGEX MATCH "record checksum of the searches that ended[^:]*: ([0-9a-f]+)" found "${status_out}")
+      set(checksum_${kind} "${CMAKE_MATCH_1}")
+    endforeach()
+    if(NOT checksum_lad OR NOT checksum_lad STREQUAL checksum_rlad)
+      message(FATAL_ERROR "level ${level}: the searches of the ladder have checksum '${checksum_lad}', those of the run kernel '${checksum_rlad}'")
+    endif()
+  endforeach()
+  run(0 "engine +shared-run" bomb status --work-dir ${W}/rlad/work-13)
+  run(0 "held against a LevelSolver call for its string: PASS.* 0 not reproduced.*Verification: PASS \\(complete certified table\\)"
+      bomb verify --file ${W}/rlad/fixed-run-13.frb --work-dir ${W}/rlad/work-13 --replay-passes level)
+  run(0 "held against the pass made again: PASS.* 0 not reproduced"
+      bomb verify --file ${W}/rlad/fixed-run-13.frb --work-dir ${W}/rlad/work-13 --replay-passes shared)
+  run(0 "with engine shared-run.*COMPLETE" bomb resume --work-dir ${W}/sdirect --engine shared-run --progress 0)
+  run(0 "engine +shared-run" bomb status --work-dir ${W}/sdirect)
+  run(2 "belongs to --search shared" bomb build --bits 9 --work-dir ${W}/nosuch --engine shared-run)
+  run(2 "belongs to --search shared" bomb ladder --dir ${W}/nosuch --from ${W}/a.frb --to 11 --engine shared-run)
+  run(2 "belongs to a shared search" bomb resume --work-dir ${W}/ldirect --engine shared-run)
+  run(2 "unknown engine shared-fast" bomb build --bits 9 --work-dir ${W}/nosuch --search shared --engine shared-fast)
 
   # The 31-bit format, and a ladder that crosses from one format into the next:
   # levels 11 and 12 in version 2, then 13 in version 3 on the version-2 table.

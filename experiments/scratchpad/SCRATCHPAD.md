@@ -20,7 +20,7 @@ place left to look.
 | Idea | What a scratchpad would hold | Derivable from the Bomb? | Measured worth |
 |---|---|---|---|
 | The freedom of the stored REV | which fields of each REV the machine never read | yes, by running the REV | 0.02% of the strings it could settle: nothing |
-| Every REV known beforehand | a REV for every string of X bits, by any means | no | at most a factor of 2.3 to 2.9, less with length |
+| Every REV known beforehand | a REV for every string of X bits, by any means | no | a factor of 2.3 to 4.2, by where the length falls between two node counts |
 | A stored frontier of the search | the partly decided graphs at some depth | no | near the top: reusable and worth little; near the bottom: worth nearly everything, as large as the search, and not what the next level needs |
 
 **The observation.** The cost of a pass hardly depends on how many strings
@@ -29,8 +29,8 @@ finds a REV for all but 1,406 of them; searching only those 1,406, to prove
 they have none, costs 41% of the whole pass. At 22 bits the 176,055
 strings without a 7-node REV cost 87% of the pass for 1,009,543. The
 search walks the partly decided graphs of N nodes down along the beginnings
-of the strings that are still wanted, and a few hundred strings spread
-over the table keep nearly all of the upper part of that walk alive.
+of the strings that are still wanted, and a thousand strings spread over
+the table keep much of the upper part of that walk alive.
 **What costs is proving absence, and the proof for one string is almost
 the proof for all its neighbors.** That is why the shared search is cheap,
 why building on the Bomb below saves it only 0.2% (the strings the base
@@ -42,8 +42,8 @@ reasons: to find the REVs of N nodes, and to prove that the strings which
 need more have none. Knowing the REVs beforehand removes the first reason;
 only a **lower bound** removes the second: something that says "this string
 needs more than its first bits do" without walking graphs. With both, a
-level would need no search at all; with either alone, a factor of two or
-three. The bounds the Bomb below gives (its first bits; one node less than
+level would need no search at all; with the first alone, a factor of two to
+four. The bounds the Bomb below gives (its first bits; one node less than
 any later stretch) reach 0.1% of the proofs. So the place to look is not in
 the search's by-products but in a statement about strings: which
 extensions of q need one node more than q. That is a question for the
@@ -99,20 +99,30 @@ steps; the longer Bomb is the oracle for which strings those are.
 | 18 | 65,536 | 37,007 | 28,529 | 319,942,697 | 111,246,455 | 34.8% |
 | 20 | 262,144 | 152,299 | 109,845 | 2,563,737,705 | 1,085,723,383 | 42.3% |
 | 22 | 1,048,576 | 709,932 | 338,644 | 11,509,625,738 | 5,086,723,030 | 44.2% |
-@@PROOF24@@
+| 24 | 4,194,304 | 2,207,046 | 1,987,258 | 85,542,988,516 | 20,269,250,988 | 23.7% |
 
-By pass, level 22:
+By pass, levels 22 and 24:
 
-| Budget | Searched | Found | Steps | Proofs only: strings | Steps |
-|---:|---:|---:|---:|---:|---:|
-| 6 | 188,563 | 14,623 | 173,786,411 | 173,940 | 172,241,831 |
-| 7 | 1,009,543 | 833,488 | 5,583,276,572 | 176,055 | 4,881,742,910 |
-| 8 | 200,393 | 200,392 | 5,742,570,339 | 1 | 26,719,798 |
+| Level | Budget | Searched | Found | Steps | Proofs only: strings | Steps |
+|---:|---:|---:|---:|---:|---:|---:|
+| 22 | 6 | 188,563 | 14,623 | 173,786,411 | 173,940 | 172,241,831 |
+| 22 | 7 | 1,009,543 | 833,488 | 5,583,276,572 | 176,055 | 4,881,742,910 |
+| 22 | 8 | 200,393 | 200,392 | 5,742,570,339 | 1 | 26,719,798 |
+| 24 | 7 | 2,987,137 | 1,125,407 | 7,595,843,971 | 1,861,730 | 7,347,639,935 |
+| 24 | 8 | 3,062,889 | 3,061,990 | 76,434,596,710 | 899 | 12,688,175,526 |
+| 24 | 9 | 921 | 921 | 1,278,438,076 | 0 | 0 |
 
-A pass that finds nearly everything (budget 8) is nearly saved. A pass
-after which a sixth of its strings are still open (budget 7) costs 87% of
-itself for that sixth alone. A perfect source of REVs is worth a factor of
-two to three and no more, and what it leaves is the part that grows.
+A pass that finds everything is saved. A pass after which a sixth of its
+strings are still open (22 bits, budget 7) costs 87% of itself for that
+sixth alone. And the 899 strings of 24 bits that have no REV of 8 nodes
+cost a sixth of the pass that finds three million: 14 million steps each,
+which is what the search of each of them by itself costs. Their proofs
+share nothing with one another.
+
+So a perfect source of REVs is worth a factor of two to four: most at a
+length like 24 bits, where the pass at the top finds nearly all it looks
+for, least where a pass leaves many strings for the next budget. What it
+leaves is the part that proves.
 
 This also bounds from above everything that finds REVs cheaply: the
 prepend construction, a search begun at the REV of the Bomb below, repairs
@@ -179,7 +189,9 @@ its last X − 1 bits need, which decides 0.1% of the proofs.
 
 ## Not measured yet
 
-- `proof_only` at 25 and 26 bits, where the 9-node pass takes over.
+- `proof_only` at 25 and 26 bits, where the 9-node pass takes over and the
+  8-node pass leaves half a million strings behind: by the pattern above,
+  less is saved there than at 24 bits.
 - Whether the strings that need one node more than their beginning cluster
   under common beginnings. If they do, the proofs could be confined to
   parts of the tree; the observation above says they are spread widely

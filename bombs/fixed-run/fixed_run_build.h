@@ -7,8 +7,9 @@
  *     config.txt          the settings of the construction (text)
  *     journal/NNNNNN.frj  append-only segments of fixed-size, checksummed
  *                         records: one record per enumerated part, per
- *                         witness found by enumeration, and per LevelSolver
- *                         call
+ *                         witness found by enumeration, and per search of a
+ *                         string at a node budget; in a construction by
+ *                         shared search, one more per completed pass
  *     lock                held while a build is running
  *
  * The journal is the only stored result.  Everything else, including the
@@ -45,6 +46,7 @@ extern "C" {
 #define FRB_SEARCH_REVISION 1
 
 #define FRB_MAX_PASSES 8
+#define FRB_MAX_CLASS_BITS 16 /* a construction by shared search has at most 2^16 classes */
 #define FRB_MAX_WORKERS 1024
 #define FRB_ENUMERATE_LIMIT 6 /* 7-node graphs number 8.7e13: not a job for this enumerator */
 #define FRB_ENGINE_NAME 16 /* bytes kept in a segment header */
@@ -65,6 +67,19 @@ typedef struct {
     int base_bits;
     uint32_t base_crc;    /* table checksum of the base Bomb, from its header */
     char base_file[1024]; /* where it is */
+    /*
+     * How the strings are searched.  0: each by itself, one LevelSolver call
+     * for a string and a node budget, one record for the call.  1: by
+     * classes, with the SharedSolver.  A class is the set of strings with
+     * the same first class_bits bits; a pass searches the open strings of a
+     * class at one node budget and writes, for each of them, the record the
+     * LevelSolver call for that string would have written (the same result,
+     * REV and logical steps), and then one record for the pass.  The search
+     * records of a pass are evidence only with that pass record
+     * (FORMAT.md, section 9.6).
+     */
+    int shared;
+    int class_bits; /* 0..FRB_MAX_CLASS_BITS, at most bits */
 
     /* May be changed when a construction is resumed. */
     int max_nodes;     /* largest node budget searched, 1..node capacity of the format */
@@ -77,6 +92,11 @@ typedef struct {
 } FrbConfig;
 
 void frb_config_default(FrbConfig *cfg, int bits);
+
+/* A shared search: the name its segments carry, and the class_bits a
+ * construction of `bits` bits takes unless told otherwise. */
+#define FRB_SHARED_ENGINE "shared-c"
+int frb_default_class_bits(int bits);
 
 /* Make `file`, a complete Bomb for fewer bits, the base of the construction
  * described by cfg: reads its header, records its length, checksum and
@@ -107,7 +127,10 @@ typedef enum {
     FRB_REC_SESSION_END = 2,
     FRB_REC_ENUM_WITNESS = 3, /* a graph found by enumeration, first of its part to emit `target` */
     FRB_REC_ENUM_PART = 4,    /* one part of the enumeration ran to completion */
-    FRB_REC_SEARCH = 5        /* one LevelSolver call */
+    FRB_REC_SEARCH = 5,       /* the search of one string at one node budget: a LevelSolver
+                                 call, or what a pass of the SharedSolver says that call gives */
+    FRB_REC_PASS = 6          /* shared search: one pass of one class ran to completion; the
+                                 search records before it in the segment are its results */
 } FrbRecordType;
 
 typedef struct {
@@ -125,6 +148,42 @@ typedef struct {
     uint8_t nodes;       /* node count of the graph below, 0 = no graph */
     uint8_t graph[FRB_MAX_GRAPH_BYTES]; /* packed in the construction's table format */
 } FrbRecord;
+
+/*
+ * A pass record, read out of the general record.  It is kept in the fields
+ * there are: budget; limit = class_bits; target = the class; steps = the
+ * steps of the shared search; max_steps = string_steps; aux = wanted;
+ * elapsed_ns; and in the first twelve bytes of the graph field, found (4
+ * bytes) and checksum (8), least significant byte first.
+ */
+typedef struct {
+    int class_bits, budget;
+    uint32_t klass;        /* the common first class_bits bits of its strings */
+    uint32_t wanted;       /* strings searched: the search records that belong to it */
+    uint32_t found;        /* of them, with a REV */
+    uint64_t steps;        /* steps the shared search made */
+    uint64_t string_steps; /* logical steps of the search records, added up */
+    uint64_t checksum;     /* frb_pass_checksum over those records, in their order */
+    uint64_t elapsed_ns;
+} FrbPass;
+
+void frb_pass_pack(const FrbPass *pass, FrbRecord *rec);
+int frb_pass_unpack(const FrbRecord *rec, FrbPass *pass); /* 1 if rec is a well-formed pass record */
+
+/*
+ * The checksum of the search records of a pass: start with 0 and add each
+ * record in the order they are written.  It covers what a search record
+ * says: string, budget, result, logical steps and REV.
+ */
+uint64_t frb_pass_checksum(uint64_t sum, const FrbRecord *rec, const FrbFormat *format);
+
+/*
+ * A search as one number: its string, its node budget, its result (0 a REV,
+ * 1 none) and its logical steps.  The numbers of a set of searches are added
+ * up, so the sum does not depend on their order.  It is there to compare
+ * journals, not to resist anyone.
+ */
+uint64_t frb_search_check(uint32_t target, int budget, int result, uint64_t steps);
 
 typedef struct {
     uint32_t number;  /* the NNNNNN of the file name */
@@ -196,6 +255,13 @@ typedef struct {
     uint64_t steps, ns;
 } FrbBudgetEffort;
 
+/* Shared search: the passes admitted at one node budget. */
+typedef struct {
+    uint64_t passes, wanted, found;
+    uint64_t steps; /* of the shared search, where FrbBudgetEffort has those of the strings */
+    uint64_t ns;
+} FrbPassEffort;
+
 typedef struct {
     int bits, symmetry, enumerate_max, base_bits;
     const FrbFormat *format; /* of the table this construction produces */
@@ -214,8 +280,19 @@ typedef struct {
     /* The base Bomb: how many targets its stored REVs settled. */
     uint32_t base_settled;
 
-    /* Stage B: LevelSolver calls, by node budget. */
+    /* Stage B: searches of strings, by node budget. */
     FrbBudgetEffort budget[FRB_MAX_NODES + 1];
+    /* One number for all of them that ended (frb_search_check, added up):
+     * two journals that hold the same searches with the same results and
+     * steps have the same, however they came by them. */
+    uint64_t search_checksum;
+    /* Shared search: the passes those searches came out of; and what was
+     * not admitted as evidence. */
+    int shared, class_bits;
+    FrbPassEffort pass[FRB_MAX_NODES + 1];
+    uint64_t passes_repeated; /* pass records that repeat an admitted pass, result for result */
+    uint64_t uncommitted;     /* search records with no pass record after them: of passes that
+                                 were cut off.  They establish nothing */
 
     /* Sessions and files. */
     uint32_t sessions, sessions_unfinished;
@@ -261,6 +338,13 @@ typedef struct {
     uint64_t min_free_bytes; /* stop cleanly when the file system of the work directory has
                                 less free space than this; 0 = do not watch */
     FILE *log;               /* progress and notices; NULL = silent */
+    /*
+     * For the tests of recovery, never set otherwise.  A process of a
+     * construction by shared search that has made this many steps of search
+     * kills itself with SIGKILL, in the middle of whatever it is doing, as
+     * a power cut or the kernel would.  0 = never.
+     */
+    uint64_t die_after_steps;
 } FrbRunOptions;
 
 typedef struct {
@@ -325,6 +409,38 @@ typedef struct {
 
 FrbError frb_recertify(const FrbTable *table, RevLevelSolveFn solve, uint64_t max_steps,
                        uint64_t sample, uint64_t seed, FrbRecertify *out);
+
+/*
+ * Shared search: make passes again and hold every search record of them
+ * against what comes out.  A pass is replayed whole: not a sample of its
+ * strings but every string it searched.
+ *
+ * FRB_REPLAY_LEVEL: independently.  Each record of the pass is the claim
+ * that the LevelSolver, for that one string at that budget, gives this
+ * result, this REV and this number of logical steps; `solve` is called for
+ * every one of them and has to give exactly that.  The LevelSolver and the
+ * SharedSolver share no code.  It costs what a ladder that searches string
+ * by string spends on the class.
+ *
+ * FRB_REPLAY_SHARED: with the SharedSolver again, which has to write the
+ * same records, and take the steps the pass record says it took.  It costs
+ * what the pass cost.
+ *
+ * sample: 0, every admitted pass; else that many, chosen at random by seed.
+ * FRB_ERR_EVIDENCE if a record differs; the first is described in err.
+ */
+typedef enum { FRB_REPLAY_SHARED = 0, FRB_REPLAY_LEVEL = 1 } FrbReplayBy;
+
+typedef struct {
+    uint64_t passes_admitted; /* in the journal */
+    uint64_t passes;          /* made again */
+    uint64_t records;         /* search records held against the replay */
+    uint64_t differ;          /* of them, not reproduced */
+    uint64_t steps;           /* made by the replay */
+} FrbReplay;
+
+FrbError frb_replay_passes(const char *dir, const FrbConfig *cfg, FrbReplayBy by, RevLevelSolveFn solve,
+                           uint64_t sample, uint64_t seed, FrbReplay *out, char *err, size_t errlen);
 
 /*
  * The sample frb_recertify takes: `todo` different indices below `count`,

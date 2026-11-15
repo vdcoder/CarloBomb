@@ -47,12 +47,17 @@
 #include <unistd.h>
 
 #include "level_solver.h"
+#include "shared_solver.h"
 
 /* First line of config.txt.  Layout 1 is what a construction of up to 16
  * bits without a base Bomb has always written, and still does; layout 2 adds
  * the table format and the base Bomb. */
 #define CONFIG_MAGIC_1 "carlobomb-fixed-run-work 1"
 #define CONFIG_MAGIC_2 "carlobomb-fixed-run-work 2"
+/* Layout 4 is layout 2 with two more settings: a construction by shared
+ * search (FORMAT.md, section 9.6).  A program that does not know it refuses
+ * the directory.  The number 3 is not used here. */
+#define CONFIG_MAGIC_4 "carlobomb-fixed-run-work 4"
 
 static void set_err(char *err, size_t errlen, const char *fmt, ...) {
     va_list ap;
@@ -71,6 +76,14 @@ static uint64_t now_ns(void) {
 static uint64_t seconds_ns(double s) { return s <= 0 ? 0 : (uint64_t)(s * 1e9); }
 
 /* ---- configuration ------------------------------------------------------ */
+
+int frb_default_class_bits(int bits) {
+    /* 256 classes: cutting finer costs steps (the beginnings of a class are
+     * walked once for each class); short strings are cut into fewer. */
+    int p = bits >= 16 ? 8 : bits > 8 ? bits - 8 : 0;
+    if (bits - p > REV_SHARED_MAX_FREE) p = bits - REV_SHARED_MAX_FREE;
+    return p;
+}
 
 void frb_config_default(FrbConfig *cfg, int bits) {
     const FrbFormat *format = frb_format_for_bits(bits);
@@ -116,6 +129,22 @@ FrbError frb_config_check(const FrbConfig *cfg, char *err, size_t errlen) {
     if (cfg->base_file[sizeof cfg->base_file - 1] != '\0' || strpbrk(cfg->base_file, "\r\n") ||
         (cfg->base_bits != 0) != (cfg->base_file[0] != '\0')) {
         set_err(err, errlen, "bad base Bomb file name");
+        return FRB_ERR_ARG;
+    }
+    if (cfg->shared) {
+        if (cfg->class_bits < 0 || cfg->class_bits > FRB_MAX_CLASS_BITS || cfg->class_bits > cfg->bits ||
+            cfg->bits - cfg->class_bits > REV_SHARED_MAX_FREE) {
+            set_err(err, errlen, "class-bits must be %d..%d for %d-bit targets",
+                    cfg->bits > REV_SHARED_MAX_FREE ? cfg->bits - REV_SHARED_MAX_FREE : 0,
+                    cfg->bits < FRB_MAX_CLASS_BITS ? cfg->bits : FRB_MAX_CLASS_BITS, cfg->bits);
+            return FRB_ERR_ARG;
+        }
+        if (cfg->passes != 1 || cfg->max_steps[0] != 0) {
+            set_err(err, errlen, "a shared search has no step limit: a pass is made to its end");
+            return FRB_ERR_ARG;
+        }
+    } else if (cfg->class_bits != 0) {
+        set_err(err, errlen, "class-bits belongs to a shared search");
         return FRB_ERR_ARG;
     }
     if (cfg->workers < 1 || cfg->workers > FRB_MAX_WORKERS) {
@@ -183,7 +212,7 @@ FrbError frb_config_write(const char *dir, const FrbConfig *cfg) {
     int layout2, n;
     if (!dir || frb_config_check(cfg, NULL, 0) != FRB_OK) return FRB_ERR_ARG;
     if (!config_path(path, sizeof path, dir, "config.txt")) return FRB_ERR_ARG;
-    layout2 = cfg->format != FRB_FORMAT_VERSION || cfg->base_bits != 0;
+    layout2 = cfg->format != FRB_FORMAT_VERSION || cfg->base_bits != 0 || cfg->shared;
     n = snprintf(text, sizeof text,
                  "%s\n"
                  "# Settings of a FixedRunBomb construction.  The first five are fixed for\n"
@@ -193,7 +222,8 @@ FrbError frb_config_write(const char *dir, const FrbConfig *cfg) {
                  "bits %d\n"
                  "symmetry %d\n"
                  "enumerate_max %d\n",
-                 layout2 ? CONFIG_MAGIC_2 : CONFIG_MAGIC_1, cfg->format, FRB_SEARCH_REVISION,
+                 cfg->shared ? CONFIG_MAGIC_4 : layout2 ? CONFIG_MAGIC_2 : CONFIG_MAGIC_1, cfg->format,
+                 FRB_SEARCH_REVISION,
                  cfg->bits, cfg->symmetry ? 1 : 0, cfg->enumerate_max);
     if (layout2 && n > 0 && (size_t)n < sizeof text) {
         n += snprintf(text + n, sizeof text - (size_t)n,
@@ -207,6 +237,14 @@ FrbError frb_config_write(const char *dir, const FrbConfig *cfg) {
             n += snprintf(text + n, sizeof text - (size_t)n, "base_crc %08x\nbase_file %s\n",
                           (unsigned)cfg->base_crc, cfg->base_file);
     }
+    if (cfg->shared && n > 0 && (size_t)n < sizeof text)
+        n += snprintf(text + n, sizeof text - (size_t)n,
+                      "# Also fixed: the strings are searched by classes, a class being the strings\n"
+                      "# with the same first class_bits bits.  A search record of this journal counts\n"
+                      "# only with the pass record that closes its pass.\n"
+                      "search shared\n"
+                      "class_bits %d\n",
+                      cfg->class_bits);
     if (n > 0 && (size_t)n < sizeof text)
         n += snprintf(text + n, sizeof text - (size_t)n,
                       "max_nodes %d\n"
@@ -270,6 +308,7 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
         if (lineno == 1) {
             if (strcmp(line, CONFIG_MAGIC_1) == 0) layout = 1;
             else if (strcmp(line, CONFIG_MAGIC_2) == 0) layout = 2;
+            else if (strcmp(line, CONFIG_MAGIC_4) == 0) layout = 4;
             else {
                 fclose(f);
                 set_err(err, errlen, "%s: not a FixedRunBomb work directory of a known version", path);
@@ -279,7 +318,7 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
             continue;
         }
         if (line[0] == '#' || line[0] == '\0') continue;
-        if (layout == 2 && strncmp(line, "base_file ", 10) == 0) { /* may contain spaces */
+        if (layout >= 2 && strncmp(line, "base_file ", 10) == 0) { /* may contain spaces */
             if (n - 10 >= sizeof cfg->base_file || n == 10) goto bad;
             memcpy(cfg->base_file, line + 10, n - 10 + 1);
             seen |= 8192u;
@@ -305,20 +344,27 @@ FrbError frb_config_read(const char *dir, FrbConfig *cfg, char *err, size_t errl
         }
         else if (!strcmp(key, "workers")) { if (!parse_int(value, &cfg->workers)) goto bad; seen |= 256u; }
         else if (!strcmp(key, "max_steps")) { if (!frb_parse_step_limits(value, cfg)) goto bad; seen |= 512u; }
-        else if (layout == 2 && !strcmp(key, "format")) { if (!parse_int(value, &cfg->format)) goto bad; seen |= 1024u; }
-        else if (layout == 2 && !strcmp(key, "base_bits")) { if (!parse_int(value, &cfg->base_bits)) goto bad; seen |= 2048u; }
-        else if (layout == 2 && !strcmp(key, "base_crc")) {
+        else if (layout >= 2 && !strcmp(key, "format")) { if (!parse_int(value, &cfg->format)) goto bad; seen |= 1024u; }
+        else if (layout >= 2 && !strcmp(key, "base_bits")) { if (!parse_int(value, &cfg->base_bits)) goto bad; seen |= 2048u; }
+        else if (layout >= 2 && !strcmp(key, "base_crc")) {
             char *end;
             unsigned long crc = strtoul(value, &end, 16);
             if (end == value || *end != '\0' || strlen(value) != 8) goto bad;
             cfg->base_crc = (uint32_t)crc;
             seen |= 4096u;
         }
+        else if (layout == 4 && !strcmp(key, "search")) {
+            if (strcmp(value, "shared") != 0) goto bad;
+            cfg->shared = 1;
+            seen |= 16384u;
+        }
+        else if (layout == 4 && !strcmp(key, "class_bits")) { if (!parse_int(value, &cfg->class_bits)) goto bad; seen |= 32768u; }
         else goto bad;
     }
     fclose(f);
     want = 1023u;
-    if (layout == 2) want |= 1024u | 2048u | (cfg->base_bits ? 4096u | 8192u : 0u);
+    if (layout >= 2) want |= 1024u | 2048u | (cfg->base_bits ? 4096u | 8192u : 0u);
+    if (layout == 4) want |= 16384u | 32768u;
     if (seen != want) {
         set_err(err, errlen, "%s: incomplete (a setting is missing, or one too many)", path);
         return FRB_ERR_INCOMPATIBLE;
@@ -404,15 +450,26 @@ static int should_stop(void) {
 
 /* ---- jobs --------------------------------------------------------------- */
 
-enum { JOB_ENUM = 0, JOB_SEARCH = 1 };
+enum { JOB_ENUM = 0, JOB_SEARCH = 1, JOB_CLASS = 2 };
 
 typedef struct {
     uint8_t kind;
     uint8_t lo;      /* JOB_ENUM: node count.  JOB_SEARCH: first node budget */
     uint8_t hi;      /* JOB_SEARCH: last node budget */
     uint16_t part;   /* JOB_ENUM */
-    uint32_t target; /* JOB_SEARCH */
+    uint32_t target; /* JOB_SEARCH.  JOB_CLASS: the class */
 } Job;
+
+/*
+ * Shared search: what a round is to do, string by string.  The budgets at
+ * which a string is open, first to last, or first = 0 for a string that is
+ * not: it has its certified minimum, or its complement is the one that is
+ * searched.  The workers read it; the state it was made from is gone by
+ * then.
+ */
+typedef struct {
+    uint8_t *first, *last; /* [string] */
+} ClassPlan;
 
 static uint64_t effective_limit(uint64_t max_steps) { return max_steps ? max_steps : UINT64_MAX; }
 
@@ -497,6 +554,54 @@ static void sample_jobs(Job *jobs, size_t n, size_t keep, uint64_t seed) {
     qsort(jobs, keep, sizeof *jobs, cmp_job_target);
 }
 
+/* The classes that have an open string, and the plan for their strings. */
+static size_t plan_classes(const FrbState *s, const FrbConfig *cfg, Job **jobs, ClassPlan *plan) {
+    uint32_t top = (uint32_t)1 << (s->bits - 1), classes = (uint32_t)1 << cfg->class_bits;
+    int free_bits = s->bits - cfg->class_bits;
+    uint8_t *open = calloc(classes, 1);
+    size_t n = 0;
+    Job *list;
+    *jobs = NULL;
+    plan->first = calloc(s->count, 1);
+    plan->last = calloc(s->count, 1);
+    if (!open || !plan->first || !plan->last) {
+        free(open);
+        free(plan->first);
+        free(plan->last);
+        plan->first = plan->last = NULL;
+        return 0;
+    }
+    for (uint32_t i = 0; i < s->count; i++) {
+        const FrbTargetState *ts = &s->targets[i];
+        int lo, hi;
+        if (s->symmetry && (i & top)) continue; /* its complement is searched */
+        if (ts->status == FRB_MINIMAL || ts->conflict) continue;
+        lo = ts->lower_bound;
+        hi = cfg->max_nodes;
+        if (ts->nodes && ts->nodes - 1 < hi) hi = ts->nodes - 1; /* a witness needs no search */
+        if (lo > hi) continue;
+        plan->first[i] = (uint8_t)lo;
+        plan->last[i] = (uint8_t)hi;
+        if (!open[i >> free_bits]) {
+            open[i >> free_bits] = 1;
+            n++;
+        }
+    }
+    list = calloc(n ? n : 1, sizeof *list);
+    if (list) {
+        size_t k = 0;
+        for (uint32_t c = 0; c < classes; c++)
+            if (open[c]) {
+                list[k].kind = JOB_CLASS;
+                list[k].target = c;
+                k++;
+            }
+    }
+    free(open);
+    *jobs = list;
+    return list ? n : 0;
+}
+
 /* ---- running jobs ------------------------------------------------------- */
 
 typedef struct {
@@ -529,6 +634,14 @@ typedef struct {
 
 typedef struct Session Session;
 
+/* A REV a pass has found, until the pass is over and its records are written. */
+typedef struct {
+    uint32_t target;
+    uint8_t nodes;
+    uint8_t graph[FRB_MAX_GRAPH_BYTES];
+    uint64_t steps;
+} FoundRev;
+
 typedef struct {
     Session *session;
     FrbSegment *seg;
@@ -537,6 +650,13 @@ typedef struct {
     Progress p;
     uint64_t last_flush_ns, last_sync_ns, last_report_ns;
     char err[FRB_ERR_TEXT];
+    /* Shared search. */
+    RevShared *shared;
+    FoundRev *found;
+    size_t found_n, found_cap;
+    int found_failed;     /* a REV could not be kept: the pass is void */
+    uint64_t steps_before; /* steps of search this process had made when the pass in hand began */
+    uint64_t polls;        /* in the pass in hand */
 } Worker;
 
 struct Session {
@@ -556,6 +676,7 @@ struct Session {
     uint64_t certified_before; /* targets with a certified minimum when the round was planned */
     uint64_t per_job;          /* targets one search job settles: 2 under symmetry */
     char round_label[96];
+    ClassPlan plan;            /* of a round of shared search */
 };
 
 /* 1234567 -> "1,234,567", in one of a few static buffers used in turn. */
@@ -599,9 +720,9 @@ static void progress_line(Session *S, const Progress *p, int final) {
         fprintf(log, "[%8.1f s] %s: %llu/%zu parts, %.4g graphs", t, S->round_label,
                 (unsigned long long)p->jobs, S->round_jobs, (double)p->graphs);
     } else {
-        fprintf(log, "[%8.1f s] %s: %llu/%zu targets, %llu searches, %.4g steps", t, S->round_label,
-                (unsigned long long)p->jobs, S->round_jobs, (unsigned long long)p->searches,
-                (double)p->steps);
+        fprintf(log, "[%8.1f s] %s: %llu/%zu %s, %llu searches, %.4g steps", t, S->round_label,
+                (unsigned long long)p->jobs, S->round_jobs, S->round_kind == JOB_CLASS ? "classes" : "targets",
+                (unsigned long long)p->searches, (double)p->steps);
         if (rt > 0.05) fprintf(log, " (%.3g steps/s)", (double)p->steps / rt);
     }
     if (final) fprintf(log, ", %.2f s\n", rt);
@@ -609,7 +730,7 @@ static void progress_line(Session *S, const Progress *p, int final) {
         fprintf(log, ", about %s left\n",
                 duration(rt * (double)(S->round_jobs - p->jobs) / (double)p->jobs));
     else fprintf(log, "\n");
-    if (S->round_kind == JOB_SEARCH && p->found_jobs) {
+    if (S->round_kind != JOB_ENUM && p->found_jobs) {
         uint64_t all = (uint64_t)1 << S->cfg->bits;
         uint64_t certified = S->certified_before + S->per_job * p->found_jobs;
         fprintf(log, "             certified: %s of %s strings (%.2f%%), %s open.  Minimum nodes of those\n"
@@ -795,13 +916,203 @@ static FrbError do_search(Worker *w, const Job *job) {
     return FRB_OK;
 }
 
+/* ---- shared search: one class, pass after pass --------------------------- */
+
+enum { DIE_POLL = 256 }; /* steps between two looks at the clock of die_after_steps */
+
+static int class_found(void *ctx, uint32_t string, const RevGraph *rev, uint64_t steps) {
+    Worker *w = ctx;
+    FoundRev *f;
+    if (w->found_n == w->found_cap) {
+        size_t cap = w->found_cap ? w->found_cap * 2 : 1024;
+        FoundRev *grown = realloc(w->found, cap * sizeof *grown);
+        if (!grown) {
+            w->found_failed = 1;
+            return 1;
+        }
+        w->found = grown;
+        w->found_cap = cap;
+    }
+    f = &w->found[w->found_n];
+    memset(f, 0, sizeof *f);
+    f->target = string;
+    f->steps = steps;
+    /* The solver has run its REV; it is run again when the journal is read. */
+    if (rev->node_count < 1 || rev->node_count > FRB_MAX_NODES ||
+        frb_graph_pack_as(w->session->format, rev, f->graph) != FRB_OK) {
+        w->found_failed = 1;
+        return 1;
+    }
+    f->nodes = (uint8_t)rev->node_count;
+    w->found_n++;
+    return 0;
+}
+
+static int class_poll(void *ctx) {
+    Worker *w = ctx;
+    uint64_t die = w->session->opt->die_after_steps;
+    w->polls++;
+    if (die && w->steps_before + w->polls * DIE_POLL >= die) kill(getpid(), SIGKILL);
+    return should_stop();
+}
+
+static int cmp_found(const void *a, const void *b) {
+    uint32_t x = ((const FoundRev *)a)->target, y = ((const FoundRev *)b)->target;
+    return (x > y) - (x < y);
+}
+
+/*
+ * A class: its open strings, searched together at one node budget after
+ * another, smallest first.  A pass takes the strings that are open at its
+ * budget.  Nothing of a pass is written while it runs.  When it has ended,
+ * its results are written in the order of their strings, one search record
+ * for each string it searched, and then the pass record, which is what
+ * makes them count.  A pass that is cut off, in the search or in the
+ * writing, has established nothing and is made again.
+ */
+static FrbError do_class(Worker *w, const Job *job) {
+    Session *S = w->session;
+    const FrbConfig *cfg = S->cfg;
+    const ClassPlan *plan = &S->plan;
+    int free_bits = cfg->bits - cfg->class_bits, lowest = FRB_MAX_NODES + 1, highest = 0;
+    uint32_t klass = job->target, size = (uint32_t)1 << free_bits, first = klass << free_bits;
+    uint8_t *wanted, *done;
+    RevSharedHooks hooks;
+    FrbError e = FRB_OK;
+
+    if (!w->shared) w->shared = rev_shared_create(cfg->bits, cfg->class_bits);
+    wanted = calloc((size_t)size / 8 + 1, 1);
+    done = calloc((size_t)size / 8 + 1, 1);
+    if (!w->shared || !wanted || !done) {
+        free(wanted);
+        free(done);
+        set_err(w->err, sizeof w->err, "not enough memory for a class of %u strings", (unsigned)size);
+        return FRB_ERR_MEMORY;
+    }
+    for (uint32_t j = 0; j < size; j++) {
+        if (!plan->first[first + j]) continue;
+        if (plan->first[first + j] < lowest) lowest = plan->first[first + j];
+        if (plan->last[first + j] > highest) highest = plan->last[first + j];
+    }
+    memset(&hooks, 0, sizeof hooks);
+    hooks.found = class_found;
+    hooks.found_ctx = w;
+    hooks.poll = class_poll;
+    hooks.poll_ctx = w;
+    hooks.poll_every = S->opt->die_after_steps ? DIE_POLL : 0;
+
+    for (int b = lowest; b <= highest && e == FRB_OK; b++) {
+        RevSharedStats st;
+        RevSharedResult r;
+        FrbRecord rec;
+        FrbPass pass;
+        uint64_t t0, sum = 0, string_steps = 0;
+        uint32_t asked = 0, now;
+        size_t k = 0;
+
+        memset(wanted, 0, (size_t)size / 8 + 1);
+        for (uint32_t j = 0; j < size; j++) {
+            uint32_t i = first + j;
+            if (!plan->first[i] || plan->first[i] > b || plan->last[i] < b) continue;
+            if ((done[j >> 3] >> (j & 7)) & 1) continue; /* found at a smaller budget */
+            wanted[j >> 3] |= (uint8_t)(1u << (j & 7));
+            asked++;
+        }
+        if (!asked) continue;
+        if (should_stop()) {
+            e = FRB_ERR_STOPPED;
+            break;
+        }
+        w->found_n = 0;
+        w->found_failed = 0;
+        w->polls = 0;
+        t0 = now_ns();
+        r = rev_shared_pass(w->shared, klass, b, wanted, &hooks, &st);
+        if (r == REV_SHARED_STOPPED && !w->found_failed) {
+            e = FRB_ERR_STOPPED; /* asked to stop: the pass is given up, nothing of it is written */
+            break;
+        }
+        if (r != REV_SHARED_DONE || w->found_failed || st.wanted != asked || st.found != w->found_n) {
+            set_err(w->err, sizeof w->err, "the shared search failed on class %u at budget %d: %s",
+                    (unsigned)klass, b, w->found_failed ? "a REV could not be kept" : rev_shared_result_str(r));
+            e = r == REV_SHARED_DONE || r == REV_SHARED_STOPPED ? FRB_ERR_MEMORY : FRB_ERR_EVIDENCE;
+            break;
+        }
+        w->steps_before += st.steps;
+        if (w->found_n) qsort(w->found, w->found_n, sizeof *w->found, cmp_found);
+
+        /* The results, in the order of their strings. */
+        now = (uint32_t)time(NULL);
+        for (uint32_t j = 0; j < size && e == FRB_OK; j++) {
+            if (!((wanted[j >> 3] >> (j & 7)) & 1)) continue;
+            memset(&rec, 0, sizeof rec);
+            rec.type = FRB_REC_SEARCH;
+            rec.budget = (uint8_t)b;
+            rec.target = first + j;
+            rec.time = now;
+            if (k < w->found_n && w->found[k].target == first + j) {
+                const FoundRev *f = &w->found[k++];
+                rec.result = (uint8_t)REV_SOLVE_SOLVED;
+                rec.steps = f->steps;
+                rec.nodes = f->nodes;
+                memcpy(rec.graph, f->graph, sizeof rec.graph);
+                done[j >> 3] |= (uint8_t)(1u << (j & 7));
+                w->p.found[f->nodes]++;
+            } else if (rev_shared_unfound(w->shared, j)) {
+                rec.result = (uint8_t)REV_SOLVE_PROVEN_UNSAT;
+                rec.steps = rev_shared_unfound_steps(w->shared, j);
+            } else {
+                set_err(w->err, sizeof w->err, "the shared search lost a string of class %u at budget %d",
+                        (unsigned)klass, b);
+                e = FRB_ERR_EVIDENCE;
+                break;
+            }
+            sum = frb_pass_checksum(sum, &rec, S->format);
+            string_steps += rec.steps;
+            e = append(w, &rec);
+        }
+        if (e != FRB_OK) break;
+        if (k != w->found_n || string_steps != st.string_steps) {
+            set_err(w->err, sizeof w->err, "the shared search miscounted class %u at budget %d", (unsigned)klass, b);
+            e = FRB_ERR_EVIDENCE;
+            break;
+        }
+        memset(&pass, 0, sizeof pass);
+        pass.class_bits = cfg->class_bits;
+        pass.budget = b;
+        pass.klass = klass;
+        pass.wanted = asked;
+        pass.found = (uint32_t)w->found_n;
+        pass.steps = st.steps;
+        pass.string_steps = string_steps;
+        pass.checksum = sum;
+        pass.elapsed_ns = now_ns() - t0;
+        frb_pass_pack(&pass, &rec);
+        rec.time = (uint32_t)time(NULL);
+        e = append(w, &rec);
+        /* Out of this process at once: from here on only the machine going
+         * down can undo the pass. */
+        if (e == FRB_OK && frb_segment_flush(w->seg, 0) != FRB_OK) {
+            set_err(w->err, sizeof w->err, "cannot write to the journal (disk full?)");
+            e = FRB_ERR_IO;
+        }
+        if (e != FRB_OK) break;
+        w->p.searches += asked;
+        w->p.steps += st.steps;
+        w->p.found_jobs += w->found_n;
+    }
+    free(wanted);
+    free(done);
+    return e;
+}
+
 /* One job; 1 if the worker is to go on. */
 static int run_job(Worker *w, const Job *job, FrbError *e) {
     if (should_stop()) {
         w->p.state = 2;
         return 0;
     }
-    *e = job->kind == JOB_ENUM ? do_enum(w, job) : do_search(w, job);
+    *e = job->kind == JOB_ENUM ? do_enum(w, job) : job->kind == JOB_CLASS ? do_class(w, job) : do_search(w, job);
     if (*e == FRB_ERR_STOPPED) {
         *e = FRB_OK;
         w->p.state = 2;
@@ -832,6 +1143,11 @@ static FrbError run_jobs(Worker *w, const Job *jobs, size_t count, Cursor *curso
     if (e != FRB_OK) w->p.state = 3;
     else if (w->p.state == 0) w->p.state = 1;
     e2 = housekeeping(w, 1);
+    rev_shared_destroy(w->shared);
+    free(w->found);
+    w->shared = NULL;
+    w->found = NULL;
+    w->found_n = w->found_cap = 0;
     return e != FRB_OK ? e : e2;
 }
 
@@ -1092,6 +1408,12 @@ FrbError frb_check_memory(const FrbConfig *cfg, FILE *log, char *err, size_t err
 
 /* frb_work_run.  If final_state is not NULL and the call succeeds, it
  * receives the state as the last replay left it, for the caller to free. */
+static void plan_free(ClassPlan *plan) {
+    free(plan->first);
+    free(plan->last);
+    plan->first = plan->last = NULL;
+}
+
 static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOptions *opt,
                          FrbRunResult *result, FrbState **final_state, char *err, size_t errlen) {
     struct sigaction action, old_int, old_term;
@@ -1187,6 +1509,11 @@ static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOpti
             kind = JOB_ENUM;
             count = plan_enum(state, nodes, &jobs);
             snprintf(S.round_label, sizeof S.round_label, "stage A, %d-node graphs", nodes);
+        } else if (cfg->shared) {
+            kind = JOB_CLASS;
+            count = plan_classes(state, cfg, &jobs, &S.plan);
+            snprintf(S.round_label, sizeof S.round_label, "stage B, shared search in classes of %d bits",
+                     cfg->class_bits);
         } else {
             kind = JOB_SEARCH;
             for (int pass = 0; pass < cfg->passes && count == 0; pass++) {
@@ -1204,14 +1531,16 @@ static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOpti
         }
         if (count == 0) { /* nothing these settings can still do */
             free(jobs);
+            plan_free(&S.plan);
             break;
         }
-        if (jobs_left == 0 || (sampling && kind == JOB_SEARCH && sample_left == 0)) {
+        if (jobs_left == 0 || (sampling && kind != JOB_ENUM && sample_left == 0)) {
             result->stopped_early = 1;
             free(jobs);
+            plan_free(&S.plan);
             break;
         }
-        if (sampling && kind == JOB_SEARCH) {
+        if (sampling && kind != JOB_ENUM) {
             size_t keep = count < sample_left ? count : (size_t)sample_left;
             sample_jobs(jobs, count, keep, opt->seed);
             count = keep;
@@ -1220,6 +1549,7 @@ static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOpti
         watch_disk(&S);
         if (should_stop()) {
             free(jobs);
+            plan_free(&S.plan);
             break;
         }
 
@@ -1233,13 +1563,14 @@ static FrbError work_run(const char *dir, const FrbConfig *cfg, const FrbRunOpti
         S.round_kind = kind;
         e = run_round(&S, jobs, count, limit, &total, err, errlen);
         free(jobs);
+        plan_free(&S.plan);
         result->rounds++;
         result->jobs += total.jobs;
         result->searches += total.searches;
         result->steps += total.steps;
         result->graphs += total.graphs;
         jobs_left -= total.jobs < jobs_left ? total.jobs : jobs_left;
-        if (sampling && kind == JOB_SEARCH)
+        if (sampling && kind != JOB_ENUM)
             sample_left -= total.jobs < sample_left ? total.jobs : sample_left;
         if (e != FRB_OK) break;
 
@@ -1556,6 +1887,231 @@ FrbError frb_recertify_hardest(const FrbTable *table, RevLevelSolveFn solve, uin
     return out->disagree ? FRB_ERR_EVIDENCE : FRB_OK;
 }
 
+/* ---- shared search: passes made again ----------------------------------- */
+
+typedef struct {
+    const FrbConfig *cfg;
+    const FrbFormat *format;
+    FrbReplayBy by;
+    RevLevelSolveFn solve;
+    FrbReplay *out;
+    FrbRecord *batch; /* the search records since the last pass record of the segment */
+    size_t n, cap;
+    uint64_t ordinal;      /* passes met in this scan */
+    const uint8_t *chosen; /* a bit for each, or NULL: all of them */
+    int counting;          /* only count the passes */
+    RevShared *engine;
+    uint8_t *wanted;
+    FoundRev *found;
+    size_t found_n, found_cap;
+    int found_failed;
+    char *err;
+    size_t errlen;
+} Replayer;
+
+static void replay_differs(Replayer *R, const FrbPass *p, const FrbRecord *rec, const char *what) {
+    char target[FRB_MAX_BITS + 1];
+    if (R->out->differ++) return; /* the first one is described */
+    if (rec) {
+        frb_target_format(rec->target, R->cfg->bits, target);
+        set_err(R->err, R->errlen, "the pass of class %u at %d nodes, string %s: %s", (unsigned)p->klass,
+                p->budget, target, what);
+    } else {
+        set_err(R->err, R->errlen, "the pass of class %u at %d nodes: %s", (unsigned)p->klass, p->budget, what);
+    }
+}
+
+static int replay_found(void *ctx, uint32_t string, const RevGraph *rev, uint64_t steps) {
+    Replayer *R = ctx;
+    FoundRev *f;
+    if (R->found_n == R->found_cap) {
+        size_t cap = R->found_cap ? R->found_cap * 2 : 1024;
+        FoundRev *grown = realloc(R->found, cap * sizeof *grown);
+        if (!grown) {
+            R->found_failed = 1;
+            return 1;
+        }
+        R->found = grown;
+        R->found_cap = cap;
+    }
+    f = &R->found[R->found_n];
+    memset(f, 0, sizeof *f);
+    f->target = string;
+    f->steps = steps;
+    if (rev->node_count < 1 || rev->node_count > FRB_MAX_NODES ||
+        frb_graph_pack_as(R->format, rev, f->graph) != FRB_OK) {
+        R->found_failed = 1;
+        return 1;
+    }
+    f->nodes = (uint8_t)rev->node_count;
+    R->found_n++;
+    return 0;
+}
+
+/* Every search record of the pass, against a LevelSolver call for its string. */
+static FrbError replay_by_level(Replayer *R, const FrbPass *p) {
+    char target[FRB_MAX_BITS + 1];
+    for (size_t i = 0; i < R->n; i++) {
+        const FrbRecord *rec = &R->batch[i];
+        uint8_t packed[FRB_MAX_GRAPH_BYTES];
+        RevLevelStats st;
+        RevGraph g;
+        RevSolveResult r;
+        if (should_stop()) return FRB_ERR_STOPPED;
+        frb_target_format(rec->target, R->cfg->bits, target);
+        memset(&st, 0, sizeof st);
+        memset(packed, 0, sizeof packed);
+        r = R->solve(target, (size_t)R->cfg->bits, rec->budget, NULL, &g, &st);
+        R->out->records++;
+        R->out->steps += st.steps;
+        if ((int)r != rec->result) replay_differs(R, p, rec, "the LevelSolver gives another result");
+        else if (st.steps != rec->steps) replay_differs(R, p, rec, "the LevelSolver takes another number of steps");
+        else if (r == REV_SOLVE_SOLVED &&
+                 (g.node_count != rec->nodes || frb_graph_pack_as(R->format, &g, packed) != FRB_OK ||
+                  memcmp(packed, rec->graph, (size_t)R->format->graph_bytes) != 0))
+            replay_differs(R, p, rec, "the LevelSolver finds another REV");
+    }
+    return FRB_OK;
+}
+
+/* The pass again, with the SharedSolver: the same records, and the steps it says it took. */
+static FrbError replay_by_shared(Replayer *R, const FrbPass *p) {
+    int free_bits = R->cfg->bits - R->cfg->class_bits;
+    uint32_t size = (uint32_t)1 << free_bits, first = p->klass << free_bits;
+    RevSharedHooks hooks;
+    RevSharedStats st;
+    RevSharedResult r;
+    size_t k = 0;
+    memset(R->wanted, 0, (size_t)size / 8 + 1);
+    for (size_t i = 0; i < R->n; i++) {
+        uint32_t j = R->batch[i].target - first;
+        R->wanted[j >> 3] |= (uint8_t)(1u << (j & 7));
+    }
+    memset(&hooks, 0, sizeof hooks);
+    hooks.found = replay_found;
+    hooks.found_ctx = R;
+    R->found_n = 0;
+    R->found_failed = 0;
+    r = rev_shared_pass(R->engine, p->klass, p->budget, R->wanted, &hooks, &st);
+    if (R->found_failed) return FRB_ERR_MEMORY;
+    if (r != REV_SHARED_DONE) {
+        replay_differs(R, p, NULL, "the SharedSolver did not complete it");
+        return FRB_OK;
+    }
+    if (R->found_n) qsort(R->found, R->found_n, sizeof *R->found, cmp_found);
+    R->out->steps += st.steps;
+    if (st.steps != p->steps) replay_differs(R, p, NULL, "made again, it takes another number of steps");
+    for (size_t i = 0; i < R->n; i++) {
+        const FrbRecord *rec = &R->batch[i];
+        R->out->records++;
+        if (k < R->found_n && R->found[k].target == rec->target) {
+            const FoundRev *f = &R->found[k++];
+            if (rec->result != REV_SOLVE_SOLVED) replay_differs(R, p, rec, "made again, the pass finds a REV for it");
+            else if (f->steps != rec->steps) replay_differs(R, p, rec, "made again, the pass counts other steps for it");
+            else if (f->nodes != rec->nodes || memcmp(f->graph, rec->graph, (size_t)R->format->graph_bytes) != 0)
+                replay_differs(R, p, rec, "made again, the pass finds another REV for it");
+        } else {
+            if (rec->result != REV_SOLVE_PROVEN_UNSAT) replay_differs(R, p, rec, "made again, the pass finds no REV for it");
+            else if (rev_shared_unfound_steps(R->engine, rec->target - first) != rec->steps)
+                replay_differs(R, p, rec, "made again, the pass counts other steps for it");
+        }
+    }
+    if (k != R->found_n) replay_differs(R, p, NULL, "made again, it finds a REV for a string it did not search");
+    return FRB_OK;
+}
+
+static int replay_visit(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
+    Replayer *R = ctx;
+    FrbPass p;
+    FrbError e;
+    (void)seg;
+    if (!rec || (rec->type != FRB_REC_SEARCH && rec->type != FRB_REC_PASS)) {
+        R->n = 0; /* a pass that was not closed */
+        return 0;
+    }
+    if (rec->type == FRB_REC_SEARCH) {
+        if (R->n == R->cap) {
+            size_t cap = R->cap ? R->cap * 2 : 1024;
+            FrbRecord *grown = realloc(R->batch, cap * sizeof *grown);
+            if (!grown) return (int)FRB_ERR_MEMORY;
+            R->batch = grown;
+            R->cap = cap;
+        }
+        R->batch[R->n++] = *rec;
+        return 0;
+    }
+    /* The journal has been read as evidence before this scan: every pass
+     * record in it closes a pass that was found whole. */
+    if (!frb_pass_unpack(rec, &p) || p.wanted != R->n) return (int)FRB_ERR_JOURNAL;
+    R->ordinal++;
+    e = FRB_OK;
+    if (!R->counting && (!R->chosen || ((R->chosen[(R->ordinal - 1) >> 3] >> ((R->ordinal - 1) & 7)) & 1))) {
+        R->out->passes++;
+        e = R->by == FRB_REPLAY_LEVEL ? replay_by_level(R, &p) : replay_by_shared(R, &p);
+    }
+    R->n = 0;
+    return (int)e;
+}
+
+FrbError frb_replay_passes(const char *dir, const FrbConfig *cfg, FrbReplayBy by, RevLevelSolveFn solve,
+                           uint64_t sample, uint64_t seed, FrbReplay *out, char *err, size_t errlen) {
+    FrbReplay local;
+    FrbState *state = NULL;
+    uint8_t *chosen = NULL;
+    Replayer R;
+    FrbError e;
+    if (!out) out = &local;
+    memset(out, 0, sizeof *out);
+    if (!dir || !cfg || (by == FRB_REPLAY_LEVEL && !solve)) return FRB_ERR_ARG;
+    if (!cfg->shared) {
+        set_err(err, errlen, "%s is not a construction by shared search: it has no passes", dir);
+        return FRB_ERR_ARG;
+    }
+    /* First as evidence, with every check of a reader. */
+    e = frb_state_load(dir, cfg, &state, err, errlen);
+    if (e != FRB_OK) return e;
+    frb_state_free(state);
+
+    memset(&R, 0, sizeof R);
+    R.cfg = cfg;
+    R.format = frb_format(cfg->format);
+    R.by = by;
+    R.solve = solve;
+    R.out = out;
+    R.err = err;
+    R.errlen = errlen;
+    R.counting = 1;
+    e = frb_journal_scan(dir, cfg, replay_visit, &R, NULL, err, errlen);
+    out->passes_admitted = R.ordinal;
+    if (e == FRB_OK && sample && sample < R.ordinal) {
+        uint32_t *pick = R.ordinal <= 0xFFFFFFFFull ? frb_choose_sample((uint32_t)R.ordinal, (uint32_t)sample, seed) : NULL;
+        chosen = calloc((size_t)(R.ordinal / 8 + 1), 1);
+        if (!pick || !chosen) e = FRB_ERR_MEMORY;
+        for (uint64_t i = 0; e == FRB_OK && i < sample; i++) chosen[pick[i] >> 3] |= (uint8_t)(1u << (pick[i] & 7));
+        free(pick);
+    }
+    if (e == FRB_OK && by == FRB_REPLAY_SHARED) {
+        R.engine = rev_shared_create(cfg->bits, cfg->class_bits);
+        R.wanted = malloc(((size_t)1 << (cfg->bits - cfg->class_bits)) / 8 + 1);
+        if (!R.engine || !R.wanted) e = FRB_ERR_MEMORY;
+    }
+    if (e == FRB_OK) {
+        R.counting = 0;
+        R.ordinal = 0;
+        R.n = 0;
+        R.chosen = chosen;
+        e = frb_journal_scan(dir, cfg, replay_visit, &R, NULL, err, errlen);
+    }
+    rev_shared_destroy(R.engine);
+    free(R.wanted);
+    free(R.found);
+    free(R.batch);
+    free(chosen);
+    if (e == FRB_ERR_MEMORY) set_err(err, errlen, "not enough memory to replay passes");
+    if (e == FRB_OK && out->differ) e = FRB_ERR_EVIDENCE;
+    return e;
+}
+
 /* ---- the ladder --------------------------------------------------------- */
 
 static int ladder_file(char *buf, size_t cap, const char *dir, int bits) {
@@ -1643,6 +2199,9 @@ static int formula_nodes(int bits) {
 typedef struct {
     uint64_t searches, steps, solver_ns, session_ns, journal_bytes, journal_records;
     uint32_t sessions, killed, base_settled;
+    int shared;
+    uint64_t passes, pass_steps; /* shared search: what was done to have those searches */
+    uint64_t search_checksum;
 } LevelCost;
 
 static void level_report(FILE *out, int bits, const char *file, const FrbSummary *sum,
@@ -1660,6 +2219,12 @@ static void level_report(FILE *out, int bits, const char *file, const FrbSummary
     fprintf(out, "  settled by the REVs of the Bomb below   %s strings\n", commas(cost->base_settled));
     fprintf(out, "  searches                                %s, %s logical steps\n",
             commas(cost->searches), commas(cost->steps));
+    fprintf(out, "  record checksum of the searches         %016llx\n", (unsigned long long)cost->search_checksum);
+    if (cost->shared)
+        fprintf(out, "  made as                                 %s passes of the shared search, %s steps:\n"
+                     "                                          the searches above are what each string's own\n"
+                     "                                          search gives, and its steps\n",
+                commas(cost->passes), commas(cost->pass_steps));
     fprintf(out, "  solver time, all workers                %.1f s\n", (double)cost->solver_ns * 1e-9);
     fprintf(out, "  wall-clock time                         %.1f s in %u session(s)\n",
             (double)cost->session_ns * 1e-9, (unsigned)(cost->sessions - cost->killed));
@@ -1702,6 +2267,10 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
             cfg.max_nodes = format->node_capacity;
         }
         cfg.symmetry = settings->symmetry ? 1 : 0;
+        cfg.shared = settings->shared ? 1 : 0;
+        if (cfg.shared)
+            cfg.class_bits = settings->class_bits >= 0 && settings->class_bits <= level ? settings->class_bits
+                                                                                       : frb_default_class_bits(level);
         e = frb_config_set_base(&cfg, base, err, errlen);
         if (e != FRB_OK) return e;
     } else {
@@ -1728,6 +2297,11 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
     cfg.passes = settings->passes;
     memcpy(cfg.max_steps, settings->max_steps, sizeof cfg.max_steps);
     memcpy(cfg.engine, settings->engine, sizeof cfg.engine);
+    if (cfg.shared) { /* how a level is searched is fixed when it is begun */
+        cfg.passes = 1;
+        cfg.max_steps[0] = 0;
+        strcpy(cfg.engine, FRB_SHARED_ENGINE);
+    }
     cfg.max_nodes = settings->max_nodes > 0 && settings->max_nodes < format->node_capacity
                         ? settings->max_nodes
                         : format->node_capacity;
@@ -1786,10 +2360,14 @@ static FrbError ladder_level(const char *dir, int level, const FrbConfig *settin
         frb_state_free(state);
         return FRB_OK;
     }
+    cost->shared = state->shared;
+    cost->search_checksum = state->search_checksum;
     for (int b = 1; b <= FRB_MAX_NODES; b++) {
         cost->searches += state->budget[b].searches;
         cost->steps += state->budget[b].steps;
-        cost->solver_ns += state->budget[b].ns;
+        cost->solver_ns += state->budget[b].ns + state->pass[b].ns;
+        cost->passes += state->pass[b].passes;
+        cost->pass_steps += state->pass[b].steps;
     }
     /* The session that just ended is in the state as begun and not ended if
      * it ran a round (the journal was replayed after it), and not at all if

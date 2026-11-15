@@ -98,6 +98,7 @@ build/carlobomb bomb status --work-dir bomb-work
 | `bomb verify ... --recertify` | Also recomputes every minimum from node budget 1 with the MinimalSolver (`--engine`, `--sample K`, `--max-steps K`) |
 | `bomb verify ... --hardest` | Recomputes exactly the strings certified at the largest minimum: the ones the table's headline number rests on (`--engine`, `--sample K` for the first K) |
 | `bomb verify ... --against SHORTER.frb` | Also checks the table against a complete table for fewer bits, and reports the hardest strings |
+| `bomb verify ... --work-dir DIR --replay-passes level\|shared` | For a construction by shared search: makes its passes again and holds every search record of each against a LevelSolver call for its string (`level`), or against the pass made again (`shared`). `--passes K` takes K passes at random ([below](#shared-search-a-level-in-passes)) |
 | `bomb lookup --file FILE --target S` | Prints the stored REV after validating and running it; `--out GRAPH` writes it in the REV text format. From a compact file, S may be any string of 1 to L bits |
 | `bomb compact --file FILE --output COMPACT` | Writes a complete table in the compact format ([below](#the-compact-format)). Never replaces a file |
 | `bomb expand --file COMPACT --output FILE` | Writes the fixed-width file a compact one was made from, byte for byte. Never replaces a file |
@@ -119,6 +120,8 @@ Settings of `build`:
 | `--symmetry on\|off` | on | Work on one string of each complement pair and derive the other |
 | `--fallback ring\|none` | ring | Let the ring stand in as a witness until a better one is known. Changeable on resume |
 | `--max-steps K[,K...]` | 0 | Step limit per LevelSolver call; 0 = none. Several values make several passes (below). Changeable on resume |
+| `--search level\|shared` | level | `level`: each string is searched by itself. `shared`: the strings with the same first bits are searched together ([below](#shared-search-a-level-in-passes)) |
+| `--class-bits P` | 8 from 16 bits on | With `--search shared`: the strings with the same first P bits are a class, and a class is a job |
 
 Options of `build` and `resume` that affect one session only: `--sample K
 [--seed S]` searches only K randomly chosen open targets (a pilot run);
@@ -127,7 +130,8 @@ first job boundary after that time; `--progress SECONDS` sets the interval
 of progress lines (0 = one line per round); `--min-free MIB` stops the
 session cleanly when the file system has less free space than that;
 `--quiet` prints nothing. `bomb ladder` takes the same, and `--workers`,
-`--engine`, `--max-steps` and `--max-nodes` for the levels it builds.
+`--engine`, `--max-steps`, `--max-nodes`, `--search` and `--class-bits` for
+the levels it builds.
 
 Exit status: 0 success and, where the question arises, a complete certified
 table; 1 a check failed or the construction broke; 2 usage, invalid input or
@@ -297,6 +301,91 @@ less is told so before anything is started. Tables themselves are not held
 in memory: one is written entry by entry and read back through a mapping of
 its file, so a table may be larger than memory
 ([`BEYOND_24.md`](BEYOND_24.md) has the numbers for every length).
+
+## Shared search: a level in passes
+
+The ladder searches every string by itself, and two strings that begin
+alike are searched alike for as long as they agree. `--search shared`
+walks the common part once.
+
+```bash
+build/carlobomb bomb ladder --dir ladder --from fixed-run-16.frb --to 24 --workers 4 --search shared
+```
+
+builds the same files as the command without `--search shared`, byte for
+byte, from under one percent of the steps. In the development container,
+with 4 processes and another job running beside them, the levels 17 to 24
+took 1, 1, 3, 7, 14, 30, 126 and 389 seconds; the ladder that searches
+string by string needed two hours for level 24 alone.
+
+**How.** The strings with the same first `--class-bits` bits are a class.
+A pass searches the open strings of one class at one node budget with the
+SharedSolver (`solvers/shared`), which is the LevelSolver's search with no
+single target: a branch lives as long as some string that is still open
+begins with what the branch has emitted. A class is searched pass after
+pass, budget after budget, until none of its strings is open; classes are
+the jobs the workers share out.
+
+**What is written is what the ladder writes.** For every string of a pass
+the SharedSolver reports what the LevelSolver reports for that string alone
+at that budget: a REV or none, the same REV, and the same number of logical
+steps, which it counts string by string while it searches them together.
+The journal of a level built this way holds the search records of the
+level built string by string, record for record; `bomb status` prints a
+checksum over them that is the same for both. So nothing changes in what is
+certified or on what (the section above): the rules of evidence and the
+code that applies them are the same, and so are `finalize`, `verify` and
+the compact format.
+
+**What is new is when a search record counts.** A pass writes nothing
+while it runs. When it has ended it writes one search record for each of
+its strings and then a pass record. The search records count only with
+that pass record, and only after the reader has checked the pass: that it
+is whole (the records it counts, of its class and budget, each string once,
+their steps and their checksum) and in its place (it searched exactly the
+strings of its class that were open at its budget, and none was open at a
+smaller one). A pass that was cut off, in the search or in the writing, has
+left nothing that counts, and is made again; `bomb status` counts what it
+left, and `bomb status --target S` marks such a record of S as counting for
+nothing. `FORMAT.md` section 9.6 has
+the rules; the work directory says `search shared` in its `config.txt`
+(layout 4), and a program that does not know that layout refuses it.
+
+**Interrupting.** As before: stop it whenever, the same command continues,
+and the table that comes out is the same file. What an interruption costs
+is the passes that were running: seconds. The tests cut a journal after
+every record and inside every record, and kill constructions with SIGKILL
+at given steps of the search, once and several times over, and require the
+ladder's table and the ladder's searches each time
+(`tests/test_shared_build.c`).
+
+**Checking it.** Everything `bomb verify` does for any table. And for the
+one thing the reader cannot check, that what a pass says is true:
+
+```bash
+build/carlobomb bomb verify --file ladder/fixed-run-20.frb --work-dir ladder/work-20 --replay-passes level --passes 20
+```
+
+makes 20 passes again, chosen at random, by calling the LevelSolver for
+every search record of each: that string, that budget, and it must give
+the result, the REV and the steps of the record. The LevelSolver and the
+SharedSolver have no code in common. Without `--passes` it is every pass,
+which costs what the level cost the ladder. `--replay-passes shared` makes
+the passes again with the SharedSolver, which is cheap, and requires the
+same records.
+
+**Cutting into classes costs steps.** Each class walks, by itself, the
+partly decided graphs that emit its first P bits. The default from 16 bits
+on, P = 8, is 128 classes (those whose strings start with 0) and costs about
+one percent more steps than one class for everything; 512 classes cost 4 to
+20 percent, less the longer the strings; many small classes cost a
+multiple. A level keeps the `class_bits` it was begun
+with.
+
+**Not yet.** The SharedSolver is plain C, at about a fifth of the speed of
+the assembly kernels per step; a kernel for it is the next stage, after
+this one has been certified against the ladder. The memory of the
+coordinating process is what it was (the paragraph above).
 
 ## Using a table
 

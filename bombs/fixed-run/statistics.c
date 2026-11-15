@@ -54,10 +54,19 @@ static void print_settings(FILE *out, const FrbConfig *cfg) {
             cfg->fallback_ring ? "ring (as many nodes as bits)" : "none");
     fprintf(out, "  engine                  %s\n", cfg->engine);
     fprintf(out, "  worker processes        %d\n", cfg->workers);
-    fprintf(out, "  step limit per search   ");
-    for (int i = 0; i < cfg->passes; i++) {
-        if (cfg->max_steps[i]) fprintf(out, "%s%s", i ? ", then " : "", commas(cfg->max_steps[i]));
-        else fprintf(out, "%snone", i ? ", then " : "");
+    if (cfg->shared) {
+        uint64_t classes = (uint64_t)1 << (cfg->class_bits - (cfg->symmetry && cfg->class_bits ? 1 : 0));
+        fprintf(out, "  search                  shared: the strings with the same first %d bits are a class\n"
+                     "                          (%s classes of %s strings); a pass searches the open\n"
+                     "                          strings of a class at one node budget, and its results\n"
+                     "                          count once its pass record is written",
+                cfg->class_bits, commas(classes), commas((uint64_t)1 << (cfg->bits - cfg->class_bits)));
+    } else {
+        fprintf(out, "  step limit per search   ");
+        for (int i = 0; i < cfg->passes; i++) {
+            if (cfg->max_steps[i]) fprintf(out, "%s%s", i ? ", then " : "", commas(cfg->max_steps[i]));
+            else fprintf(out, "%snone", i ? ", then " : "");
+        }
     }
     if (cfg->base_bits)
         fprintf(out, "\n  built on                the complete %d-bit Bomb %s\n"
@@ -134,6 +143,10 @@ static void print_stage_b(FILE *out, const FrbConfig *cfg, const FrbState *s) {
     fprintf(out, "  open: search stopped by a resource limit     %10s\n", commas(limited));
     if (beyond)
         fprintf(out, "  open: every budget up to max-nodes excluded  %10s\n", commas(beyond));
+    if (s->uncommitted)
+        fprintf(out, "  search records of passes that were cut off   %10s  (they establish nothing;\n"
+                     "                                                          the passes are made again)\n",
+                commas(s->uncommitted));
     if (s->conflicts)
         fprintf(out, "  CONTRADICTORY RESULTS                        %10s\n", commas(s->conflicts));
     if (s->symmetry)
@@ -248,6 +261,40 @@ static void print_effort(FILE *out, const FrbState *s) {
         fprintf(out, "   total   %10s   %10s   %10s   %6s   %16s   %8.2f\n", commas(total.searches),
                 commas(total.solved), commas(total.unsat), commas(total.limited),
                 commas(total.steps), secs(total.ns));
+    if (total.searches)
+        fprintf(out, "  record checksum of the searches that ended (string, budget, result, steps): %016llx\n",
+                (unsigned long long)s->search_checksum);
+
+    if (s->shared) {
+        FrbPassEffort all;
+        memset(&all, 0, sizeof all);
+        fprintf(out, "\nThe searches above were made in passes of the shared search.  A search record says\n"
+                     "what the search of its string by itself gives, and its logical steps; these are the\n"
+                     "steps that were made:\n");
+        fprintf(out, "  Budget       Passes      Strings        Found         Steps made   Time (s)\n");
+        for (int b = 1; b <= FRB_MAX_NODES; b++) {
+            const FrbPassEffort *e = &s->pass[b];
+            if (!e->passes) continue;
+            fprintf(out, "  %6d   %10s   %10s   %10s   %16s   %8.2f\n", b, commas(e->passes), commas(e->wanted),
+                    commas(e->found), commas(e->steps), secs(e->ns));
+            all.passes += e->passes;
+            all.wanted += e->wanted;
+            all.found += e->found;
+            all.steps += e->steps;
+            all.ns += e->ns;
+        }
+        if (all.passes)
+            fprintf(out, "   total   %10s   %10s   %10s   %16s   %8.2f\n", commas(all.passes), commas(all.wanted),
+                    commas(all.found), commas(all.steps), secs(all.ns));
+        else fprintf(out, "  no pass yet\n");
+        if (all.steps)
+            fprintf(out, "  one step made for every %.1f logical steps of the searches\n",
+                    (double)total.steps / (double)all.steps);
+        if (s->passes_repeated)
+            fprintf(out, "  %s pass(es) are in the journal a second time, with the same results\n",
+                    commas(s->passes_repeated));
+        total.ns = all.ns; /* the time of the searches is the time of their passes */
+    }
 
     steps = malloc((size_t)s->count * sizeof *steps);
     if (steps) {
@@ -341,8 +388,15 @@ void frb_report_state(FILE *out, const char *dir, const FrbConfig *cfg, const Fr
 typedef struct {
     FILE *out;
     uint32_t index, mirror;
-    int symmetry, bits;
-    uint64_t shown;
+    int symmetry, bits, shared;
+    uint64_t shown, cut_off;
+    /* Shared search: the search records of this string read since the last
+     * pass record of the segment.  Whether they count for anything is known
+     * when the pass record comes, or when it is clear that it never will. */
+    FrbRecord *held;
+    FrbSegmentInfo held_seg;
+    size_t held_n, held_cap;
+    int failed;
 } TargetDump;
 
 static const char *stamp(uint64_t unix_time) {
@@ -354,29 +408,64 @@ static const char *stamp(uint64_t unix_time) {
     return buf;
 }
 
-static int dump_record(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
-    TargetDump *d = ctx;
-    const char *whose;
-    if (!rec) return 0;
-    if (rec->type != FRB_REC_SEARCH && rec->type != FRB_REC_ENUM_WITNESS) return 0;
-    if (rec->target == d->index) whose = "this string";
-    else if (d->symmetry && rec->target == d->mirror) whose = "its complement";
-    else return 0;
+static void print_record(TargetDump *d, const FrbSegmentInfo *seg, const FrbRecord *rec, int counts) {
     d->shown++;
     fprintf(d->out, "  %s  segment %06u (session %u, worker %u, %s)  %s: ", stamp(rec->time),
-            (unsigned)seg->number, (unsigned)seg->session, (unsigned)seg->worker, seg->engine, whose);
+            (unsigned)seg->number, (unsigned)seg->session, (unsigned)seg->worker, seg->engine,
+            rec->target == d->index ? "this string" : "its complement");
     if (rec->type == FRB_REC_ENUM_WITNESS) {
         fprintf(d->out, "enumeration of %d-node graphs, part %u, emitted it\n", rec->budget,
                 (unsigned)rec->aux);
-    } else {
-        fprintf(d->out, "search at node budget %d: ", rec->budget);
-        if (rec->result == REV_SOLVE_SOLVED) fprintf(d->out, "SOLVED with %d nodes", rec->nodes);
-        else if (rec->result == REV_SOLVE_PROVEN_UNSAT) fprintf(d->out, "PROVEN_UNSAT");
-        else if (rec->limit == REV_LIMIT_STEPS)
-            fprintf(d->out, "RESOURCE_LIMIT (step limit %s)", commas(rec->max_steps));
-        else fprintf(d->out, "RESOURCE_LIMIT (search stack full)");
-        fprintf(d->out, ", %s steps, %.3f ms\n", commas(rec->steps), (double)rec->elapsed_ns * 1e-6);
+        return;
     }
+    fprintf(d->out, "search at node budget %d: ", rec->budget);
+    if (rec->result == REV_SOLVE_SOLVED) fprintf(d->out, "SOLVED with %d nodes", rec->nodes);
+    else if (rec->result == REV_SOLVE_PROVEN_UNSAT) fprintf(d->out, "PROVEN_UNSAT");
+    else if (rec->limit == REV_LIMIT_STEPS)
+        fprintf(d->out, "RESOURCE_LIMIT (step limit %s)", commas(rec->max_steps));
+    else fprintf(d->out, "RESOURCE_LIMIT (search stack full)");
+    fprintf(d->out, ", %s steps, %.3f ms\n", commas(rec->steps), (double)rec->elapsed_ns * 1e-6);
+    if (!counts) {
+        d->cut_off++;
+        fprintf(d->out, "      ** of a pass that was cut off before its pass record: "
+                        "this record counts for nothing **\n");
+    }
+}
+
+/* The held records are of a pass that was completed (counts) or was not. */
+static void release_held(TargetDump *d, int counts) {
+    for (size_t i = 0; i < d->held_n; i++) print_record(d, &d->held_seg, &d->held[i], counts);
+    d->held_n = 0;
+}
+
+static int dump_record(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
+    TargetDump *d = ctx;
+    if (!rec) { /* a new segment: no pass record came for what the last one left */
+        release_held(d, 0);
+        return 0;
+    }
+    if (d->shared) { /* as the journal is read for evidence: journal.c, replay() */
+        if (rec->type == FRB_REC_PASS) release_held(d, 1);
+        else if (rec->type != FRB_REC_SEARCH) release_held(d, 0);
+    }
+    if (rec->type != FRB_REC_SEARCH && rec->type != FRB_REC_ENUM_WITNESS) return 0;
+    if (rec->target != d->index && !(d->symmetry && rec->target == d->mirror)) return 0;
+    if (!d->shared || rec->type != FRB_REC_SEARCH) {
+        print_record(d, seg, rec, 1);
+        return 0;
+    }
+    if (d->held_n == d->held_cap) {
+        size_t cap = d->held_cap ? d->held_cap * 2 : 4;
+        FrbRecord *held = realloc(d->held, cap * sizeof *held);
+        if (!held) {
+            d->failed = 1;
+            return 1;
+        }
+        d->held = held;
+        d->held_cap = cap;
+    }
+    d->held[d->held_n++] = *rec;
+    d->held_seg = *seg;
     return 0;
 }
 
@@ -456,7 +545,11 @@ FrbError frb_report_target(FILE *out, const char *dir, const FrbConfig *cfg, con
     d.mirror = index ^ (s->count - 1u);
     d.symmetry = s->symmetry;
     d.bits = s->bits;
+    d.shared = cfg->shared;
     e = frb_journal_scan(dir, cfg, dump_record, &d, NULL, err, errlen);
+    if (d.failed) e = FRB_ERR_MEMORY;
+    if (e == FRB_OK) release_held(&d, 0); /* a pass the last segment did not close */
+    free(d.held);
     if (e == FRB_OK && d.shown == 0) fprintf(out, "  none\n");
     return e;
 }

@@ -16,6 +16,12 @@
  *   - a minimum is certified only when a witness has exactly as many nodes
  *     as the first budget that is not excluded.
  *
+ * In a construction by shared search there is one rule before these: a
+ * search record is admitted to them only as part of a completed pass, with
+ * the pass record that closes it, after admit_pass() below has found the
+ * pass whole and in its place.  What a record proves once admitted is what
+ * it proves anywhere.
+ *
  * Segments are read as streams, one record at a time, so a journal of any
  * size is replayed in constant memory beyond the state itself.
  */
@@ -197,7 +203,7 @@ static int record_decode(const FrbFormat *f, const uint8_t *in, FrbRecord *rec) 
     if (get32(in + size - 4) != frb_crc32(0, in, (size_t)size - 4)) return 0;
     for (int i = R_GRAPH + f->graph_bytes; i < size - 4; i++)
         if (in[i] != 0) return 0;
-    if (in[R_TYPE] < FRB_REC_SESSION_BEGIN || in[R_TYPE] > FRB_REC_SEARCH) return 0;
+    if (in[R_TYPE] < FRB_REC_SESSION_BEGIN || in[R_TYPE] > FRB_REC_PASS) return 0;
     rec->type = in[R_TYPE];
     rec->result = in[R_RESULT];
     rec->budget = in[R_BUDGET];
@@ -237,6 +243,59 @@ FrbError frb_segment_close(FrbSegment *seg) {
     if (seg->f && fclose(seg->f) != 0 && e == FRB_OK) e = FRB_ERR_IO;
     free(seg);
     return e;
+}
+
+/* ---- pass records -------------------------------------------------------- */
+
+static uint64_t mix64(uint64_t z) { /* the finalizer of SplitMix64 */
+    z += 0x9E3779B97F4A7C15ull;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+}
+
+uint64_t frb_pass_checksum(uint64_t sum, const FrbRecord *rec, const FrbFormat *format) {
+    sum = mix64(sum ^ rec->target);
+    sum = mix64(sum ^ rec->steps);
+    sum = mix64(sum ^ ((uint64_t)rec->result | ((uint64_t)rec->nodes << 8) | ((uint64_t)rec->budget << 16)));
+    return mix64(sum ^ frb_crc32(0, rec->graph, (size_t)format->graph_bytes));
+}
+
+uint64_t frb_search_check(uint32_t target, int budget, int result, uint64_t steps) {
+    uint64_t what = (uint64_t)target | ((uint64_t)(unsigned)budget << 32) | ((uint64_t)(unsigned)result << 40);
+    return mix64(mix64(what) ^ steps);
+}
+
+enum { PASS_FOUND = 0, PASS_CHECKSUM = 4, PASS_USED = 12 }; /* in the graph field */
+
+void frb_pass_pack(const FrbPass *pass, FrbRecord *rec) {
+    memset(rec, 0, sizeof *rec);
+    rec->type = FRB_REC_PASS;
+    rec->budget = (uint8_t)pass->budget;
+    rec->limit = (uint8_t)pass->class_bits;
+    rec->target = pass->klass;
+    rec->steps = pass->steps;
+    rec->max_steps = pass->string_steps;
+    rec->elapsed_ns = pass->elapsed_ns;
+    rec->aux = pass->wanted;
+    put32(rec->graph + PASS_FOUND, pass->found);
+    put64(rec->graph + PASS_CHECKSUM, pass->checksum);
+}
+
+int frb_pass_unpack(const FrbRecord *rec, FrbPass *pass) {
+    if (!rec || !pass || rec->type != FRB_REC_PASS || rec->result != 0 || rec->nodes != 0) return 0;
+    for (int i = PASS_USED; i < FRB_MAX_GRAPH_BYTES; i++)
+        if (rec->graph[i] != 0) return 0;
+    pass->budget = rec->budget;
+    pass->class_bits = rec->limit;
+    pass->klass = rec->target;
+    pass->steps = rec->steps;
+    pass->string_steps = rec->max_steps;
+    pass->elapsed_ns = rec->elapsed_ns;
+    pass->wanted = rec->aux;
+    pass->found = get32(rec->graph + PASS_FOUND);
+    pass->checksum = get64(rec->graph + PASS_CHECKSUM);
+    return 1;
 }
 
 /* ---- reading ------------------------------------------------------------ */
@@ -438,6 +497,13 @@ FrbError frb_journal_scan(const char *dir, const FrbConfig *cfg, FrbRecordVisit 
 
 /* ---- replay ------------------------------------------------------------- */
 
+/* A pass that has been admitted: what a repetition of it has to say again. */
+typedef struct {
+    uint32_t wanted, found;
+    uint64_t string_steps, checksum;
+    uint8_t admitted;
+} PassSeen;
+
 typedef struct {
     FrbState *s;
     char *err;
@@ -446,6 +512,13 @@ typedef struct {
     /* The enumeration part whose witnesses are being read in this segment. */
     int cur_nodes, cur_part;
     uint32_t cur_count;
+    /* Shared search.  The search records read since the last pass record of
+     * this segment: results of a pass that is not known to be complete. */
+    const FrbConfig *cfg;
+    const uint8_t *base_nodes;
+    FrbRecord *batch;
+    size_t batch_n, batch_cap;
+    PassSeen *seen; /* [class * (node capacity + 1) + budget] */
 } Loader;
 
 const uint8_t *frb_state_graph(const FrbState *state, uint32_t index) {
@@ -533,6 +606,194 @@ static void note_limit(FrbTargetState *ts, const FrbRecord *rec) {
     ts->limit_max_steps = rec->max_steps;
 }
 
+/* A search record that counts: a string, a node budget, and what the search
+ * of that string at that budget gave. */
+static int apply_search(Loader *L, const FrbSegmentInfo *seg, const FrbRecord *rec) {
+    FrbState *s = L->s;
+    FrbTargetState *ts;
+    FrbBudgetEffort *be;
+    int b = rec->budget;
+    if (b < 1 || b > s->format->node_capacity || rec->target > L->mask)
+        return bad_record(L, seg, "impossible search record");
+    ts = &s->targets[rec->target];
+    be = &s->budget[b];
+    ts->searches++;
+    ts->steps += rec->steps;
+    ts->search_ns += rec->elapsed_ns;
+    be->searches++;
+    be->steps += rec->steps;
+    be->ns += rec->elapsed_ns;
+    L->cur_nodes = L->cur_part = -1; /* a search ends any run of enumeration witnesses */
+    switch ((RevSolveResult)rec->result) {
+    case REV_SOLVE_SOLVED:
+        be->solved++;
+        s->search_checksum += frb_search_check(rec->target, b, 0, rec->steps);
+        if (rec->nodes < 1 || rec->nodes > b)
+            return bad_record(L, seg, "search witness exceeds its node budget");
+        return take_witness(L, seg, rec, FRB_SRC_SEARCH, 0);
+    case REV_SOLVE_PROVEN_UNSAT:
+        be->unsat++;
+        s->search_checksum += frb_search_check(rec->target, b, 1, rec->steps);
+        if (rec->nodes != 0) return bad_record(L, seg, "unsat record carries a graph");
+        if (b > ts->unsat_max) ts->unsat_max = (uint8_t)b;
+        if (s->symmetry) {
+            FrbTargetState *tc = &s->targets[rec->target ^ L->mask];
+            if (b > tc->unsat_max) tc->unsat_max = (uint8_t)b;
+        }
+        return 0;
+    case REV_SOLVE_RESOURCE_LIMIT:
+        be->limited++;
+        if (rec->nodes != 0 || (rec->limit != REV_LIMIT_STACK && rec->limit != REV_LIMIT_STEPS))
+            return bad_record(L, seg, "impossible resource-limit record");
+        note_limit(ts, rec);
+        if (s->symmetry) note_limit(&s->targets[rec->target ^ L->mask], rec);
+        return 0;
+    default:
+        return bad_record(L, seg, "search record with an unknown result");
+    }
+}
+
+/* Node counts 1 .. this of which every graph has been enumerated, by the
+ * records read so far. */
+static int enumerated(const FrbState *s) {
+    int e = 0;
+    for (int n = 1; n <= s->enumerate_max && n <= FRB_NODE_CAPACITY; n++) {
+        if (s->parts_done[n] != (uint32_t)(n * n)) break;
+        e = n;
+    }
+    return e;
+}
+
+/*
+ * The largest node budget that is excluded for a string, by what has been
+ * read: a search of it that found nothing with at most that many nodes, a
+ * complete enumeration that did not produce it, the minimum of its first
+ * bits in the base Bomb.
+ */
+static int excluded_for(const FrbConfig *cfg, const uint8_t *base_nodes, const FrbTargetState *ts,
+                        uint32_t i, int enumerated_to) {
+    int excluded = ts->unsat_max; /* a search that found nothing with at most b nodes
+                                     excludes every budget up to b */
+    /* A complete enumeration of n-node graphs excludes budget n for every
+     * string it did not produce. */
+    if (enumerated_to > excluded) {
+        int upto = enumerated_to;
+        if (ts->nodes && ts->nodes - 1 < upto) upto = ts->nodes - 1;
+        if (upto > excluded) excluded = upto;
+    }
+    /* A string cannot need fewer nodes than its first bits do. */
+    if (base_nodes) {
+        int first = base_nodes[i >> (cfg->bits - cfg->base_bits)];
+        if (first - 1 > excluded) excluded = first - 1;
+    }
+    return excluded;
+}
+
+/* Search records that no pass record closed: results of a pass that was cut
+ * off.  They are counted and establish nothing. */
+static void drop_batch(Loader *L) {
+    L->s->uncommitted += L->batch_n;
+    L->batch_n = 0;
+}
+
+/*
+ * A pass record of a construction by shared search, and before it in its
+ * segment the search records it closes.  Nothing of them has reached the
+ * state yet.  They are admitted together, or the journal is refused.
+ *
+ * The pass has to be whole: as many search records as it says, of its class
+ * and its budget, in ascending order of their strings and so no string
+ * twice, as many with a REV as it says, with the steps and the checksum it
+ * says.  And it has to be in its place: by everything admitted before it,
+ * the strings it searched are exactly the strings of its class that were
+ * open at its budget, and no string of the class was open at a smaller one.
+ * A pass that was admitted before may come again if it says the same.
+ */
+static int admit_pass(Loader *L, const FrbSegmentInfo *seg, const FrbRecord *rec) {
+    FrbState *s = L->s;
+    int P = s->class_bits, free_bits = s->bits - P, capacity = s->format->node_capacity;
+    uint32_t top = (uint32_t)1 << (s->bits - 1), first, size, found = 0;
+    uint64_t steps = 0, sum = 0;
+    size_t k = 0;
+    PassSeen *seen;
+    FrbPass p;
+    int e;
+
+    if (!frb_pass_unpack(rec, &p) || p.class_bits != P || p.budget < 1 || p.budget > capacity ||
+        (p.klass >> P) != 0 || (s->symmetry && P > 0 && (p.klass >> (P - 1)) != 0))
+        return bad_record(L, seg, "impossible pass record");
+    if ((size_t)p.wanted != L->batch_n || p.wanted == 0)
+        return bad_record(L, seg, "a pass record without the search records it counts");
+    for (size_t i = 0; i < L->batch_n; i++) {
+        const FrbRecord *r = &L->batch[i];
+        if (r->budget != p.budget || (r->target >> free_bits) != p.klass)
+            return bad_record(L, seg, "a pass with a search record of another class or budget");
+        if (i && r->target <= L->batch[i - 1].target)
+            return bad_record(L, seg, "a pass with its search records out of order");
+        if (r->result == REV_SOLVE_SOLVED) found++;
+        else if (r->result != REV_SOLVE_PROVEN_UNSAT)
+            return bad_record(L, seg, "a pass with a search that did not end");
+        if (r->max_steps != 0 || r->limit != 0)
+            return bad_record(L, seg, "a pass with a search under a limit");
+        steps += r->steps;
+        sum = frb_pass_checksum(sum, r, s->format);
+    }
+    if (found != p.found || steps != p.string_steps || sum != p.checksum)
+        return bad_record(L, seg, "a pass record that does not match its search records");
+
+    seen = &L->seen[(size_t)p.klass * (size_t)(capacity + 1) + (size_t)p.budget];
+    if (seen->admitted) {
+        if (seen->wanted != p.wanted || seen->found != p.found || seen->string_steps != p.string_steps ||
+            seen->checksum != p.checksum) {
+            set_err(L->err, L->errlen,
+                    "journal segment %06u, record %llu: the pass of class %u at %d nodes is recorded twice "
+                    "with different results",
+                    (unsigned)seg->number, (unsigned long long)seg->records, (unsigned)p.klass, p.budget);
+            return (int)FRB_ERR_EVIDENCE;
+        }
+        s->passes_repeated++; /* the same pass again: it adds nothing and takes nothing away */
+        L->batch_n = 0;
+        return 0;
+    }
+
+    e = enumerated(s);
+    first = p.klass << free_bits;
+    size = (uint32_t)1 << free_bits;
+    for (uint32_t j = 0; j < size; j++) {
+        uint32_t t = first + j;
+        const FrbTargetState *ts = &s->targets[t];
+        int low;
+        if (s->symmetry && (t & top)) continue; /* its complement is the string that is searched */
+        low = excluded_for(L->cfg, L->base_nodes, ts, t, e) + 1;
+        if (ts->nodes && ts->nodes <= low) continue; /* it has its REV */
+        if (low < p.budget)
+            return bad_record(L, seg, "a pass at a budget above one at which a string of its class is still open");
+        if (low > p.budget || (ts->nodes && ts->nodes <= p.budget)) continue; /* not open at this budget */
+        if (k == L->batch_n || L->batch[k].target != t)
+            return bad_record(L, seg, "a pass that did not search every string of its class open at its budget");
+        k++;
+    }
+    if (k != L->batch_n)
+        return bad_record(L, seg, "a pass that searched a string not open at its budget");
+
+    for (size_t i = 0; i < L->batch_n; i++) {
+        int v = apply_search(L, seg, &L->batch[i]);
+        if (v) return v;
+    }
+    L->batch_n = 0;
+    seen->admitted = 1;
+    seen->wanted = p.wanted;
+    seen->found = p.found;
+    seen->string_steps = p.string_steps;
+    seen->checksum = p.checksum;
+    s->pass[p.budget].passes++;
+    s->pass[p.budget].wanted += p.wanted;
+    s->pass[p.budget].found += p.found;
+    s->pass[p.budget].steps += p.steps;
+    s->pass[p.budget].ns += p.elapsed_ns;
+    return 0;
+}
+
 static int replay(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
     Loader *L = ctx;
     FrbState *s = L->s;
@@ -540,9 +801,12 @@ static int replay(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
     if (!rec) { /* a new segment: a part left open by the previous one stays open */
         L->cur_nodes = L->cur_part = -1;
         L->cur_count = 0;
+        drop_batch(L); /* and a pass the previous one did not close stays unclosed */
         if (seg->session > s->last_session) s->last_session = seg->session;
         return 0;
     }
+    /* The search records of a pass and its pass record follow one another. */
+    if (L->batch_n && rec->type != FRB_REC_SEARCH && rec->type != FRB_REC_PASS) drop_batch(L);
     if (rec->time) {
         if (s->first_time == 0 || rec->time < s->first_time) s->first_time = rec->time;
         if (rec->time > s->last_time) s->last_time = rec->time;
@@ -596,47 +860,26 @@ static int replay(void *ctx, const FrbSegmentInfo *seg, const FrbRecord *rec) {
         return 0;
     }
 
-    case FRB_REC_SEARCH: {
-        FrbTargetState *ts;
-        FrbBudgetEffort *be;
-        int b = rec->budget;
-        if (b < 1 || b > s->format->node_capacity || rec->target > L->mask)
+    case FRB_REC_SEARCH:
+        if (!s->shared) return apply_search(L, seg, rec);
+        /* Held until the pass record that closes its pass has been read and
+         * the pass found whole. */
+        if (rec->budget < 1 || rec->budget > s->format->node_capacity || rec->target > L->mask)
             return bad_record(L, seg, "impossible search record");
-        ts = &s->targets[rec->target];
-        be = &s->budget[b];
-        ts->searches++;
-        ts->steps += rec->steps;
-        ts->search_ns += rec->elapsed_ns;
-        be->searches++;
-        be->steps += rec->steps;
-        be->ns += rec->elapsed_ns;
-        L->cur_nodes = L->cur_part = -1; /* a search ends any run of enumeration witnesses */
-        switch ((RevSolveResult)rec->result) {
-        case REV_SOLVE_SOLVED:
-            be->solved++;
-            if (rec->nodes < 1 || rec->nodes > b)
-                return bad_record(L, seg, "search witness exceeds its node budget");
-            return take_witness(L, seg, rec, FRB_SRC_SEARCH, 0);
-        case REV_SOLVE_PROVEN_UNSAT:
-            be->unsat++;
-            if (rec->nodes != 0) return bad_record(L, seg, "unsat record carries a graph");
-            if (b > ts->unsat_max) ts->unsat_max = (uint8_t)b;
-            if (s->symmetry) {
-                FrbTargetState *tc = &s->targets[rec->target ^ L->mask];
-                if (b > tc->unsat_max) tc->unsat_max = (uint8_t)b;
-            }
-            return 0;
-        case REV_SOLVE_RESOURCE_LIMIT:
-            be->limited++;
-            if (rec->nodes != 0 || (rec->limit != REV_LIMIT_STACK && rec->limit != REV_LIMIT_STEPS))
-                return bad_record(L, seg, "impossible resource-limit record");
-            note_limit(ts, rec);
-            if (s->symmetry) note_limit(&s->targets[rec->target ^ L->mask], rec);
-            return 0;
-        default:
-            return bad_record(L, seg, "search record with an unknown result");
+        if (L->batch_n == L->batch_cap) {
+            size_t cap = L->batch_cap ? L->batch_cap * 2 : 1024;
+            FrbRecord *grown = realloc(L->batch, cap * sizeof *grown);
+            if (!grown) return (int)FRB_ERR_MEMORY;
+            L->batch = grown;
+            L->batch_cap = cap;
         }
-    }
+        L->batch[L->batch_n++] = *rec;
+        return 0;
+
+    case FRB_REC_PASS:
+        if (!s->shared)
+            return bad_record(L, seg, "a pass record in a construction that searches string by string");
+        return admit_pass(L, seg, rec);
     }
     return bad_record(L, seg, "unknown record type");
 }
@@ -708,14 +951,10 @@ static FrbError seed_from_base(FrbState *s, const FrbConfig *cfg, uint8_t **base
 
 /* The rules of evidence.  See the comment at the top of this file. */
 static void derive(FrbState *s, const FrbConfig *cfg, const uint8_t *base_nodes) {
-    int shift = cfg->base_bits ? cfg->bits - cfg->base_bits : 0;
     int capacity = s->format->node_capacity;
-    int e = 0;
+    int e;
 
-    for (int n = 1; n <= s->enumerate_max && n <= FRB_NODE_CAPACITY; n++) {
-        if (s->parts_done[n] != (uint32_t)(n * n)) break;
-        e = n;
-    }
+    e = enumerated(s);
     s->enum_complete = e;
     memset(s->by_status, 0, sizeof s->by_status);
     s->conflicts = 0;
@@ -723,21 +962,12 @@ static void derive(FrbState *s, const FrbConfig *cfg, const uint8_t *base_nodes)
 
     for (uint32_t i = 0; i < s->count; i++) {
         FrbTargetState *ts = &s->targets[i];
-        int excluded = ts->unsat_max; /* a search that found nothing with at most b nodes
-                                         excludes every budget up to b */
+        int excluded;
         /* The ring emits the string with as many nodes as it has bits.  It
          * is generated when a table is written, not stored here. */
         if (cfg->fallback_ring && ts->nodes == 0 && s->bits <= capacity)
             offer(s, i, s->bits, FRB_SRC_RING, 0, 0, NULL);
-        /* A complete enumeration of n-node graphs excludes budget n for
-         * every string it did not produce. */
-        if (e > excluded) {
-            int upto = e;
-            if (ts->nodes && ts->nodes - 1 < upto) upto = ts->nodes - 1;
-            if (upto > excluded) excluded = upto;
-        }
-        /* A string cannot need fewer nodes than its first bits do. */
-        if (base_nodes && base_nodes[i >> shift] - 1 > excluded) excluded = base_nodes[i >> shift] - 1;
+        excluded = excluded_for(cfg, base_nodes, ts, i, e);
         ts->lower_bound = (uint8_t)(excluded + 1);
 
         ts->conflict = 0;
@@ -774,6 +1004,8 @@ FrbError frb_state_load(const char *dir, const FrbConfig *cfg, FrbState **state,
     s->symmetry = cfg->symmetry ? 1 : 0;
     s->enumerate_max = cfg->enumerate_max;
     s->base_bits = cfg->base_bits;
+    s->shared = cfg->shared ? 1 : 0;
+    s->class_bits = cfg->class_bits;
     s->format = frb_format(cfg->format);
     s->count = (uint32_t)1 << cfg->bits;
     s->targets = calloc(s->count, sizeof *s->targets);
@@ -789,9 +1021,24 @@ FrbError frb_state_load(const char *dir, const FrbConfig *cfg, FrbState **state,
     L.errlen = errlen;
     L.mask = s->count - 1u;
     L.cur_nodes = L.cur_part = -1;
-    e = frb_journal_scan(dir, cfg, replay, &L, &s->journal, err, errlen);
-    if (e == FRB_OK && cfg->base_bits) e = seed_from_base(s, cfg, &base_nodes, err, errlen);
+    L.cfg = cfg;
+    e = FRB_OK;
+    if (s->shared) {
+        /* A pass is admitted against what was known when it was made, and
+         * the bounds of the base Bomb were: they are read first.  Which REV
+         * a string ends up with does not depend on the order. */
+        L.seen = calloc(((size_t)1 << s->class_bits) * (size_t)(s->format->node_capacity + 1), sizeof *L.seen);
+        if (!L.seen) e = FRB_ERR_MEMORY;
+        if (e == FRB_OK && cfg->base_bits) e = seed_from_base(s, cfg, &base_nodes, err, errlen);
+        L.base_nodes = base_nodes;
+    }
+    if (e == FRB_OK) e = frb_journal_scan(dir, cfg, replay, &L, &s->journal, err, errlen);
+    drop_batch(&L); /* a pass the last segment did not close */
+    free(L.batch);
+    free(L.seen);
+    if (e == FRB_OK && cfg->base_bits && !s->shared) e = seed_from_base(s, cfg, &base_nodes, err, errlen);
     if (e != FRB_OK) {
+        free(base_nodes);
         frb_state_free(s);
         return e;
     }

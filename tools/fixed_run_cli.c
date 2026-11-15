@@ -6,6 +6,7 @@
  *   carlobomb bomb status   --work-dir DIR [--target S]
  *   carlobomb bomb finalize --work-dir DIR --output FILE [--partial]
  *   carlobomb bomb verify   --file FILE [--work-dir DIR] [--recertify [--engine E] [--sample K]]
+ *                           [--replay-passes level|shared [--passes K]]
  *   carlobomb bomb lookup   --file FILE --target S [--out GRAPH]
  *   carlobomb bomb compact  --file FILE --output COMPACT
  *   carlobomb bomb expand   --file COMPACT --output FILE
@@ -45,9 +46,9 @@ enum { X_OK = 0, X_FAIL = 1, X_USAGE = 2, X_PARTIAL = 3 };
 
 typedef struct {
     const char *work_dir, *file, *output, *target, *out, *engine, *max_steps, *symmetry, *fallback;
-    const char *dir, *from, *base, *against;
-    long bits, max_nodes, workers, enumerate_max, to, format; /* -1: not given */
-    long long sample, limit_jobs, min_free;                   /* -1: not given */
+    const char *dir, *from, *base, *against, *search, *replay;
+    long bits, max_nodes, workers, enumerate_max, to, format, class_bits; /* -1: not given */
+    long long sample, limit_jobs, min_free, passes;                       /* -1: not given */
     unsigned long long seed;
     double time_limit, progress; /* < 0: not given */
     int partial, recertify, quiet, status, hardest;
@@ -58,9 +59,12 @@ void fixed_run_cli_usage(void) {
             "  carlobomb bomb build    --bits L --work-dir DIR [--max-nodes N] [--engine E]\n"
             "                          [--workers W] [--enumerate-max K] [--symmetry on|off]\n"
             "                          [--fallback ring|none] [--max-steps K[,K...]]\n"
-            "                          [--base FILE]\n"
+            "                          [--base FILE] [--search level|shared [--class-bits P]]\n"
             "      start building the table of minimum-node REVs for every L-bit string\n"
-            "      (L up to %d); with --base, on a complete Bomb for fewer bits\n"
+            "      (L up to %d); with --base, on a complete Bomb for fewer bits.\n"
+            "      --search level (the default) searches each string by itself; shared\n"
+            "      searches the strings with the same first P bits together and writes,\n"
+            "      pass by pass, the search records the other would have written\n"
             "  carlobomb bomb resume   --work-dir DIR [--max-nodes N] [--engine E] [--workers W]\n"
             "                          [--fallback ring|none] [--max-steps K[,K...]]\n"
             "      continue an interrupted or limited construction\n"
@@ -70,9 +74,13 @@ void fixed_run_cli_usage(void) {
             "      write the table; refuses an incomplete one unless --partial\n"
             "  carlobomb bomb verify   --file FILE [--work-dir DIR] [--recertify] [--sample K]\n"
             "                          [--hardest] [--against SHORTER.frb]\n"
+            "                          [--replay-passes level|shared [--passes K]]\n"
             "      check a table: structure, every witness, symmetry, evidence, recomputation\n"
             "      (of all strings, of K random ones, or of those that need the most nodes),\n"
-            "      and agreement with a complete Bomb for fewer bits\n"
+            "      and agreement with a complete Bomb for fewer bits.  For a construction by\n"
+            "      shared search, --replay-passes makes passes again (all, or K at random) and\n"
+            "      holds every search record of each against a LevelSolver call for its\n"
+            "      string (level), or against the pass made again (shared)\n"
             "  carlobomb bomb lookup   --file FILE --target S [--out GRAPH]\n"
             "      print the REV stored for S\n"
             "  carlobomb bomb compact  --file FILE --output COMPACT\n"
@@ -87,8 +95,10 @@ void fixed_run_cli_usage(void) {
             "      to DIR2 as fixed-run-L.v4.frb and checked against it; DIR is only read\n"
             "  carlobomb bomb ladder   --dir DIR --to L [--from FILE] [--workers W] [--engine E]\n"
             "                          [--max-steps K[,K...]] [--max-nodes N]\n"
+            "                          [--search level|shared [--class-bits P]]\n"
             "      build complete Bombs for every length up to L, each from the one before,\n"
-            "      starting from the longest in DIR or from FILE; run again to continue\n"
+            "      starting from the longest in DIR or from FILE; run again to continue.\n"
+            "      --search is for the levels this call begins; a level begun keeps its own\n"
             "  carlobomb bomb ladder   --dir DIR --status\n"
             "      the Bombs a ladder directory holds and the level in progress\n"
             "build, resume and ladder also take --sample K [--seed S] (search only K random\n"
@@ -125,8 +135,8 @@ static int parse_double(const char *s, double *out) {
 
 static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
     memset(a, 0, sizeof *a);
-    a->bits = a->max_nodes = a->workers = a->enumerate_max = a->to = a->format = -1;
-    a->sample = a->limit_jobs = a->min_free = -1;
+    a->bits = a->max_nodes = a->workers = a->enumerate_max = a->to = a->format = a->class_bits = -1;
+    a->sample = a->limit_jobs = a->min_free = a->passes = -1;
     a->time_limit = a->progress = -1;
     for (int i = 3; i < argc; i++) {
         const char *k = argv[i], *v;
@@ -151,6 +161,8 @@ static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
         else if (!strcmp(k, "--from")) a->from = v;
         else if (!strcmp(k, "--base")) a->base = v;
         else if (!strcmp(k, "--against")) a->against = v;
+        else if (!strcmp(k, "--search")) a->search = v;
+        else if (!strcmp(k, "--replay-passes")) a->replay = v;
         else if (!strcmp(k, "--time-limit")) {
             if (!parse_double(v, &a->time_limit)) goto bad;
         } else if (!strcmp(k, "--progress")) {
@@ -163,6 +175,8 @@ static int parse_bomb_args(int argc, char **argv, BombArgs *a) {
         else if (!strcmp(k, "--enumerate-max")) a->enumerate_max = n > 1000 ? 1000 : (long)n;
         else if (!strcmp(k, "--to")) a->to = n > 1000 ? 1000 : (long)n;
         else if (!strcmp(k, "--format")) a->format = n > 1000 ? 1000 : (long)n;
+        else if (!strcmp(k, "--class-bits")) a->class_bits = n > 1000 ? 1000 : (long)n;
+        else if (!strcmp(k, "--passes")) a->passes = n;
         else if (!strcmp(k, "--min-free")) a->min_free = n > ((long long)1 << 40) ? (long long)1 << 40 : n;
         else if (!strcmp(k, "--sample")) a->sample = n;
         else if (!strcmp(k, "--limit-jobs")) a->limit_jobs = n;
@@ -518,6 +532,14 @@ static int run_session(const BombArgs *a, const FrbConfig *cfg, RevLevelSolveFn 
     return res.complete ? X_OK : X_PARTIAL;
 }
 
+/* --search: 0 string by string (the default), 1 shared, -1 with a message for anything else. */
+static int search_asked(const BombArgs *a) {
+    if (!a->search || !strcmp(a->search, "level")) return 0;
+    if (!strcmp(a->search, "shared")) return 1;
+    fprintf(stderr, "--search must be level (each string by itself) or shared (by classes)\n");
+    return -1;
+}
+
 static int cmd_build(const BombArgs *a) {
     char err[FRB_ERR_TEXT] = "";
     RevLevelSolveFn solve = NULL;
@@ -544,6 +566,19 @@ static int cmd_build(const BombArgs *a) {
     }
     if (!apply_changeable(a, &cfg)) return X_USAGE;
     if (!select_engine(a->engine, cfg.engine, sizeof cfg.engine, &solve)) return X_USAGE;
+    switch (search_asked(a)) {
+    case 1:
+        if (a->max_steps) return usage_error("--search shared has no step limit: a pass is made to its end");
+        cfg.shared = 1;
+        cfg.class_bits = a->class_bits >= 0 ? (int)a->class_bits : frb_default_class_bits(cfg.bits);
+        strcpy(cfg.engine, FRB_SHARED_ENGINE);
+        break;
+    case 0:
+        if (a->class_bits >= 0) return usage_error("--class-bits belongs to --search shared");
+        break;
+    default:
+        return X_USAGE;
+    }
     e = frb_config_check(&cfg, err, sizeof err);
     if (e == FRB_OK) e = frb_check_memory(&cfg, a->quiet ? NULL : stdout, err, sizeof err);
     if (e == FRB_ERR_MEMORY) return fail(FRB_ERR_ARG, err); /* nothing was created */
@@ -571,9 +606,27 @@ static int cmd_resume(const BombArgs *a) {
                 a->work_dir, cfg.bits, cfg.symmetry ? "on" : "off", cfg.enumerate_max);
         return X_USAGE;
     }
-    if (!apply_changeable(a, &cfg)) return X_USAGE;
-    if (!select_engine(a->engine ? a->engine : cfg.engine, cfg.engine, sizeof cfg.engine, &solve))
+    if ((a->search && search_asked(a) != cfg.shared) || (a->class_bits >= 0 && a->class_bits != cfg.class_bits) ||
+        (cfg.shared && a->max_steps)) {
+        if (cfg.shared)
+            fprintf(stderr,
+                    "error: %s was started with --search shared --class-bits %d; how the strings are\n"
+                    "searched is fixed for the life of a work directory, and a shared search has no step limit.\n",
+                    a->work_dir, cfg.class_bits);
+        else
+            fprintf(stderr,
+                    "error: %s was started with a search string by string; how the strings are searched\n"
+                    "is fixed for the life of a work directory.\n",
+                    a->work_dir);
         return X_USAGE;
+    }
+    if (!apply_changeable(a, &cfg)) return X_USAGE;
+    if (cfg.shared) { /* its engine is the SharedSolver; the name of another is not asked for */
+        char unused[32];
+        if (!select_engine(NULL, unused, sizeof unused, &solve)) return X_USAGE;
+    } else if (!select_engine(a->engine ? a->engine : cfg.engine, cfg.engine, sizeof cfg.engine, &solve)) {
+        return X_USAGE;
+    }
     e = frb_config_check(&cfg, err, sizeof err);
     if (e != FRB_OK) return fail(e, err);
     if (memcmp(&before, &cfg, sizeof cfg) != 0) {
@@ -713,6 +766,20 @@ static int cmd_ladder(const BombArgs *a) {
         return X_USAGE;
     }
     if (!select_engine(a->engine, settings.engine, sizeof settings.engine, &solve)) return X_USAGE;
+    switch (search_asked(a)) { /* of the levels this call begins; a level begun keeps its own */
+    case 1:
+        if (a->max_steps) return usage_error("--search shared has no step limit: a pass is made to its end");
+        if (a->class_bits > FRB_MAX_CLASS_BITS) return usage_error("--class-bits is too large");
+        settings.shared = 1;
+        settings.class_bits = a->class_bits >= 0 ? (int)a->class_bits : -1; /* -1: what each level takes */
+        strcpy(settings.engine, FRB_SHARED_ENGINE);
+        break;
+    case 0:
+        if (a->class_bits >= 0) return usage_error("--class-bits belongs to --search shared");
+        break;
+    default:
+        return X_USAGE;
+    }
     run_options(a, solve, &opt);
     if (a->progress < 0) opt.progress_seconds = 30; /* hours of it: no need for a line every 5 s */
     if (a->min_free < 0) opt.min_free_bytes = (uint64_t)2048 << 20;
@@ -960,7 +1027,7 @@ static int verify_compact(const BombArgs *a) {
     FrbCompactInfo head;
     uint32_t bad = 0;
     FrbError e;
-    if (a->work_dir || a->recertify) {
+    if (a->work_dir || a->recertify || a->replay) {
         fprintf(stderr,
                 "--work-dir and --recertify check a fixed-width file against how it was built.  For a\n"
                 "compact file, check the file it was made from (`carlobomb bomb expand` regenerates it)\n"
@@ -1372,6 +1439,50 @@ static int cmd_verify(const BombArgs *a) {
         }
         printf("Certified minima against the journal in %s: PASS (%u backed by its records)\n",
                a->work_dir, (unsigned)info.minimal);
+        if (a->replay) {
+            char engine[32] = "the SharedSolver";
+            RevLevelSolveFn solve = NULL;
+            FrbReplayBy by;
+            FrbReplay r;
+            double t0;
+            if (!strcmp(a->replay, "level")) by = FRB_REPLAY_LEVEL;
+            else if (!strcmp(a->replay, "shared")) by = FRB_REPLAY_SHARED;
+            else {
+                fprintf(stderr, "--replay-passes must be level (every record by the LevelSolver) or shared\n");
+                frb_table_destroy(&t);
+                return X_USAGE;
+            }
+            if (by == FRB_REPLAY_LEVEL && !select_engine(a->engine, engine, sizeof engine, &solve)) {
+                frb_table_destroy(&t);
+                return X_USAGE;
+            }
+            fflush(stdout);
+            t0 = cb_now();
+            e = frb_replay_passes(a->work_dir, &cfg, by, solve, a->passes > 0 ? (uint64_t)a->passes : 0, a->seed, &r,
+                                  err, sizeof err);
+            if (e == FRB_ERR_ARG) {
+                fprintf(stderr, "%s\n", err[0] ? err : "--replay-passes is for a construction by shared search");
+                frb_table_destroy(&t);
+                return X_USAGE;
+            }
+            printf("Passes made again, every search record of each held against %s: %s\n",
+                   by == FRB_REPLAY_LEVEL ? "a LevelSolver call for its string" : "the pass made again",
+                   e == FRB_OK ? "PASS" : "FAIL");
+            printf("  %llu of the %llu passes in the journal, engine %s: %llu search records, %llu not reproduced\n"
+                   "  (%.4g steps, %.2f s)\n",
+                   (unsigned long long)r.passes, (unsigned long long)r.passes_admitted, engine,
+                   (unsigned long long)r.records, (unsigned long long)r.differ, (double)r.steps, cb_now() - t0);
+            if (e != FRB_OK) {
+                printf("  %s\n", err[0] ? err : frb_error_str(e));
+                printf("Verification: FAIL (%s)\n", frb_error_str(e));
+                frb_table_destroy(&t);
+                return X_FAIL;
+            }
+        }
+    } else if (a->replay) {
+        fprintf(stderr, "--replay-passes needs --work-dir: the passes are in the journal\n");
+        frb_table_destroy(&t);
+        return X_USAGE;
     }
     if (a->recertify) {
         char engine[32];
@@ -1417,7 +1528,7 @@ static int cmd_verify(const BombArgs *a) {
         }
     }
 #else
-    if (a->work_dir || a->recertify) {
+    if (a->work_dir || a->recertify || a->replay) {
         fprintf(stderr, "--work-dir and --recertify are not available on this platform\n");
         frb_table_destroy(&t);
         return X_USAGE;
